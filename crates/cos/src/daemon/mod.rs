@@ -6,6 +6,7 @@
 pub(crate) mod agents;
 pub(crate) mod agents_api;
 pub(crate) mod api;
+pub(crate) mod approvals_api;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
 pub(crate) mod tailnet;
@@ -63,13 +64,14 @@ pub(crate) async fn run_with(
     let log = EventLog::new(store.clone());
     let projects = Arc::new(Projects::new(store.clone(), log.clone(), home.worktrees()));
     let devices = Arc::new(Devices::new(store.clone(), log.clone()));
+    let runs = Arc::new(Runs::new(store.clone(), log.clone()));
     let agents = AgentManager::start(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
+        runs.clone(),
         AgentConfig::for_home(home)?,
     )?;
-    let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());
-    let runs = Arc::new(Runs::new(store, log.clone()));
+    let tailnet = tailnet::Tailnet::load(store, log.clone());
 
     let socket = home.socket();
     // We hold the lock, so any socket file left behind is from a dead daemon.

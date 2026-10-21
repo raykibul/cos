@@ -2,6 +2,7 @@
 //! daemon's tailnet listener when `--host` (or `COS_HOST`) is given.
 
 pub(crate) mod agents;
+mod approvals;
 
 pub(crate) use agents::TerminalMessage;
 

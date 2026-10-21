@@ -174,7 +174,13 @@ fn start_manager(
 ) -> AgentManager {
     let mut config = AgentConfig::for_tests(dir);
     configure(&mut config);
-    AgentManager::start(Agents::new(store.clone(), log.clone()), projects.clone(), config).unwrap()
+    AgentManager::start(
+        Agents::new(store.clone(), log.clone()),
+        projects.clone(),
+        Arc::new(Runs::new(store.clone(), log.clone())),
+        config,
+    )
+    .unwrap()
 }
 
 /// Polls `check` until it returns something.
@@ -666,3 +672,5 @@ async fn reqwest_like_post(fixture: &Fixture, path: &str, body: &impl serde::Ser
     stream.read_to_string(&mut response).await.unwrap();
     response
 }
+
+mod approvals;

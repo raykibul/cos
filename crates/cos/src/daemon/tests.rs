@@ -57,6 +57,7 @@ impl TestServer {
         let agents = AgentManager::start(
             Agents::new(store.clone(), log.clone()),
             projects.clone(),
+            runs.clone(),
             AgentConfig::for_tests(dir.path()),
         )
         .unwrap();
