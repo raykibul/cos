@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use cos_core::events::kind;
 use cos_core::{
-    Base, DeviceState, Devices, EventLog, LoggedEvent, NewRun, PlanProposal, Projects, ProposedTask,
+    Agents, Base, DeviceState, Devices, EventLog, LoggedEvent, NewRun, PlanProposal, Projects, ProposedTask,
     RunState, Runs, SeenDevice, Store, TaskState,
 };
 use jiff::Timestamp;
@@ -17,6 +17,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
+use super::agents::{AgentConfig, AgentManager};
 use super::tailnet::{ListenerState, Tailnet, Timing};
 use super::{api, run_until, run_with, serve};
 use crate::client::{Client, DaemonError, NotRunning};
@@ -53,6 +54,13 @@ impl TestServer {
         let devices = Arc::new(Devices::new(store.clone(), log.clone()));
         let tailnet = Tailnet::load(store.clone(), log.clone());
         let runs = Arc::new(Runs::new(store.clone(), log.clone()));
+        let agents = AgentManager::start(
+            Agents::new(store.clone(), log.clone()),
+            log.clone(),
+            projects.clone(),
+            AgentConfig::for_tests(dir.path()),
+        )
+        .unwrap();
         let (stop, stopping) = watch::channel(false);
         let state = api::AppState {
             log: log.clone(),
@@ -60,6 +68,7 @@ impl TestServer {
             devices,
             tailnet,
             runs,
+            agents,
             started_at: Timestamp::now(),
             home: dir.path().to_path_buf(),
             stopping: stopping.clone(),

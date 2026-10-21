@@ -11,6 +11,7 @@ use serde_json::json;
 
 use crate::client::Client;
 use crate::commands::human_duration;
+use crate::daemon::agents::place;
 use crate::home::CosHome;
 
 #[derive(clap::Args)]
@@ -24,6 +25,11 @@ pub(crate) struct SessionsArgs {
 }
 
 pub(crate) async fn run(home: &CosHome, args: SessionsArgs) -> anyhow::Result<ExitCode> {
+    let client = Client::new(home.socket());
+    if client.is_remote() {
+        // Another machine's sessions: only its daemon can read them.
+        return remote(&client, args.json).await;
+    }
     let config_dirs = if args.config_dirs.is_empty() {
         registry::config_dirs()
     } else {
@@ -66,6 +72,33 @@ pub(crate) async fn run(home: &CosHome, args: SessionsArgs) -> anyhow::Result<Ex
     Ok(ExitCode::SUCCESS)
 }
 
+/// The sessions on the `--host` machine, as its daemon sees them (minus the
+/// agents it runs itself).
+async fn remote(client: &Client, as_json: bool) -> anyhow::Result<ExitCode> {
+    let sessions = client.sessions().await?;
+    if sessions.is_empty() && !as_json {
+        println!("No other Claude sessions running there.");
+    }
+    for session in &sessions {
+        if as_json {
+            println!("{}", serde_json::to_string(session)?);
+            continue;
+        }
+        let status = session.status.as_deref().unwrap_or("?");
+        let name = session.name.as_deref().unwrap_or("-");
+        println!("{status:<5} {name:<22} {}", session.cwd.display());
+        let mut details = vec![
+            format!("pid {}", session.pid),
+            format!("session {}", session.session_id),
+        ];
+        if let Some(ms) = session.status_updated_ms {
+            details.push(format!("{status} for {}", ago(ms)));
+        }
+        println!("      {}", details.join(" · "));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn print_session(session: &RunningSession, projects: &[Project]) {
     let status = session.status.as_deref().unwrap_or("?");
     let name = session.name.as_deref().unwrap_or("-");
@@ -89,37 +122,6 @@ fn print_session(session: &RunningSession, projects: &[Project]) {
     if let Some(place) = place(projects, &session.cwd) {
         println!("      {}", place.label);
     }
-}
-
-struct Place {
-    project_id: i64,
-    workspace_id: Option<i64>,
-    label: String,
-}
-
-/// The cos workspace or project a session's folder belongs to.
-fn place(projects: &[Project], cwd: &Path) -> Option<Place> {
-    for project in projects {
-        if let Some(workspace) = project
-            .workspaces
-            .iter()
-            .find(|workspace| cwd.starts_with(&workspace.path))
-        {
-            return Some(Place {
-                project_id: project.id,
-                workspace_id: Some(workspace.id),
-                label: format!("workspace {} of project {}", workspace.title, project.name),
-            });
-        }
-    }
-    projects
-        .iter()
-        .find(|project| cwd.starts_with(&project.root))
-        .map(|project| Place {
-            project_id: project.id,
-            workspace_id: None,
-            label: format!("project {}", project.name),
-        })
 }
 
 fn ago(ms: i64) -> String {

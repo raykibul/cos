@@ -7,6 +7,8 @@
 //!   with the sequence number as the SSE id. A `Last-Event-ID` header
 //!   overrides `after`, so a reconnecting client resumes where it stopped.
 //! - Projects and workspaces: see "Projects and workspaces" in `docs/daemon.md`.
+//! - Agents, approvals and other Claude sessions: [`super::agents_api`],
+//!   contract in `docs/agents-api.md`.
 //! - Devices and remote access: [`super::remote_api`], "Remote access" in
 //!   `docs/daemon.md`. The same routes are served on the tailnet listener.
 //! - Runs, plans and tasks: see [`super::runs_api`].
@@ -85,6 +87,7 @@ pub(crate) struct AppState {
     pub devices: Arc<cos_core::Devices>,
     pub tailnet: super::tailnet::Tailnet,
     pub runs: Arc<Runs>,
+    pub agents: super::agents::AgentManager,
     pub started_at: Timestamp,
     pub home: PathBuf,
     /// Flips to true when the daemon is stopping; open streams end then.
@@ -108,6 +111,7 @@ pub(crate) fn router(state: AppState) -> Router {
         )
         .merge(super::remote_api::routes())
         .merge(super::runs_api::routes())
+        .merge(super::agents_api::routes())
         .with_state(state)
 }
 
@@ -239,7 +243,8 @@ async fn remove_workspace(
     id: Result<Path<i64>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::not_found("there is no such workspace"))?;
-    state.projects.remove_workspace(id).await?;
+    // Refused while an agent runs there.
+    state.agents.remove_workspace(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

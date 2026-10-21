@@ -9,9 +9,11 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64.workspace = true
 clap.workspace = true
 cos-core.workspace = true
 cos-harness.workspace = true
+crossterm.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

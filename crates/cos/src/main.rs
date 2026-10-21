@@ -4,11 +4,15 @@
 //! `cos project`, `cos workspace` and the run commands (`cos run`, `cos runs`,
 //! `cos board`, `cos approve-plan`, `cos cancel`) talk to it over `~/.cos/cos.sock`, or to
 //! another machine's daemon over the tailnet with `--host`. `cos remote` and
-//! `cos devices` manage that remote access.
+//! `cos devices` manage that remote access. `cos agent`, `cos agents`,
+//! `cos approvals`, `cos allow` and `cos deny` drive the agents the daemon
+//! runs in terminals.
 //! `cos try` runs one prompt through Claude Code without the daemon, and
 //! `cos sessions` lists the Claude sessions running on this Mac. See
 //! `docs/proposal.md` for where this is going.
 
+mod agents_cmd;
+mod attach;
 mod client;
 mod commands;
 mod daemon;
@@ -84,6 +88,17 @@ enum Command {
         #[command(subcommand)]
         action: Option<devices_cmd::DevicesCommand>,
     },
+    /// Start, watch and drive Claude agents in workspaces.
+    #[command(subcommand)]
+    Agent(agents_cmd::AgentCommand),
+    /// List agents.
+    Agents(agents_cmd::AgentsArgs),
+    /// List permission requests waiting for an answer.
+    Approvals(agents_cmd::ApprovalsArgs),
+    /// Allow a pending permission request.
+    Allow { id: i64 },
+    /// Deny a pending permission request. The message is shown to Claude.
+    Deny { id: i64, message: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -146,5 +161,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Hook => unreachable!("handled above"),
         Command::Remote { action } => devices_cmd::remote(&home, action).await,
         Command::Devices { action } => devices_cmd::devices(&home, action).await,
+        Command::Agent(command) => agents_cmd::agent(&home, command).await,
+        Command::Agents(args) => agents_cmd::agents(&home, args).await,
+        Command::Approvals(args) => agents_cmd::approvals(&home, args).await,
+        Command::Allow { id } => agents_cmd::answer(&home, id, true, None).await,
+        Command::Deny { id, message } => agents_cmd::answer(&home, id, false, message).await,
     }
 }

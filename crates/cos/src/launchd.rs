@@ -10,6 +10,8 @@ use anyhow::{Context, bail};
 use crate::home::CosHome;
 
 pub(crate) const LABEL: &str = "local.cos.daemon";
+/// Claude's config dir, when it isn't `~/.claude`.
+const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 
 pub(crate) fn plist_path() -> anyhow::Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
@@ -30,10 +32,16 @@ pub(crate) fn install(home: &CosHome) -> anyhow::Result<PathBuf> {
     // launchd starts agents with a bare PATH; the daemon needs the user's to
     // find `claude`, `git` and whatever the workers run.
     let path_env = std::env::var("PATH").unwrap_or_default();
+    // Where Claude keeps its settings and session files, and which `claude`
+    // agents run, when set; launchd wouldn't pass them on otherwise.
+    let extra: Vec<(&str, String)> = [CLAUDE_CONFIG_DIR, crate::daemon::agents::CLAUDE_BIN_ENV]
+        .into_iter()
+        .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
+        .collect();
     let plist = plist_path()?;
 
     std::fs::create_dir_all(plist.parent().expect("plist path has a parent"))?;
-    std::fs::write(&plist, render_plist(&exe, home, &path_env))
+    std::fs::write(&plist, render_plist(&exe, home, &path_env, &extra))
         .with_context(|| format!("could not write {}", plist.display()))?;
 
     let domain = gui_domain()?;
@@ -65,11 +73,21 @@ pub(crate) fn uninstall() -> anyhow::Result<bool> {
     Ok(true)
 }
 
-fn render_plist(exe: &Path, home: &CosHome, path_env: &str) -> String {
+fn render_plist(exe: &Path, home: &CosHome, path_env: &str, extra_env: &[(&str, String)]) -> String {
     let exe = xml_escape(&exe.to_string_lossy());
     let cos_home = xml_escape(&home.root().to_string_lossy());
     let log = xml_escape(&home.daemon_log().to_string_lossy());
     let path_env = xml_escape(path_env);
+    let extra_env: String = extra_env
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "\n        <key>{}</key>\n        <string>{}</string>",
+                xml_escape(name),
+                xml_escape(value)
+            )
+        })
+        .collect();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -87,7 +105,7 @@ fn render_plist(exe: &Path, home: &CosHome, path_env: &str) -> String {
         <key>COS_HOME</key>
         <string>{cos_home}</string>
         <key>PATH</key>
-        <string>{path_env}</string>
+        <string>{path_env}</string>{extra_env}
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -149,6 +167,7 @@ mod tests {
             Path::new("/opt/cos/bin/cos"),
             &home,
             "/usr/bin:/Users/me/.local/bin",
+            &[],
         );
 
         assert!(plist.contains("<string>/opt/cos/bin/cos</string>\n        <string>daemon</string>"));
@@ -156,13 +175,30 @@ mod tests {
         assert!(plist.contains("<string>/usr/bin:/Users/me/.local/bin</string>"));
         assert!(plist.contains("<string>/Users/me/.cos/logs/daemon.log</string>"));
         assert!(plist.contains(&format!("<string>{LABEL}</string>")));
+        assert!(!plist.contains(CLAUDE_CONFIG_DIR));
+    }
+
+    #[test]
+    fn plist_passes_the_claude_config_dir_on() {
+        let home = CosHome::new("/Users/me/.cos");
+
+        let plist = render_plist(
+            Path::new("/opt/cos/bin/cos"),
+            &home,
+            "/usr/bin",
+            &[(CLAUDE_CONFIG_DIR, "/Users/me/.claude-work".into())],
+        );
+
+        assert!(plist.contains(
+            "<key>CLAUDE_CONFIG_DIR</key>\n        <string>/Users/me/.claude-work</string>\n    </dict>"
+        ));
     }
 
     #[test]
     fn plist_values_are_escaped() {
         let home = CosHome::new("/tmp/a&b");
 
-        let plist = render_plist(Path::new("/tmp/<cos>"), &home, "\"x\"");
+        let plist = render_plist(Path::new("/tmp/<cos>"), &home, "\"x\"", &[]);
 
         assert!(plist.contains("/tmp/a&amp;b"));
         assert!(plist.contains("/tmp/&lt;cos&gt;"));

@@ -1,6 +1,10 @@
 //! Talks to the daemon's HTTP API over its Unix socket, or over TCP to a
 //! daemon's tailnet listener when `--host` (or `COS_HOST`) is given.
 
+pub(crate) mod agents;
+
+pub(crate) use agents::TerminalMessage;
+
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::OnceLock;

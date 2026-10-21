@@ -1,7 +1,10 @@
 //! `cos daemon`: the long-running process. It owns the database and the
 //! event log and serves the API on `<home>/cos.sock`, and on the tailnet when
-//! remote access is on (see [`tailnet`]).
+//! remote access is on (see [`tailnet`]). It runs agents in terminals (see
+//! [`agents`]).
 
+pub(crate) mod agents;
+pub(crate) mod agents_api;
 pub(crate) mod api;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
@@ -18,13 +21,14 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use cos_core::events::kind;
-use cos_core::{Devices, EventLog, Projects, Runs, Store};
+use cos_core::{Agents, Devices, EventLog, Projects, Runs, Store};
 use jiff::Timestamp;
 use serde_json::json;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use self::agents::{AgentConfig, AgentManager};
 use crate::home::CosHome;
 use crate::tailscale::{Tailscale, TailscaleCli};
 
@@ -59,6 +63,12 @@ pub(crate) async fn run_with(
     let log = EventLog::new(store.clone());
     let projects = Arc::new(Projects::new(store.clone(), log.clone(), home.worktrees()));
     let devices = Arc::new(Devices::new(store.clone(), log.clone()));
+    let agents = AgentManager::start(
+        Agents::new(store.clone(), log.clone()),
+        log.clone(),
+        projects.clone(),
+        AgentConfig::for_home(home)?,
+    )?;
     let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());
     let runs = Arc::new(Runs::new(store, log.clone()));
 
@@ -78,6 +88,7 @@ pub(crate) async fn run_with(
         devices,
         tailnet,
         runs,
+        agents: agents.clone(),
         started_at: Timestamp::now(),
         home: home.root().to_path_buf(),
         stopping: stopping.clone(),
@@ -95,6 +106,9 @@ pub(crate) async fn run_with(
     let reason = stop.await;
     tracing::info!(%reason, "cos daemon stopping");
     let _ = stopping_tx.send(true);
+    // Bounded: agents that don't exit in time are killed. They end up
+    // `interrupted`, ready to resume.
+    agents.shutdown().await;
     match tokio::time::timeout(SHUTDOWN_GRACE, server).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => tracing::error!(%error, "server failed"),
