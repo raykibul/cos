@@ -400,6 +400,8 @@ public struct TestCheck: Codable, Equatable, Sendable {
     }
 
     public var passed: Bool { status == "passed" || status == "ok" }
+    /// The task has no test command, so nothing ran.
+    public var skipped: Bool { status == "skipped" }
 }
 
 /// The reviewer's verdict.

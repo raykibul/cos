@@ -399,8 +399,8 @@ private struct TaskCard: View {
                         Button {
                             showsTestOutput.toggle()
                         } label: {
-                            Label(testTitle(tests), systemImage: tests.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(tests.passed ? .green : .red)
+                            Label(testTitle(tests), systemImage: tests.skipped ? "minus.circle" : tests.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(tests.skipped ? Color.secondary : tests.passed ? .green : .red)
                         }
                         .buttonStyle(.plain)
                         .disabled(tests.outputTail?.isEmpty ?? true)
@@ -431,6 +431,7 @@ private struct TaskCard: View {
         case "passed": "Tests passed"
         case "failed": "Tests failed" + (tests.exitCode.map { " (exit \($0))" } ?? "")
         case "timed_out": "Tests timed out"
+        case "skipped": "No test command"
         default: "Tests: \(tests.status.replacingOccurrences(of: "_", with: " "))"
         }
     }
