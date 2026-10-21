@@ -1,7 +1,10 @@
 //! `cos daemon`: the long-running process. It owns the database and the
-//! event log and serves the API on `<home>/cos.sock`.
+//! event log and serves the API on `<home>/cos.sock`, and on the tailnet when
+//! remote access is on (see [`tailnet`]).
 
 pub(crate) mod api;
+pub(crate) mod remote_api;
+pub(crate) mod tailnet;
 #[cfg(test)]
 mod tests;
 
@@ -14,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use cos_core::events::kind;
-use cos_core::{EventLog, Projects, Store};
+use cos_core::{Devices, EventLog, Projects, Store};
 use jiff::Timestamp;
 use serde_json::json;
 use tokio::net::UnixListener;
@@ -22,6 +25,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::home::CosHome;
+use crate::tailscale::{Tailscale, TailscaleCli};
 
 /// How long open connections get to finish once the daemon is stopping.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -33,6 +37,17 @@ pub(crate) async fn run(home: &CosHome) -> anyhow::Result<()> {
 
 /// Runs the daemon until `stop` resolves to the reason for stopping.
 pub(crate) async fn run_until(home: &CosHome, stop: impl Future<Output = String>) -> anyhow::Result<()> {
+    run_with(home, Arc::new(TailscaleCli), tailnet::Timing::default(), stop).await
+}
+
+/// Runs the daemon with the given Tailscale (a fake in tests) until `stop`
+/// resolves to the reason for stopping.
+pub(crate) async fn run_with(
+    home: &CosHome,
+    tailscale: Arc<dyn Tailscale>,
+    timing: tailnet::Timing,
+    stop: impl Future<Output = String>,
+) -> anyhow::Result<()> {
     home.prepare()?;
     // Held until this function returns; the OS releases it if we crash.
     let _lock = lock_single_instance(home)?;
@@ -41,7 +56,9 @@ pub(crate) async fn run_until(home: &CosHome, stop: impl Future<Output = String>
         .with_context(|| format!("could not open {}", home.database().display()))?;
     let store = Arc::new(store);
     let log = EventLog::new(store.clone());
-    let projects = Arc::new(Projects::new(store, log.clone(), home.worktrees()));
+    let projects = Arc::new(Projects::new(store.clone(), log.clone(), home.worktrees()));
+    let devices = Arc::new(Devices::new(store.clone(), log.clone()));
+    let tailnet = tailnet::Tailnet::load(store, log.clone());
 
     let socket = home.socket();
     // We hold the lock, so any socket file left behind is from a dead daemon.
@@ -56,11 +73,13 @@ pub(crate) async fn run_until(home: &CosHome, stop: impl Future<Output = String>
     let state = api::AppState {
         log: log.clone(),
         projects,
+        devices,
+        tailnet,
         started_at: Timestamp::now(),
         home: home.root().to_path_buf(),
         stopping: stopping.clone(),
     };
-    let server = serve(listener, state, stopping);
+    let server = serve(listener, state.clone(), stopping);
 
     log.append(
         kind::DAEMON_STARTED,
@@ -68,6 +87,7 @@ pub(crate) async fn run_until(home: &CosHome, stop: impl Future<Output = String>
         json!({ "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION") }),
     )?;
     tracing::info!(socket = %socket.display(), "cos daemon started");
+    let remote = tailnet::spawn(state, tailscale, timing);
 
     let reason = stop.await;
     tracing::info!(%reason, "cos daemon stopping");
@@ -77,6 +97,10 @@ pub(crate) async fn run_until(home: &CosHome, stop: impl Future<Output = String>
         Ok(Ok(Err(error))) => tracing::error!(%error, "server failed"),
         Ok(Err(error)) => tracing::error!(%error, "server task failed"),
         Err(_) => tracing::warn!("connections still open after {SHUTDOWN_GRACE:?}; stopping anyway"),
+    }
+    // It closes its own listeners once `stopping` flips.
+    if tokio::time::timeout(SHUTDOWN_GRACE, remote).await.is_err() {
+        tracing::warn!("tailnet listener still closing after {SHUTDOWN_GRACE:?}; stopping anyway");
     }
 
     log.append(kind::DAEMON_STOPPED, None, json!({ "reason": reason }))?;

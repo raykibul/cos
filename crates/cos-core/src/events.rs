@@ -21,6 +21,11 @@ pub mod kind {
     pub const WORKSPACE_CREATED: &str = "workspace.created";
     pub const WORKSPACE_RENAMED: &str = "workspace.renamed";
     pub const WORKSPACE_REMOVED: &str = "workspace.removed";
+    pub const DEVICE_REQUESTED: &str = "device.requested";
+    pub const DEVICE_APPROVED: &str = "device.approved";
+    pub const DEVICE_DENIED: &str = "device.denied";
+    pub const DEVICE_REMOVED: &str = "device.removed";
+    pub const TAILNET_CHANGED: &str = "tailnet.changed";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

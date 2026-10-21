@@ -1,0 +1,58 @@
+{
+  "Node": {
+    "ID": 2222222222222202,
+    "StableID": "nPEER1stableIDCNTRL",
+    "Name": "build-box.tail0000.ts.net.",
+    "User": 1111111111111111,
+    "Key": "nodekey:0000000000000000000000000000000000000000000000000000000000000002",
+    "KeyExpiry": "2027-03-27T18:48:16Z",
+    "DiscoKey": "discokey:0000000000000000000000000000000000000000000000000000000000000004",
+    "Addresses": [
+      "100.100.2.2/32",
+      "fd7a:115c:a1e0::2:2/128"
+    ],
+    "AllowedIPs": [
+      "100.100.2.2/32",
+      "fd7a:115c:a1e0::2:2/128"
+    ],
+    "Endpoints": [
+      "192.0.2.10:36681",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641",
+      "192.0.2.10:41641"
+    ],
+    "HomeDERP": 3,
+    "Hostinfo": {
+      "OS": "linux",
+      "Hostname": "build-box",
+      "Services": [
+        {
+          "Proto": "peerapi4",
+          "Port": 49000
+        },
+        {
+          "Proto": "peerapi6",
+          "Port": 58429
+        }
+      ]
+    },
+    "Created": "2026-09-28T18:48:16.21279676Z",
+    "Cap": 142,
+    "Online": true,
+    "ComputedName": "build-box",
+    "ComputedNameWithHost": "build-box"
+  },
+  "UserProfile": {
+    "ID": 1111111111111111,
+    "LoginName": "me@example.com",
+    "DisplayName": "Me Example",
+    "ProfilePicURL": ""
+  },
+  "CapMap": null
+}

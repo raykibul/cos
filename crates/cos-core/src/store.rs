@@ -5,7 +5,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::LoggedEvent;
@@ -49,6 +51,29 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE (project_id, name)
     );
 ",
+    "
+    -- A tailnet device that has tried to reach the daemon over its tailnet
+    -- listener. Only approved ones are let in.
+    CREATE TABLE devices (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        node_id       TEXT    NOT NULL UNIQUE, -- Tailscale's stable node ID
+        name          TEXT    NOT NULL,        -- MagicDNS name, such as 'my-iphone'
+        hostname      TEXT    NOT NULL,        -- what the device calls itself
+        os            TEXT    NOT NULL,
+        login_name    TEXT    NOT NULL,        -- the Tailscale user it is logged in as
+        state         TEXT    NOT NULL CHECK (state IN ('pending', 'approved', 'denied')),
+        last_ip       TEXT,
+        first_seen_ms INTEGER NOT NULL,
+        last_seen_ms  INTEGER NOT NULL,
+        decided_ms    INTEGER
+    );
+    -- Daemon settings that survive restarts, such as whether the tailnet
+    -- listener is on. Values are JSON.
+    CREATE TABLE settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +86,9 @@ pub enum StoreError {
 
     #[error("event #{seq} in the database is unreadable: {reason}")]
     Corrupt { seq: u64, reason: String },
+
+    #[error("setting {key:?} in the database is unreadable: {reason}")]
+    BadSetting { key: String, reason: String },
 }
 
 /// The database, behind a lock. Calls are short (single-row writes, small
@@ -136,6 +164,37 @@ impl Store {
                     Ok((row.get(0)?, row.get(1)?))
                 })?;
         Ok((count as u64, last as u64))
+    }
+
+    /// A setting's value, or `None` if it was never set.
+    pub fn setting<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StoreError> {
+        let value: Option<String> = self
+            .lock()
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        value
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|error| StoreError::BadSetting {
+                    key: key.to_owned(),
+                    reason: error.to_string(),
+                })
+            })
+            .transpose()
+    }
+
+    pub fn set_setting<T: Serialize>(&self, key: &str, value: &T) -> Result<(), StoreError> {
+        let value = serde_json::to_string(value).map_err(|error| StoreError::BadSetting {
+            key: key.to_owned(),
+            reason: error.to_string(),
+        })?;
+        self.lock().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Connection> {
@@ -251,6 +310,61 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.event_stats().unwrap(), (1, 1));
         assert_eq!(append(&store, "c").seq, 3);
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+
+        assert_eq!(store.setting::<bool>("x").unwrap(), None);
+        store.set_setting("x", &json!({ "on": true })).unwrap();
+        store.set_setting("x", &json!({ "on": false })).unwrap();
+
+        assert_eq!(store.setting("x").unwrap(), Some(json!({ "on": false })));
+        let error = store.setting::<bool>("x").expect_err("wrong type");
+        assert!(matches!(error, StoreError::BadSetting { .. }), "{error}");
+    }
+
+    #[test]
+    fn an_older_database_gains_the_device_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cos.db");
+        {
+            // A database as the previous release left it: two migrations in.
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for migration in &MIGRATIONS[..2] {
+                tx.execute_batch(migration).unwrap();
+            }
+            tx.pragma_update(None, "user_version", 2).unwrap();
+            tx.execute(
+                "INSERT INTO events (ts_ms, kind, data) VALUES (0, 'old', '{}')",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let version: i64 = store
+            .lock()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        assert_eq!(store.event_stats().unwrap(), (1, 1));
+        let tables: Vec<String> = store
+            .lock()
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('devices', 'settings') ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(tables, ["devices", "settings"]);
     }
 
     #[test]
