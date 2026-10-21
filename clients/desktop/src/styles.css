@@ -62,6 +62,36 @@
   }
 }
 
+/* The same, when the page asks for dark (`data-theme="dark"`). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --c-page: #262624;
+  --c-sidebar: #1f1e1d;
+  --c-surface: #2e2e2b;
+  --c-raised: #353532;
+  --c-subtle: #33322f;
+  --c-subtle-2: #3d3c38;
+  --c-line: rgb(250 249 245 / 0.08);
+  --c-line-strong: rgb(250 249 245 / 0.14);
+  --c-ink: #f0eee6;
+  --c-ink-2: #b3b0a6;
+  --c-ink-3: #85827a;
+  --c-accent: #d97757;
+  --c-accent-strong: #e08a6c;
+  --c-accent-ink: #ea9a7e;
+  --c-blue: #82a6ee;
+  --c-green: #7db98d;
+  --c-red: #e8796f;
+  --c-purple: #b59be6;
+  --c-teal: #6fc1bb;
+  --c-amber: #e3b660;
+  --c-shadow: 0 1px 2px rgb(0 0 0 / 0.2), 0 4px 16px rgb(0 0 0 / 0.16);
+  --c-shadow-pop: 0 2px 6px rgb(0 0 0 / 0.3), 0 16px 48px rgb(0 0 0 / 0.4);
+  --c-backdrop: rgb(0 0 0 / 0.45);
+  --c-terminal: #1f1e1d;
+  --c-shadow-composer: 0 0.5px 1px rgb(0 0 0 / 0.3), 0 4px 20px rgb(0 0 0 / 0.2);
+}
+
 @theme inline {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-serif: "Source Serif 4 Variable", ui-serif, Georgia, serif;
@@ -117,6 +147,14 @@
 }
 
 @layer base {
+  /* Code reads as typed: no -> or >= ligatures. */
+  code,
+  pre,
+  kbd,
+  .font-mono {
+    font-variant-ligatures: none;
+  }
+
   html,
   body,
   #root {

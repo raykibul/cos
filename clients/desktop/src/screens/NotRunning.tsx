@@ -71,7 +71,9 @@ export function NotRunning() {
               {info ? ` at ${info.socket.replace(/^\/Users\/[^/]+/, "~")}` : ""}…
             </span>
           </div>
-          {reason ? <p className="mt-1 text-[12px] text-ink-3 select-text">{reason}</p> : null}
+          {reason && !(info && reason.includes(info.socket)) ? (
+            <p className="mt-1 text-[12px] text-ink-3 select-text">{reason}</p>
+          ) : null}
         </div>
       </div>
     </>

@@ -100,6 +100,8 @@ function RunView({ run }: { run: Run }) {
   const finished = isRunFinished(run.state);
   const label = runLabel(run.state);
   const tasks = board?.tasks ?? [];
+  // Tasks are numbered from 1 in board order, and dependencies by those numbers.
+  const numbers = new Map(tasks.map((t, i) => [t.id, i + 1]));
 
   const menu: MenuItem[] = [
     {
@@ -186,7 +188,9 @@ function RunView({ run }: { run: Run }) {
           {run.goal}
         </PageTitle>
 
-        {run.counts && run.counts.total > 0 && !finished ? (
+        {run.counts &&
+        run.counts.total > 0 &&
+        (run.state === "running" || run.state === "reporting") ? (
           <div className="-mt-4 mb-7 h-1 w-full overflow-hidden rounded-full bg-subtle">
             <div
               className={cx(
@@ -245,7 +249,13 @@ function RunView({ run }: { run: Run }) {
           ) : (
             <ol className="flex flex-col gap-2.5">
               {tasks.map((task) => (
-                <TaskCard key={task.id} task={task} run={run} onTerminal={setTerminal} />
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  run={run}
+                  numbers={numbers}
+                  onTerminal={setTerminal}
+                />
               ))}
             </ol>
           )}
@@ -371,10 +381,13 @@ const actionTitles: Record<TaskActionKind, string> = {
 function TaskCard({
   task,
   run,
+  numbers,
   onTerminal,
 }: {
   task: RunTask;
   run: Run;
+  /** Each task's number on the board, by id. */
+  numbers: Map<number, number>;
   onTerminal: (agentId: number) => void;
 }) {
   const { ui } = useApp();
@@ -396,7 +409,7 @@ function TaskCard({
       />
       <div className="flex items-start gap-3 py-3 pr-3 pl-4">
         <span className="mt-0.5 w-5 shrink-0 text-right font-mono text-[12px] text-ink-3 tabular-nums">
-          {task.position}
+          {numbers.get(task.id) ?? task.position + 1}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -419,7 +432,7 @@ function TaskCard({
               ) : null}
               {task.dependsOn.length > 0 ? (
                 <span className="text-[11.5px] text-ink-3">
-                  after {task.dependsOn.map((d) => `#${d}`).join(", ")}
+                  after {task.dependsOn.map((d) => numbers.get(d) ?? `#${d}`).join(", ")}
                 </span>
               ) : null}
             </div>
