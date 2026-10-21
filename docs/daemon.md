@@ -1,6 +1,6 @@
 # The cos daemon
 
-`cos daemon` is the long-running process that will own runs, workers and approvals. As of milestone 3 it owns the database and the event log, and serves an HTTP API on a Unix socket. It also keeps the books for runs and their tasks (see "Runs, tasks and the board" below); the workers and the chief that drive them arrive in milestones 4 and 5. It runs agents (Claude Code in terminals it owns) and holds their permission requests as approvals (see "Agents" below).
+`cos daemon` is the long-running process that will own runs, workers and approvals. As of milestone 3 it owns the database and the event log, and serves an HTTP API on a Unix socket. It also keeps the books for runs and their tasks (see "Runs, tasks and the board" below); the pipeline drives each task through a worker and a reviewer (see "Pipeline"), and the chief that plans runs arrives in milestone 5. It runs agents (Claude Code in terminals it owns) and holds their permission requests as approvals (see "Agents" below).
 
 ## Commands
 
@@ -27,6 +27,7 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | `cos.db` | SQLite in WAL mode. The schema version is in `PRAGMA user_version`; migrations are in `crates/cos-core/src/store.rs`. |
 | `daemon.lock` | Holds the running daemon's pid. Its lock means only one daemon runs per home. |
 | `logs/daemon.log` | The daemon's stderr when launchd runs it. |
+| `tasks/` | Task worktrees (`tasks/<workspace>-<id>/t<task id>-<slug>`), one per task a run is working on. Removed once the task merges, or when it fails or is cancelled with no commits. |
 
 The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR` and `COS_CLAUDE_BIN` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
 
@@ -315,6 +316,11 @@ The chief proposes a plan with `board_propose`. It is checked before it reaches 
  "depends_on": [6], "state": "running", "retries": 0,
  "branch": "…", "worktree": "/…",           // once the worktree exists
  "last_failure": "…",                       // once blocked, failed or retried
+ "agent_id": 12,                            // the newest worker, once started
+ "checks": {"scope": {"ok": true, "out_of_scope": [], "protected": [], "uncommitted": []},
+            "tests": {"status": "passed", "exit_code": 0, "output_tail": "…"},  // null if not run
+            "commits_ahead": 1},            // once checked
+ "review": {"verdict": "approve", "notes": "…", "agent_id": 13},  // once reviewed
  "created_at": "…", "updated_at": "…"}
 // ProposedTask, in a plan
 {"title": "Add limiter", "instructions": "…" /* or "description" */, "files": ["src/limit.rs"],
@@ -350,15 +356,41 @@ All of them carry the run's id in `run_id`.
 | `plan.approved` | `{run_id, tasks}` |
 | `task.state_changed` | `{run_id, task_id, title, from, to, retries, reason?}` |
 | `task.worktree_assigned` | `{run_id, task_id, branch, worktree}` |
+| `task.checked` | `{run_id, task_id, scope_ok, tests}`: `tests` is `passed`, `failed`, `timed_out`, `skipped` or null |
+| `task.reviewed` | `{run_id, task_id, verdict}` |
+| `task.merged` | `{run_id, task_id, commit}`: the merge commit, null if the branch was already merged |
 | `run.limits_changed` | `{run_id, preset, approval_cap, chief_approvals}` |
 
 One change can log several events. Approving a plan logs `plan.approved`, then the run's move to `running`, then each task that became `ready`.
+
+### Pipeline
+
+The pipeline drives each task from `ready` to `merged` (`crates/cos/src/daemon/pipeline.rs`, one driver per task in `pipeline/driver.rs`). It follows the event log: a task moving to `ready` gets a driver; a run moving to `cancelled` or `failed` has its agents stopped. The steps are those of [orchestration.md](orchestration.md); what differs from that contract is under "Pipeline" at its end.
+
+1. **Start:** wait for a worker slot (3 per workspace, 6 in total), create the task worktree under `<home>/tasks` and record it, then start a worker there (role `worker`, `acceptEdits`, your settings off, `--append-system-prompt` with the rules) with the task as its first prompt. `COS_RUN_MODEL` picks the model for workers and reviewers.
+2. **Running:** each `Stop` hook ends a turn. `DONE` → `checking`; `STUCK: why` → `blocked`; no verdict line → the worker is asked once, then `blocked`.
+3. **Checking:** the scope check, the test command, and at least one commit. A failure is retried once with the reason typed into the same worker; the second failure blocks the task.
+4. **Review:** a new reviewer in the task worktree (role `reviewer`, `plan` mode) gets the diff summary, the diff (cut to 24 KiB), and the test result, and answers `VERDICT: APPROVE` or `VERDICT: CHANGES: …`. Changes are a retry like a failed check.
+5. **Merge:** one merge at a time per workspace. A conflict blocks the task with the conflicting paths.
+6. **Cleanup:** the worker and reviewer are stopped (their agent rows stay). A merged task's worktree and branch are removed. A failed or cancelled task's are removed only if the branch has no commits.
+
+A blocked task the chief or you move back to `ready` starts again in the same worktree, with the same worker session.
+
+**Restarts.** When the daemon starts, it picks up every running run's `ready`, `running`, `checking` and `review` tasks:
+
+- `ready`: started as usual, reusing a worktree that's already there and resuming the task's worker with the retry reason.
+- `running`: the worker is resumed and told cos restarted, to finish and end with its verdict. If it had already ended its turn, its last message is read for the verdict; with no worker, a new one starts.
+- `checking`: the checks run again.
+- `review`: merged at once if the branch is already in the workspace (the merge happened before the stop); otherwise a new reviewer.
+- Cancelled and failed runs: leftover task worktrees are cleaned up by the rule above.
+
+Run agents never show `needs_trust`: the daemon answers their trust dialog itself.
 
 ## Agents
 
 An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it owns, in a workspace's folder. Apps show its terminal live and type into it; the daemon follows it through hooks, not by reading the screen. The routes, JSON, events and CLI are in [agents-api.md](agents-api.md); this section is how the daemon does it. The code is `crates/cos/src/daemon/agents.rs` (process side) and `cos_core::agents` (the `agents` and `approvals` tables).
 
-- **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder. The hooks run `cos hook`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
+- **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder (for a worker or reviewer, its task's worktree; the folder, system prompt and MCP config are recorded so `resume` starts it the same way). The hooks run `cos hook`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
 - **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The one thing read from the screen is Claude's trust dialog (`needs_trust`).
 - **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait. Before any of that, the approvals policy decides who answers (see "Approvals policy" below).
 - **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` runs `claude --resume <session id>` as the same agent.

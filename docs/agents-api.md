@@ -23,6 +23,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
   "id": 7,
   "workspace_id": 3,
   "run_id": null,
+  "task_id": null,
   "role": "user",
   "title": "fix login bug",
   "session_id": "5504b543-4897-4751-add5-f81f24a6316c",
@@ -57,6 +58,8 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 `last_message` is the `Stop` hook's `last_assistant_message`, cut to 2,000 characters.
 
 - **`run_id`:** the run's id (an integer), or null for agents you start.
+- **`task_id`:** the task a worker or reviewer works on, else null.
+- **`cwd`:** only present when the agent runs somewhere other than the workspace folder: a worker or reviewer runs in its task's worktree.
 - **`permission_mode`:** `default`, `acceptEdits`, `plan` or `dontAsk`. `default` is started as `--permission-mode manual`, which is what the CLI now calls it.
 - **`user_settings`:** whether Claude loads your own settings (`~/.claude/settings.json`: allow rules, MCP servers, theme). True by default for agents you start, false for agents a run starts. With false, only the repo's settings apply, so your allow rules don't approve anything and more requests come to cos as approvals.
 
