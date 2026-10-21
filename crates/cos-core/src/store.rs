@@ -186,6 +186,44 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE tasks ADD COLUMN checks_json TEXT;
     ALTER TABLE tasks ADD COLUMN review_json TEXT;
 ",
+    "
+    -- The chief: the agent that plans and steers a run.
+    ALTER TABLE runs ADD COLUMN chief_agent_id INTEGER;
+    -- One message the daemon typed into a chief, holding inbox items.
+    CREATE TABLE wakeups (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id     INTEGER NOT NULL REFERENCES runs (id),
+        agent_id   INTEGER NOT NULL, -- no foreign key: agents are forgotten with their workspace
+        items      INTEGER NOT NULL,
+        bytes      INTEGER NOT NULL,
+        created_ms INTEGER NOT NULL
+    );
+    CREATE INDEX wakeups_by_run ON wakeups (run_id, created_ms);
+    -- Something the chief should hear about, waiting for its next wakeup.
+    CREATE TABLE inbox (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id       INTEGER NOT NULL REFERENCES runs (id),
+        kind         TEXT    NOT NULL,
+        text         TEXT    NOT NULL,
+        created_ms   INTEGER NOT NULL,
+        wakeup_id    INTEGER REFERENCES wakeups (id), -- set once delivered
+        delivered_ms INTEGER
+    );
+    CREATE INDEX inbox_waiting ON inbox (run_id, wakeup_id, id);
+    -- A question the chief asked you. choices is a JSON array.
+    CREATE TABLE questions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL REFERENCES runs (id),
+        agent_id    INTEGER,
+        question    TEXT    NOT NULL,
+        choices     TEXT    NOT NULL,
+        state       TEXT    NOT NULL CHECK (state IN ('open', 'answered')),
+        answer      TEXT,
+        created_ms  INTEGER NOT NULL,
+        answered_ms INTEGER
+    );
+    CREATE INDEX questions_by_state ON questions (state, id);
+",
 ];
 
 #[derive(Debug, thiserror::Error)]

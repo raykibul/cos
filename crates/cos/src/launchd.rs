@@ -32,10 +32,15 @@ pub(crate) fn install(home: &CosHome) -> anyhow::Result<PathBuf> {
     // launchd starts agents with a bare PATH; the daemon needs the user's to
     // find `claude`, `git` and whatever the workers run.
     let path_env = std::env::var("PATH").unwrap_or_default();
-    // Where Claude keeps its settings and session files, and which `claude`
-    // agents run, when set; launchd wouldn't pass them on otherwise.
-    let extra: Vec<(&str, String)> = [CLAUDE_CONFIG_DIR, crate::daemon::agents::CLAUDE_BIN_ENV]
-        .into_iter()
+    // Where Claude keeps its settings and session files, which `claude`
+    // agents run, and the chiefs' model, when set; launchd wouldn't pass them
+    // on otherwise.
+    let extra: Vec<(&str, String)> = [
+        CLAUDE_CONFIG_DIR,
+        crate::daemon::agents::CLAUDE_BIN_ENV,
+        crate::daemon::chief::MODEL_ENV,
+    ]
+    .into_iter()
         .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
         .collect();
     let plist = plist_path()?;

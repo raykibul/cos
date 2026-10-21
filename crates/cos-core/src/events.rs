@@ -46,6 +46,10 @@ pub mod kind {
     // The approvals policy; see `docs/approvals.md`.
     pub const APPROVAL_ROUTED: &str = "approval.routed";
     pub const RUN_LIMITS_CHANGED: &str = "run.limits_changed";
+    // The chief; see `docs/orchestration.md`.
+    pub const QUESTION_ASKED: &str = "question.asked";
+    pub const QUESTION_ANSWERED: &str = "question.answered";
+    pub const RUN_REPORT_WRITTEN: &str = "run.report_written";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

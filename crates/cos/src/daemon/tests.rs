@@ -18,6 +18,7 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
 use super::agents::{AgentConfig, AgentManager};
+use super::chief::{Chief, ChiefConfig};
 use super::tailnet::{ListenerState, Tailnet, Timing};
 use super::{api, run_until, run_with, serve};
 use crate::client::{Client, DaemonError, NotRunning};
@@ -61,6 +62,15 @@ impl TestServer {
             AgentConfig::for_tests(dir.path()),
         )
         .unwrap();
+        let chief = Chief::start(
+            store.clone(),
+            log.clone(),
+            runs.clone(),
+            agents.clone(),
+            dir.path().to_path_buf(),
+            ChiefConfig::for_tests(),
+        )
+        .unwrap();
         let (stop, stopping) = watch::channel(false);
         let state = api::AppState {
             log: log.clone(),
@@ -69,6 +79,7 @@ impl TestServer {
             tailnet,
             runs,
             agents,
+            chief,
             started_at: Timestamp::now(),
             home: dir.path().to_path_buf(),
             stopping: stopping.clone(),

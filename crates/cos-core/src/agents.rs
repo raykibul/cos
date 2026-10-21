@@ -331,6 +331,7 @@ impl Agents {
             json!({
                 "agent_id": id,
                 "workspace_id": agent.workspace_id,
+                "run_id": agent.run_id,
                 "role": agent.role,
                 "session_id": agent.session_id,
             }),
