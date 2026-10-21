@@ -32,6 +32,14 @@ pub mod kind {
     pub const PLAN_APPROVED: &str = "plan.approved";
     pub const TASK_STATE_CHANGED: &str = "task.state_changed";
     pub const TASK_WORKTREE_ASSIGNED: &str = "task.worktree_assigned";
+    // Agents and approvals; see `docs/agents-api.md`.
+    pub const AGENT_STARTED: &str = "agent.started";
+    pub const AGENT_STATE_CHANGED: &str = "agent.state_changed";
+    pub const AGENT_EXITED: &str = "agent.exited";
+    pub const AGENT_REMOVED: &str = "agent.removed";
+    pub const APPROVAL_REQUESTED: &str = "approval.requested";
+    pub const APPROVAL_DECIDED: &str = "approval.decided";
+    pub const SESSION_CHANGED: &str = "session.changed";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -110,6 +110,49 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         UNIQUE (run_id, position)
     );
 ",
+    "
+    -- A Claude session the daemon runs in a terminal, in a workspace's folder.
+    -- Forgotten with its workspace.
+    CREATE TABLE agents (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id     INTEGER NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+        run_id           INTEGER REFERENCES runs (id),
+        role             TEXT    NOT NULL,
+        title            TEXT    NOT NULL,
+        session_id       TEXT    NOT NULL UNIQUE,
+        pid              INTEGER,
+        state            TEXT    NOT NULL,
+        model            TEXT,
+        permission_mode  TEXT    NOT NULL,
+        -- 1: Claude loads the user's own settings; 0: only the repo's.
+        user_settings    INTEGER NOT NULL,
+        term_rows        INTEGER NOT NULL,
+        term_cols        INTEGER NOT NULL,
+        started_ms       INTEGER NOT NULL,
+        last_activity_ms INTEGER NOT NULL,
+        exited_ms        INTEGER,
+        exit_code        INTEGER,
+        last_message     TEXT
+    );
+    CREATE INDEX agents_by_workspace ON agents (workspace_id);
+    -- A permission request from an agent, and how it was answered.
+    CREATE TABLE approvals (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id     INTEGER NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
+        workspace_id INTEGER NOT NULL,
+        tool_name    TEXT    NOT NULL,
+        tool_input   TEXT    NOT NULL,
+        tool_use_id  TEXT,
+        summary      TEXT    NOT NULL,
+        state        TEXT    NOT NULL,
+        decided_by   TEXT,
+        message      TEXT,
+        created_ms   INTEGER NOT NULL,
+        decided_ms   INTEGER
+    );
+    CREATE INDEX approvals_by_agent ON approvals (agent_id, state);
+    CREATE INDEX approvals_by_state ON approvals (state, id);
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
