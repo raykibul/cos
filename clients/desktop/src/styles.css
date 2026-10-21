@@ -1,0 +1,291 @@
+@import "tailwindcss";
+
+/* Claude's warm neutrals, light and dark from the system. One accent,
+   Claude orange, used sparingly. */
+:root {
+  color-scheme: light;
+  --c-page: #faf9f5;
+  --c-sidebar: #f1efe7;
+  --c-surface: #ffffff;
+  --c-raised: #ffffff;
+  --c-subtle: #eeece4;
+  --c-subtle-2: #e6e3d9;
+  --c-line: rgb(31 30 29 / 0.09);
+  --c-line-strong: rgb(31 30 29 / 0.16);
+  --c-ink: #1f1e1d;
+  --c-ink-2: #5f5d57;
+  --c-ink-3: #8f8c84;
+  --c-accent: #d97757;
+  --c-accent-strong: #c6613f;
+  --c-accent-ink: #b0532f;
+  --c-blue: #3d6cc9;
+  --c-green: #3c8452;
+  --c-red: #c2453d;
+  --c-purple: #7a5bc0;
+  --c-teal: #2a8580;
+  --c-amber: #a87414;
+  --c-shadow: 0 1px 2px rgb(31 30 29 / 0.05), 0 4px 16px rgb(31 30 29 / 0.05);
+  --c-shadow-pop: 0 2px 6px rgb(31 30 29 / 0.08), 0 16px 48px rgb(31 30 29 / 0.14);
+  --c-backdrop: rgb(31 30 29 / 0.22);
+  --c-terminal: #ffffff;
+  --c-shadow-composer: 0 0.5px 1px rgb(31 30 29 / 0.06), 0 4px 20px rgb(31 30 29 / 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --c-page: #262624;
+    --c-sidebar: #1f1e1d;
+    --c-surface: #2e2e2b;
+    --c-raised: #353532;
+    --c-subtle: #33322f;
+    --c-subtle-2: #3d3c38;
+    --c-line: rgb(250 249 245 / 0.08);
+    --c-line-strong: rgb(250 249 245 / 0.14);
+    --c-ink: #f0eee6;
+    --c-ink-2: #b3b0a6;
+    --c-ink-3: #85827a;
+    --c-accent: #d97757;
+    --c-accent-strong: #e08a6c;
+    --c-accent-ink: #ea9a7e;
+    --c-blue: #82a6ee;
+    --c-green: #7db98d;
+    --c-red: #e8796f;
+    --c-purple: #b59be6;
+    --c-teal: #6fc1bb;
+    --c-amber: #e3b660;
+    --c-shadow: 0 1px 2px rgb(0 0 0 / 0.2), 0 4px 16px rgb(0 0 0 / 0.16);
+    --c-shadow-pop: 0 2px 6px rgb(0 0 0 / 0.3), 0 16px 48px rgb(0 0 0 / 0.4);
+    --c-backdrop: rgb(0 0 0 / 0.45);
+    --c-terminal: #1f1e1d;
+    --c-shadow-composer: 0 0.5px 1px rgb(0 0 0 / 0.3), 0 4px 20px rgb(0 0 0 / 0.2);
+  }
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: "Source Serif 4 Variable", ui-serif, Georgia, serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-page: var(--c-page);
+  --color-sidebar: var(--c-sidebar);
+  --color-surface: var(--c-surface);
+  --color-raised: var(--c-raised);
+  --color-subtle: var(--c-subtle);
+  --color-subtle-2: var(--c-subtle-2);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-ink: var(--c-ink);
+  --color-ink-2: var(--c-ink-2);
+  --color-ink-3: var(--c-ink-3);
+  --color-accent: var(--c-accent);
+  --color-accent-strong: var(--c-accent-strong);
+  --color-accent-ink: var(--c-accent-ink);
+  --color-tone-blue: var(--c-blue);
+  --color-tone-green: var(--c-green);
+  --color-tone-red: var(--c-red);
+  --color-tone-purple: var(--c-purple);
+  --color-tone-teal: var(--c-teal);
+  --color-tone-amber: var(--c-amber);
+
+  --shadow-card: var(--c-shadow);
+  --shadow-pop: var(--c-shadow-pop);
+  --shadow-composer: var(--c-shadow-composer);
+
+  --animate-fade-in: fade-in 140ms ease-out;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+  --animate-breathe: breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--c-page);
+    color: var(--c-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    cursor: default;
+  }
+
+  button,
+  [role="button"] {
+    cursor: default;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--c-accent) 28%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--c-accent) 75%, transparent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--c-line-strong) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The report and other markdown. */
+.prose-cos {
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--c-ink);
+}
+.prose-cos > :first-child {
+  margin-top: 0;
+}
+.prose-cos h1,
+.prose-cos h2,
+.prose-cos h3 {
+  font-family: var(--font-serif);
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.prose-cos h1 {
+  font-size: 1.6em;
+  margin: 0.2em 0 0.6em;
+}
+.prose-cos h2 {
+  font-size: 1.25em;
+  margin: 1.5em 0 0.5em;
+}
+.prose-cos h3 {
+  font-size: 1.05em;
+  margin: 1.3em 0 0.4em;
+}
+.prose-cos p,
+.prose-cos ul,
+.prose-cos ol,
+.prose-cos pre,
+.prose-cos table,
+.prose-cos blockquote {
+  margin: 0.7em 0;
+}
+.prose-cos ul,
+.prose-cos ol {
+  padding-left: 1.4em;
+}
+.prose-cos ul {
+  list-style: disc;
+}
+.prose-cos ol {
+  list-style: decimal;
+}
+.prose-cos li {
+  margin: 0.25em 0;
+}
+.prose-cos li::marker {
+  color: var(--c-ink-3);
+}
+.prose-cos a {
+  color: var(--c-accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-cos code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--c-subtle);
+  border-radius: 5px;
+  padding: 0.1em 0.35em;
+}
+.prose-cos pre {
+  background: var(--c-subtle);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+.prose-cos pre code {
+  background: none;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.prose-cos table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.prose-cos th,
+.prose-cos td {
+  border-bottom: 1px solid var(--c-line);
+  padding: 6px 10px 6px 0;
+  text-align: left;
+}
+.prose-cos th {
+  color: var(--c-ink-2);
+  font-weight: 560;
+}
+.prose-cos blockquote {
+  border-left: 3px solid var(--c-line-strong);
+  padding-left: 12px;
+  color: var(--c-ink-2);
+}
+.prose-cos hr {
+  border: 0;
+  border-top: 1px solid var(--c-line);
+  margin: 1.5em 0;
+}
+.prose-cos strong {
+  font-weight: 620;
+}
+
+/* ghostty-web draws on a canvas inside this box. */
+.terminal-host {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.terminal-host canvas {
+  display: block;
+}
