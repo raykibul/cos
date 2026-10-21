@@ -11,8 +11,6 @@ enum AgentSamples {
     static let page = #"{"agents":[\#(agent),\#(waiting),\#(exited)]}"#
     static let approval = #"{"id":12,"agent_id":8,"workspace_id":3,"tool_name":"Bash","tool_input":{"command":"npm install left-pad"},"tool_use_id":"toolu_01ABC","summary":"Bash npm install left-pad","state":"pending","decided_by":null,"message":null,"created_ms":1792611174811,"decided_ms":null}"#
     static let approvals = #"{"approvals":[\#(approval)]}"#
-    static let session = #"{"pid":2269,"session_id":"e9ad2a0b","cwd":"/Users/me/apps/cos","name":"cos-6e","status":"busy","version":"2.1.306","status_updated_ms":1792611174811,"project_id":1,"workspace_id":null}"#
-    static let sessions = #"{"sessions":[\#(session),{"pid":3001,"session_id":"aa","cwd":"/Users/me/scratch","name":"","status":"idle","version":"2.1.306","status_updated_ms":1792611000000,"project_id":null,"workspace_id":null}]}"#
 
     static func snapshot(_ text: String, rows: Int = 40, cols: Int = 120) -> String {
         "event: snapshot\ndata: {\"rows\":\(rows),\"cols\":\(cols),\"data\":\"\(Data(text.utf8).base64EncodedString())\"}\n\n"
@@ -108,20 +106,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(other.detail == "Bash npm install left-pad")
     }
 
-    @Test func decodesExternalSessions() throws {
-        let sessions = try decode(SessionsPage.self, AgentSamples.sessions).sessions
-        #expect(sessions.map(\.pid) == [2269, 3001])
-        #expect(sessions[0].id == 2269)
-        #expect(sessions[0].displayName == "cos-6e")
-        #expect(sessions[0].isBusy)
-        #expect(sessions[0].projectId == 1)
-        #expect(sessions[0].workspaceId == nil)
-        #expect(sessions[0].version == "2.1.306")
-        // No name: the folder's.
-        #expect(sessions[1].displayName == "scratch")
-        #expect(!sessions[1].isBusy)
-    }
-
     @Test func decodesScreen() throws {
         let screen = try decode(AgentScreen.self, #"{"rows":2,"cols":10,"text":"> hi\n","cursor":[0,4]}"#)
         #expect(screen.rows == 2 && screen.cols == 10 && screen.cursor == [0, 4])
@@ -133,12 +117,9 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(event(EventKind.agentStateChanged).changesAgents)
         #expect(event(EventKind.approvalRequested).changesAgents)
         #expect(event(EventKind.workspaceRemoved).changesAgents)
-        #expect(!event(EventKind.sessionChanged).changesAgents)
         #expect(event(EventKind.approvalDecided).changesApprovals)
         #expect(event(EventKind.agentExited).changesApprovals)
         #expect(!event(EventKind.agentStateChanged).changesApprovals)
-        #expect(event(EventKind.sessionChanged).changesSessions)
-        #expect(!event(EventKind.projectAdded).changesSessions)
     }
 
     @Test func newAgentLeavesOutEmptyFields() throws {
@@ -222,7 +203,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
             case ("GET", "/v1/approvals?state=pending"), ("GET", "/v1/approvals"): .json(200, AgentSamples.approvals)
             case ("POST", "/v1/approvals/12"):
                 .json(200, AgentSamples.approval.replacingOccurrences(of: #""state":"pending""#, with: #""state":"denied""#))
-            case ("GET", "/v1/sessions"): .json(200, AgentSamples.sessions)
             default: .json(404, #"{"error":"unexpected \#(request.method) \#(request.path)"}"#)
             }
         }
@@ -247,7 +227,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         _ = try await client.approvals(state: nil)
         #expect(try await client.decide(approvalId: 12, .deny, message: "not now").state == .denied)
         _ = try await client.decide(approvalId: 12, .allow)
-        #expect(try await client.externalSessions().count == 2)
 
         let requests = server.requests
         #expect(requests.map { "\($0.method) \($0.path)" } == [
@@ -269,7 +248,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
             "GET /v1/approvals",
             "POST /v1/approvals/12",
             "POST /v1/approvals/12",
-            "GET /v1/sessions",
         ])
         #expect(requests[4].json == ["prompt": "fix the login bug\nand add a test", "title": "Login", "model": "opus"])
         #expect(requests[4].headers["content-type"] == "application/json")
@@ -281,7 +259,7 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(requests[16].json == ["decision": "deny", "message": "not now"])
         #expect(requests[17].json == ["decision": "allow"])
         // Body-less routes send no body at all.
-        for index in [0, 3, 9, 10, 11, 12, 13, 14, 18] {
+        for index in [0, 3, 9, 10, 11, 12, 13, 14, 15] {
             #expect(requests[index].body.isEmpty, "\(requests[index].path)")
             #expect(requests[index].headers["content-length"] == nil, "\(requests[index].path)")
         }
@@ -687,7 +665,6 @@ private func waitFor(_ what: String = "condition", _ condition: () async -> Bool
         let events = [
             #"{"seq":2,"ts":"2026-10-22T09:00:00Z","kind":"agent.started","data":{"agent_id":7,"workspace_id":3,"role":"user","session_id":"5504"}}"#,
             #"{"seq":3,"ts":"2026-10-22T09:00:01Z","kind":"approval.requested","data":{"approval_id":12,"agent_id":8,"summary":"Bash npm install left-pad"}}"#,
-            #"{"seq":4,"ts":"2026-10-22T09:00:02Z","kind":"session.changed","data":{}}"#,
         ]
         let server = try FakeDaemon { request in
             switch request.path {
@@ -697,7 +674,6 @@ private func waitFor(_ what: String = "condition", _ condition: () async -> Bool
             case "/v1/projects": .json(200, ProjectSamples.page)
             case "/v1/agents": .json(200, AgentSamples.page)
             case "/v1/approvals?state=pending": .json(200, AgentSamples.approvals)
-            case "/v1/sessions": .json(200, AgentSamples.sessions)
             default: .empty(404)
             }
         }
@@ -707,35 +683,31 @@ private func waitFor(_ what: String = "condition", _ condition: () async -> Bool
         defer { monitor.stop() }
 
         func fetches(_ path: String) -> Int { server.requests.filter { $0.path == path }.count }
-        try await waitFor { monitor.events.count == 3 && monitor.projects.count == 2 && monitor.agents.count == 3 && monitor.approvals.count == 1 && monitor.sessions.count == 2 }
+        try await waitFor { monitor.events.count == 2 && monitor.projects.count == 2 && monitor.agents.count == 3 && monitor.approvals.count == 1 }
         try await Task.sleep(for: .milliseconds(200))
         // On connect, plus one for the events unless they arrived before the
         // connect fetch began (then that one fetch already covers them).
         #expect((1...3).contains(fetches("/v1/agents")))
         #expect((1...3).contains(fetches("/v1/approvals?state=pending")))
-        #expect((1...2).contains(fetches("/v1/sessions")))
-        // agent.* and session.* don't touch projects.
+        // agent.* events don't touch projects.
         #expect(fetches("/v1/projects") == 1)
 
         // Once settled, each kind of event refreshes exactly what it changes.
-        func settle(_ kind: String, agents: Int, approvals: Int, sessions: Int) async throws {
-            let before = (fetches("/v1/agents"), fetches("/v1/approvals?state=pending"), fetches("/v1/sessions"))
+        func settle(_ kind: String, agents: Int, approvals: Int) async throws {
+            let before = (fetches("/v1/agents"), fetches("/v1/approvals?state=pending"))
             monitor.apply(.event(LoggedEvent(seq: monitor.events.last!.seq + 1, ts: .now, kind: kind, data: .object([:]))))
             try await waitFor {
                 fetches("/v1/agents") == before.0 + agents
                     && fetches("/v1/approvals?state=pending") == before.1 + approvals
-                    && fetches("/v1/sessions") == before.2 + sessions
             }
             try await Task.sleep(for: .milliseconds(50))
             #expect(fetches("/v1/agents") == before.0 + agents, "\(kind)")
             #expect(fetches("/v1/approvals?state=pending") == before.1 + approvals, "\(kind)")
-            #expect(fetches("/v1/sessions") == before.2 + sessions, "\(kind)")
         }
-        try await settle(EventKind.agentStateChanged, agents: 1, approvals: 0, sessions: 0)
-        try await settle(EventKind.approvalDecided, agents: 1, approvals: 1, sessions: 0)
-        try await settle(EventKind.agentExited, agents: 1, approvals: 1, sessions: 0)
-        try await settle(EventKind.sessionChanged, agents: 0, approvals: 0, sessions: 1)
-        try await settle(EventKind.daemonStarted, agents: 0, approvals: 0, sessions: 0)
+        try await settle(EventKind.agentStateChanged, agents: 1, approvals: 0)
+        try await settle(EventKind.approvalDecided, agents: 1, approvals: 1)
+        try await settle(EventKind.agentExited, agents: 1, approvals: 1)
+        try await settle(EventKind.daemonStarted, agents: 0, approvals: 0)
 
         #expect(monitor.agentsSupported)
         #expect(monitor.agents(inWorkspace: 3).map(\.id) == [7, 8])
@@ -761,7 +733,7 @@ private func waitFor(_ what: String = "condition", _ condition: () async -> Bool
 
         try await waitFor { monitor.projects.count == 2 && !monitor.agentsSupported }
         #expect(monitor.agentsError == nil)
-        #expect(monitor.agents.isEmpty && monitor.approvals.isEmpty && monitor.sessions.isEmpty)
+        #expect(monitor.agents.isEmpty && monitor.approvals.isEmpty)
     }
 
     @Test func actionsUpdateTheListsAtOnce() async throws {

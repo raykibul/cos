@@ -56,7 +56,6 @@ impl TestServer {
         let runs = Arc::new(Runs::new(store.clone(), log.clone()));
         let agents = AgentManager::start(
             Agents::new(store.clone(), log.clone()),
-            log.clone(),
             projects.clone(),
             AgentConfig::for_tests(dir.path()),
         )

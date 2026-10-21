@@ -14,7 +14,6 @@
 //! - [`sessions`] lists the Claude sessions the daemon didn't start.
 
 mod hooks;
-mod sessions;
 #[cfg(test)]
 mod tests;
 
@@ -25,8 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use cos_core::{
-    Agent, AgentState, Agents, Approval, ApprovalState, EventLog, NewAgent, ProjectError, Projects, Role,
-    StoreError,
+    Agent, AgentState, Agents, Approval, ApprovalState, NewAgent, ProjectError, Projects, Role, StoreError,
 };
 use cos_harness::claude::hooks::{HookEvent, HookServer};
 use cos_harness::{
@@ -35,8 +33,6 @@ use cos_harness::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-
-pub(crate) use sessions::{ExternalSession, place};
 
 use crate::home::CosHome;
 
@@ -53,8 +49,6 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
 /// How long an unanswered approval waits for agents not started by a person.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-/// How often the list of other Claude sessions is checked for changes.
-const SESSION_POLL: Duration = Duration::from_secs(2);
 /// Between pressing Esc to end a turn and typing `/exit`.
 const INTERRUPT_PAUSE: Duration = Duration::from_millis(300);
 /// How often a stopping agent is checked for having exited.
@@ -78,9 +72,6 @@ pub(crate) struct AgentConfig {
     pub approval_timeout: Duration,
     pub stop_timeout: Duration,
     pub shutdown_timeout: Duration,
-    /// Claude config dirs to read other sessions from.
-    pub claude_config_dirs: Vec<PathBuf>,
-    pub session_poll: Duration,
 }
 
 impl AgentConfig {
@@ -96,8 +87,6 @@ impl AgentConfig {
             approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: STOP_TIMEOUT,
             shutdown_timeout: SHUTDOWN_TIMEOUT,
-            claude_config_dirs: cos_harness::claude::registry::config_dirs(),
-            session_poll: SESSION_POLL,
         })
     }
 
@@ -114,8 +103,6 @@ impl AgentConfig {
             approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: Duration::from_secs(2),
             shutdown_timeout: Duration::from_secs(2),
-            claude_config_dirs: vec![dir.join("claude-config")],
-            session_poll: Duration::from_millis(100),
         }
     }
 }
@@ -203,7 +190,6 @@ pub(crate) struct AgentManager {
 }
 
 struct Inner {
-    log: EventLog,
     agents: Agents,
     projects: Arc<Projects>,
     config: AgentConfig,
@@ -244,11 +230,10 @@ struct Running {
 }
 
 impl AgentManager {
-    /// Listens for hooks, marks agents left running by an earlier daemon as
-    /// interrupted, and starts watching other Claude sessions.
+    /// Listens for hooks and marks agents left running by an earlier daemon
+    /// as interrupted.
     pub(crate) fn start(
         agents: Agents,
-        log: EventLog,
         projects: Arc<Projects>,
         config: AgentConfig,
     ) -> anyhow::Result<Self> {
@@ -261,7 +246,6 @@ impl AgentManager {
             agents.decide_approval(approval.id, ApprovalState::Settled, None, None)?;
         }
         let inner = Arc::new(Inner {
-            log,
             agents,
             projects,
             config,
@@ -269,7 +253,6 @@ impl AgentManager {
             _hook_server: hook_server,
         });
         tokio::spawn(follow_hooks(Arc::downgrade(&inner), hook_events));
-        tokio::spawn(sessions::watch(Arc::downgrade(&inner)));
         Ok(Self { inner })
     }
 
@@ -456,16 +439,6 @@ impl AgentManager {
         message: Option<String>,
     ) -> Result<Approval, AgentError> {
         self.inner.answer(id, allow, message)
-    }
-
-    /// The Claude sessions running on this machine that the daemon didn't start.
-    pub(crate) async fn sessions(&self) -> Result<Vec<ExternalSession>, AgentError> {
-        let projects = self.inner.projects.list().await?;
-        let sessions = self.inner.external_sessions().await;
-        Ok(sessions
-            .into_iter()
-            .map(|session| ExternalSession::new(session, &projects))
-            .collect())
     }
 
     /// Removes a workspace, refusing while any of its agents runs. Its

@@ -15,7 +15,6 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
   - in the app or CLI (`allow` or `deny`),
   - by someone typing in the agent's terminal (then it's `settled`),
   - by a rule later (the approvals engine).
-- **External session:** a Claude session the daemon didn't start, read from Claude's own `sessions/<pid>.json` files. Read-only.
 
 ## Agent JSON
 
@@ -80,7 +79,6 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 | `GET /v1/approvals?state=pending` | | `{"approvals": [Approval]}`, newest first. Without `state`, every approval. |
 | `GET /v1/approvals/{id}` | | Approval |
 | `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. |
-| `GET /v1/sessions` | | `{"sessions": [ExternalSession]}`: live Claude sessions the daemon didn't start |
 
 ### Terminal stream
 
@@ -137,12 +135,6 @@ data: {"exit_code":0}
 - **`tool_use_id`:** taken from the `PreToolUse` just before the request, since `PermissionRequest` has none.
 - **`summary`:** the tool and its main argument, such as `Bash npm install left-pad` or `Write /path/to/file`.
 
-## ExternalSession JSON
-
-```json
-{"pid": 2269, "session_id": "e9ad…", "cwd": "/Users/me/apps/cos", "name": "cos-6e", "status": "busy",
- "version": "2.1.306", "status_updated_ms": 1792611174811, "project_id": 1, "workspace_id": null}
-```
 
 ## Events
 
@@ -156,7 +148,6 @@ These go in the event log, so apps get them over `/v1/events/stream`. `data` hol
 | `agent.removed` | `{agent_id}` |
 | `approval.requested` | `{approval_id, agent_id, summary}` |
 | `approval.decided` | `{approval_id, state, decided_by}` |
-| `session.changed` | `{}`: the external session list changed. Refetch `/v1/sessions`. Sent at most every 2 s. |
 
 Terminal output is never in the event log; it's too much data.
 
@@ -173,7 +164,7 @@ Terminal output is never in the event log; it's too much data.
 | `cos agent attach <id>` | Your terminal becomes the agent's terminal: raw mode, keys in, output out, Ctrl-] to detach. |
 | `cos approvals [--all]` | List pending approvals, or every approval. |
 | `cos allow <id>` / `cos deny <id> [message]` | Answer an approval. |
-| `cos sessions` | Lists external sessions from Claude's files directly; with `--host` it asks that daemon's `GET /v1/sessions`. |
+| `cos sessions` | Lists the Claude sessions running on this Mac, from Claude's own files. Local only; works without the daemon. |
 
 ## How the daemon does it
 
@@ -183,4 +174,3 @@ Terminal output is never in the event log; it's too much data.
 - **Pending approvals and decisions:** each `PermissionRequest` goes through a decision seam first (`daemon::agents::hooks::decide`). It answers nothing yet; the approvals policy (`cos-policy`, [approvals.md](approvals.md)) plugs in there, which is where `rule` and `chief` come from.
 - **Daemon restarts:** agents still running when the daemon starts again (after a crash) become `interrupted` and their pending approvals `settled`. A daemon that stops normally ends its agents first (`/exit`, then kill), and marks them `interrupted` so `resume` brings them back.
 - **Workspaces:** `DELETE /v1/workspaces/{id}` is 409 while an agent runs in it. Removing a workspace forgets its agents and their approvals.
-- **External sessions:** the daemon reads `sessions/<pid>.json` in every Claude config dir (`CLAUDE_CONFIG_DIR` and `~/.claude`) every 2 s, leaves out its own agents, and logs `session.changed` when the list changes.

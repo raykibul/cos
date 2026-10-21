@@ -79,12 +79,6 @@ extension CosClient {
         return try await sendJSON("POST", "/v1/approvals/\(approvalId)", body: body)
     }
 
-    /// Live Claude sessions the daemon didn't start.
-    public func externalSessions() async throws -> [ExternalSession] {
-        let page: SessionsPage = try await getJSON("/v1/sessions")
-        return page.sessions
-    }
-
     private static func queryValue(_ text: String) -> String {
         text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+"))) ?? text
     }

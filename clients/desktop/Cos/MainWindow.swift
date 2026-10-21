@@ -8,8 +8,6 @@ enum SidebarItem: Hashable {
     case project(Int)
     case workspace(Int)
     case agent(Int)
-    /// An external Claude session, by pid.
-    case session(Int)
 }
 
 /// What the window is showing or asking. Shared by the sidebar's context
@@ -150,12 +148,6 @@ struct MainWindow: View {
             // A fresh page (and terminal session) per agent.
             AgentPage(agentId: id, monitor: monitor, window: window)
                 .id(id)
-        case .session(let pid):
-            if let session = monitor.sessions.first(where: { $0.pid == pid }) {
-                ExternalSessionDetail(session: session, monitor: monitor)
-            } else {
-                ContentUnavailableView("Session ended", systemImage: "terminal", description: Text("This Claude session is no longer running."))
-            }
         case .project(let id):
             if let project = monitor.project(id: id) {
                 ProjectDetail(project: project, monitor: monitor, window: window)
@@ -238,29 +230,6 @@ private struct Sidebar: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .selectionDisabled()
-                }
-            }
-
-            if !monitor.sessions.isEmpty {
-                Section("Other Claude sessions") {
-                    ForEach(SessionGroup.groups(monitor)) { group in
-                        Text(group.title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .selectionDisabled()
-                        ForEach(group.sessions) { session in
-                            HStack(spacing: 6) {
-                                SessionStatusDot(session: session)
-                                Text(session.displayName).lineLimit(1)
-                            }
-                            .help(session.cwd)
-                            .tag(SidebarItem.session(session.pid))
-                            .contextMenu {
-                                Button("Reveal in Finder") { Files.reveal(session.cwd) }
-                                Button("Open in Terminal") { Files.openInTerminal(session.cwd) }
-                            }
-                        }
-                    }
                 }
             }
         }

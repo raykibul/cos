@@ -17,7 +17,7 @@ enum Snapshots {
 
         let monitor = DaemonMonitor(client: CosClient(socketPath: server.socketPath))
         monitor.start()
-        try await waitFor { monitor.agents.count == 5 && monitor.projects.count == 2 && monitor.approvals.count == 1 && monitor.sessions.count == 3 }
+        try await waitFor { monitor.agents.count == 5 && monitor.projects.count == 2 && monitor.approvals.count == 1 }
 
         let scenes: [(String, SidebarItem, CGSize)] = [
             ("agent-approval", .agent(8), CGSize(width: 1180, height: 760)),
@@ -26,7 +26,6 @@ enum Snapshots {
             ("agent-exited", .agent(5), CGSize(width: 1180, height: 560)),
             ("workspace", .workspace(3), CGSize(width: 1180, height: 900)),
             ("waiting", .waiting, CGSize(width: 1000, height: 560)),
-            ("session", .session(2269), CGSize(width: 1000, height: 560)),
         ]
         for (name, selection, size) in scenes {
             for appearance in [NSAppearance.Name.darkAqua, .aqua] {
@@ -123,7 +122,6 @@ enum Snapshots {
         case ("GET", "/v1/projects"): return .json(200, Fixtures.projects)
         case ("GET", "/v1/agents"): return .json(200, Fixtures.agents)
         case ("GET", "/v1/approvals?state=pending"): return .json(200, Fixtures.approvals)
-        case ("GET", "/v1/sessions"): return .json(200, Fixtures.sessions)
         case ("GET", _) where path.hasSuffix("/terminal"):
             let id = Int(path.split(separator: "/")[2]) ?? 0
             return terminal(agent: id)

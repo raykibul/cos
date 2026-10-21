@@ -7,7 +7,6 @@
 //! - `DELETE /v1/agents/{id}`
 //! - `GET /v1/agents/{id}/screen` and `GET /v1/agents/{id}/terminal` (SSE)
 //! - `GET /v1/approvals?state=`, `GET /v1/approvals/{id}`, `POST /v1/approvals/{id}`
-//! - `GET /v1/sessions`
 
 use std::convert::Infallible;
 
@@ -28,7 +27,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::agents::{AgentError, ExternalSession, Screen, StartAgent, TerminalView};
+use super::agents::{AgentError, Screen, StartAgent, TerminalView};
 use super::api::{ApiError, AppState};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,11 +38,6 @@ pub(crate) struct AgentsPage {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ApprovalsPage {
     pub approvals: Vec<Approval>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct SessionsPage {
-    pub sessions: Vec<ExternalSession>,
 }
 
 /// Body of `POST /v1/agents/{id}/input`.
@@ -96,7 +90,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/agents/{id}/terminal", get(terminal))
         .route("/v1/approvals", get(list_approvals))
         .route("/v1/approvals/{id}", get(get_approval).post(answer))
-        .route("/v1/sessions", get(sessions))
 }
 
 #[derive(Deserialize)]
@@ -317,12 +310,6 @@ async fn answer(
         .agents
         .decide(id, body.decision == Verdict::Allow, message)?;
     Ok(Json(approval))
-}
-
-async fn sessions(State(state): State<AppState>) -> Result<Json<SessionsPage>, ApiError> {
-    Ok(Json(SessionsPage {
-        sessions: state.agents.sessions().await?,
-    }))
 }
 
 fn bad_query(rejection: QueryRejection) -> ApiError {

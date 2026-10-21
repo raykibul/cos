@@ -31,8 +31,6 @@ public final class DaemonMonitor {
     public private(set) var agents: [Agent] = []
     /// Approvals waiting for an answer, oldest first.
     public private(set) var approvals: [Approval] = []
-    /// Claude sessions the daemon didn't start.
-    public private(set) var sessions: [ExternalSession] = []
     /// False when the daemon answers 404 for the agents routes: an older
     /// daemon that doesn't run agents yet.
     public private(set) var agentsSupported = true
@@ -46,7 +44,6 @@ public final class DaemonMonitor {
     private var projectsRefresh: CoalescedRefresh<[Project]>!
     private var agentsRefresh: CoalescedRefresh<[Agent]>!
     private var approvalsRefresh: CoalescedRefresh<[Approval]>!
-    private var sessionsRefresh: CoalescedRefresh<[ExternalSession]>!
 
     public init(client: CosClient = CosClient(), keep: Int = 1000) {
         self.client = client
@@ -67,16 +64,6 @@ public final class DaemonMonitor {
         approvalsRefresh = CoalescedRefresh(fetch: { try await client.approvals(state: .pending) }) { [weak self] result in
             self?.applyAgentsResult(result) { monitor, approvals in
                 monitor.approvals = approvals.filter { $0.state == .pending }.sorted { $0.createdMs < $1.createdMs }
-            }
-        }
-        sessionsRefresh = CoalescedRefresh(fetch: { try await client.externalSessions() }) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let sessions):
-                self.sessions = sessions
-            case .failure(let error):
-                // Not knowing the route means an older daemon: nothing to list.
-                if case CosError.notFound = error { self.sessions = [] }
             }
         }
     }
@@ -125,7 +112,6 @@ public final class DaemonMonitor {
             if event.changesProjects { refreshProjects() }
             if event.changesAgents { agentsRefresh.request() }
             if event.changesApprovals { approvalsRefresh.request() }
-            if event.changesSessions { sessionsRefresh.request() }
             events.append(event)
             if events.count > keep { events.removeFirst(events.count - keep) }
             // Events only ever append, so keep the counts current without
@@ -158,12 +144,10 @@ public final class DaemonMonitor {
         projectsRefresh.request()
     }
 
-    /// Reloads agents, pending approvals and external sessions, folded the
-    /// same way.
+    /// Reloads agents and pending approvals, folded the same way.
     public func refreshAgents() {
         agentsRefresh.request()
         approvalsRefresh.request()
-        sessionsRefresh.request()
     }
 
     // The actions below apply the daemon's answer at once, so the UI doesn't
@@ -253,12 +237,6 @@ public final class DaemonMonitor {
     /// Pending approvals plus agents stuck on the trust dialog.
     public var waitingCount: Int {
         approvals.count + agents.filter { $0.state == .needsTrust }.count
-    }
-
-    /// External sessions in a cos workspace or project's folder come first,
-    /// grouped by where they run.
-    public func sessions(inWorkspace id: Int) -> [ExternalSession] {
-        sessions.filter { $0.workspaceId == id }
     }
 
     @discardableResult

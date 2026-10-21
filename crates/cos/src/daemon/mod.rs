@@ -65,7 +65,6 @@ pub(crate) async fn run_with(
     let devices = Arc::new(Devices::new(store.clone(), log.clone()));
     let agents = AgentManager::start(
         Agents::new(store.clone(), log.clone()),
-        log.clone(),
         projects.clone(),
         AgentConfig::for_home(home)?,
     )?;

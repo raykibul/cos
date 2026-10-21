@@ -51,13 +51,6 @@ enum Fixtures {
     static let approvals = """
     {"approvals":[{"id":12,"agent_id":8,"workspace_id":3,"tool_name":"Bash","tool_input":{"command":"npm install left-pad --save","description":"Install left-pad for the padding helper"},"tool_use_id":"toolu_01ABC","summary":"Bash npm install left-pad --save","state":"pending","decided_by":null,"message":null,"created_ms":\(now - 20_000),"decided_ms":null}]}
     """
-
-    static let sessions = """
-    {"sessions":[
-     {"pid":2269,"session_id":"e9ad2a0b-ef73","cwd":"/Users/me/personal/apps/cos","name":"cos-6e","status":"busy","version":"2.1.306","status_updated_ms":\(now - 4000),"project_id":1,"workspace_id":null},
-     {"pid":2301,"session_id":"aa01","cwd":"/Users/me/.cos/worktrees/cos-1/lisbon","name":"lisbon review","status":"idle","version":"2.1.306","status_updated_ms":\(now - 60_000),"project_id":1,"workspace_id":3},
-     {"pid":3001,"session_id":"bb02","cwd":"/Users/me/scratch/notes","name":"","status":"idle","version":"2.1.306","status_updated_ms":\(now - 600_000),"project_id":null,"workspace_id":null}]}
-    """
 }
 
 /// A Claude Code screen in the style of 2.1.x, as raw terminal bytes:

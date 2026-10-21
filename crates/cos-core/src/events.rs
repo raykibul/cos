@@ -39,7 +39,6 @@ pub mod kind {
     pub const AGENT_REMOVED: &str = "agent.removed";
     pub const APPROVAL_REQUESTED: &str = "approval.requested";
     pub const APPROVAL_DECIDED: &str = "approval.decided";
-    pub const SESSION_CHANGED: &str = "session.changed";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

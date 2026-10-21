@@ -42,7 +42,6 @@ struct Fixture {
     manager: AgentManager,
     client: Client,
     workspace_id: i64,
-    workspace_path: PathBuf,
     projects: Arc<Projects>,
     _stop: watch::Sender<bool>,
 }
@@ -75,7 +74,6 @@ impl Fixture {
             store,
             log,
             workspace_id: workspace.id,
-            workspace_path: workspace.path,
             projects,
             _stop: watch::channel(false).0,
         };
@@ -176,13 +174,7 @@ fn start_manager(
 ) -> AgentManager {
     let mut config = AgentConfig::for_tests(dir);
     configure(&mut config);
-    AgentManager::start(
-        Agents::new(store.clone(), log.clone()),
-        log.clone(),
-        projects.clone(),
-        config,
-    )
-    .unwrap()
+    AgentManager::start(Agents::new(store.clone(), log.clone()), projects.clone(), config).unwrap()
 }
 
 /// Polls `check` until it returns something.
@@ -673,39 +665,4 @@ async fn reqwest_like_post(fixture: &Fixture, path: &str, body: &impl serde::Ser
     let mut response = String::new();
     stream.read_to_string(&mut response).await.unwrap();
     response
-}
-
-#[tokio::test]
-async fn other_claude_sessions_are_listed_without_the_agents() {
-    let fixture = Fixture::start().await;
-    let agent = fixture.start_agent("hello").await;
-    fixture.until_idle_with(agent.id, "echo: hello").await;
-    let sessions = fixture.dir.path().join("claude-config/sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    // This test process stands in for a Claude someone started in the workspace.
-    let me = std::process::id();
-    let entry = |session: &str| {
-        json!({
-            "pid": me, "sessionId": session, "cwd": fixture.workspace_path.join("src"),
-            "status": "busy", "version": "2.1.306", "statusUpdatedAt": 1_792_611_174_811_i64,
-        })
-        .to_string()
-    };
-    std::fs::write(sessions.join("1.json"), entry("someone-else")).unwrap();
-    std::fs::write(sessions.join("2.json"), entry(&agent.session_id)).unwrap();
-
-    let listed = fixture.client.sessions().await.unwrap();
-
-    assert_eq!(listed.len(), 1, "{listed:?}");
-    assert_eq!(listed[0].session_id, "someone-else");
-    assert_eq!(listed[0].workspace_id, Some(fixture.workspace_id));
-    assert_eq!(listed[0].status_updated_ms, Some(1_792_611_174_811));
-    until("session.changed", || async {
-        fixture
-            .kinds()
-            .iter()
-            .any(|kind| kind == kind::SESSION_CHANGED)
-            .then_some(())
-    })
-    .await;
 }

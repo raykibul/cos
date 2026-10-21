@@ -1,5 +1,5 @@
 //! The agents API from the client side: agents, their terminals, approvals,
-//! and other Claude sessions. See `docs/agents-api.md`.
+//! See `docs/agents-api.md`.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -10,10 +10,8 @@ use hyper::body::Incoming;
 use serde::Deserialize;
 
 use super::{Client, find, read_json, sse_data};
-use crate::daemon::agents::{ExternalSession, Screen, StartAgent};
-use crate::daemon::agents_api::{
-    AgentsPage, Answer, ApprovalsPage, Input, Keys, Resize, SessionsPage, Verdict,
-};
+use crate::daemon::agents::{Screen, StartAgent};
+use crate::daemon::agents_api::{AgentsPage, Answer, ApprovalsPage, Input, Keys, Resize, Verdict};
 
 impl Client {
     pub(crate) async fn agents(&self, workspace_id: Option<i64>) -> anyhow::Result<Vec<Agent>> {
@@ -106,12 +104,6 @@ impl Client {
         };
         let path = format!("/v1/approvals/{id}");
         read_json(self.send(Method::POST, &path, Some(&answer)).await?).await
-    }
-
-    /// Claude sessions on the daemon's machine that it didn't start.
-    pub(crate) async fn sessions(&self) -> anyhow::Result<Vec<ExternalSession>> {
-        let page: SessionsPage = self.get_json("/v1/sessions").await?;
-        Ok(page.sessions)
     }
 
     async fn post_empty(&self, path: &str) -> anyhow::Result<()> {

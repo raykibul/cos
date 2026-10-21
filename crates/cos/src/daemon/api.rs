@@ -7,7 +7,7 @@
 //!   with the sequence number as the SSE id. A `Last-Event-ID` header
 //!   overrides `after`, so a reconnecting client resumes where it stopped.
 //! - Projects and workspaces: see "Projects and workspaces" in `docs/daemon.md`.
-//! - Agents, approvals and other Claude sessions: [`super::agents_api`],
+//! - Agents and approvals: [`super::agents_api`],
 //!   contract in `docs/agents-api.md`.
 //! - Devices and remote access: [`super::remote_api`], "Remote access" in
 //!   `docs/daemon.md`. The same routes are served on the tailnet listener.

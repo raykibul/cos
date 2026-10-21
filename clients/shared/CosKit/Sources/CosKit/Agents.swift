@@ -1,6 +1,6 @@
 import Foundation
 
-// Agents, approvals and external sessions, as in docs/agents-api.md.
+// Agents and approvals, as in docs/agents-api.md.
 // States and roles are open strings rather than closed enums, so a value
 // added by a newer daemon still decodes.
 
@@ -242,42 +242,6 @@ public enum ApprovalDecision: String, Codable, Sendable {
     case deny
 }
 
-/// A Claude session the daemon didn't start, from Claude's own
-/// `sessions/<pid>.json` files. Read-only.
-public struct ExternalSession: Codable, Equatable, Sendable, Identifiable {
-    public var pid: Int
-    public var sessionId: String?
-    public var cwd: String
-    public var name: String?
-    /// `busy` or `idle`.
-    public var status: String?
-    public var version: String?
-    public var statusUpdatedMs: Int64?
-    /// The cos project or workspace whose folder it runs in, if any.
-    public var projectId: Int?
-    public var workspaceId: Int?
-
-    public var id: Int { pid }
-    public var isBusy: Bool { status == "busy" }
-    /// The name Claude gave it, or the folder's name.
-    public var displayName: String {
-        if let name, !name.isEmpty { return name }
-        return (cwd as NSString).lastPathComponent
-    }
-
-    public init(pid: Int, sessionId: String? = nil, cwd: String, name: String? = nil, status: String? = nil, version: String? = nil, statusUpdatedMs: Int64? = nil, projectId: Int? = nil, workspaceId: Int? = nil) {
-        self.pid = pid
-        self.sessionId = sessionId
-        self.cwd = cwd
-        self.name = name
-        self.status = status
-        self.version = version
-        self.statusUpdatedMs = statusUpdatedMs
-        self.projectId = projectId
-        self.workspaceId = workspaceId
-    }
-}
-
 /// `GET /v1/agents`.
 public struct AgentsPage: Codable, Equatable, Sendable {
     public var agents: [Agent]
@@ -286,11 +250,6 @@ public struct AgentsPage: Codable, Equatable, Sendable {
 /// `GET /v1/approvals`.
 public struct ApprovalsPage: Codable, Equatable, Sendable {
     public var approvals: [Approval]
-}
-
-/// `GET /v1/sessions`.
-public struct SessionsPage: Codable, Equatable, Sendable {
-    public var sessions: [ExternalSession]
 }
 
 /// `GET /v1/agents/{id}/screen`: the current screen as plain text.
@@ -309,7 +268,6 @@ extension EventKind {
     public static let agentRemoved = "agent.removed"
     public static let approvalRequested = "approval.requested"
     public static let approvalDecided = "approval.decided"
-    public static let sessionChanged = "session.changed"
 }
 
 extension LoggedEvent {
@@ -322,10 +280,6 @@ extension LoggedEvent {
 
     public var changesApprovals: Bool {
         kind.hasPrefix("approval.") || kind == EventKind.agentExited || kind == EventKind.agentRemoved
-    }
-
-    public var changesSessions: Bool {
-        kind.hasPrefix("session.")
     }
 }
 
