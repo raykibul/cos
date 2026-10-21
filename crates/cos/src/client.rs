@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use anyhow::Context;
-use cos_core::{Base, Device, LoggedEvent, Project, Workspace};
+use cos_core::{
+    Base, Board, Device, LoggedEvent, NewRun, PlanProposal, Project, Run, RunSummary, TaskState, Workspace,
+};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};
@@ -18,6 +20,7 @@ use tokio::net::{TcpStream, UnixStream};
 
 use crate::daemon::api::{AddProject, EventsPage, NewWorkspace, ProjectsPage, RenameWorkspace, Status};
 use crate::daemon::remote_api::{ConfigureTailnet, DevicesPage};
+use crate::daemon::runs_api::{CancelRun, RunsPage, UpdateTask};
 use crate::daemon::tailnet::{DEFAULT_PORT, TailnetStatus};
 
 /// Set once at startup from `--host`: every [`Client`] then talks TCP to that
@@ -244,6 +247,63 @@ impl Client {
         self.send::<()>(Method::DELETE, &format!("/v1/workspaces/{id}"), None)
             .await?;
         Ok(())
+    }
+
+    /// Every run, newest first.
+    pub(crate) async fn runs(&self) -> anyhow::Result<Vec<RunSummary>> {
+        let page: RunsPage = self.get_json("/v1/runs").await?;
+        Ok(page.runs)
+    }
+
+    pub(crate) async fn create_run(&self, new: &NewRun) -> anyhow::Result<Run> {
+        read_json(self.send(Method::POST, "/v1/runs", Some(new)).await?).await
+    }
+
+    pub(crate) async fn board(&self, run_id: i64) -> anyhow::Result<Board> {
+        self.get_json(&format!("/v1/runs/{run_id}")).await
+    }
+
+    /// What the chief's `board_propose` tool will call.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the chief's bridge arrives in milestone 5")
+    )]
+    pub(crate) async fn propose_plan(&self, run_id: i64, plan: &PlanProposal) -> anyhow::Result<Board> {
+        let path = format!("/v1/runs/{run_id}/plan");
+        read_json(self.send(Method::POST, &path, Some(plan)).await?).await
+    }
+
+    pub(crate) async fn approve_plan(&self, run_id: i64) -> anyhow::Result<Board> {
+        let path = format!("/v1/runs/{run_id}/approve-plan");
+        read_json(self.send::<()>(Method::POST, &path, None).await?).await
+    }
+
+    pub(crate) async fn cancel_run(&self, run_id: i64, reason: Option<String>) -> anyhow::Result<Board> {
+        let path = format!("/v1/runs/{run_id}/cancel");
+        read_json(
+            self.send(Method::POST, &path, Some(&CancelRun { reason }))
+                .await?,
+        )
+        .await
+    }
+
+    /// Moves a task; the orchestration does this inside the daemon.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "workers report through the daemon, not the CLI")
+    )]
+    pub(crate) async fn update_task(
+        &self,
+        task_id: i64,
+        state: TaskState,
+        reason: Option<String>,
+    ) -> anyhow::Result<Board> {
+        let path = format!("/v1/tasks/{task_id}");
+        read_json(
+            self.send(Method::PATCH, &path, Some(&UpdateTask { state, reason }))
+                .await?,
+        )
+        .await
     }
 
     async fn get(&self, path: &str) -> anyhow::Result<Response<Incoming>> {

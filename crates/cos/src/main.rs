@@ -1,7 +1,8 @@
 //! `cos`: chief of staff for coding agents.
 //!
 //! `cos daemon` runs the long-lived process; `cos status`, `cos events`,
-//! `cos project` and `cos workspace` talk to it over `~/.cos/cos.sock`, or to
+//! `cos project`, `cos workspace` and the run commands (`cos run`, `cos runs`,
+//! `cos board`, `cos approve-plan`, `cos cancel`) talk to it over `~/.cos/cos.sock`, or to
 //! another machine's daemon over the tailnet with `--host`. `cos remote` and
 //! `cos devices` manage that remote access.
 //! `cos try` runs one prompt through Claude Code without the daemon, and
@@ -15,6 +16,7 @@ mod devices_cmd;
 mod home;
 mod launchd;
 mod projects_cmd;
+mod runs_cmd;
 mod sessions_cmd;
 mod tailscale;
 mod try_cmd;
@@ -55,6 +57,16 @@ enum Command {
     /// Create and manage workspaces: worktrees of a project where agents run.
     #[command(subcommand)]
     Workspace(projects_cmd::WorkspaceCommand),
+    /// Start a run: one goal in a workspace, planned by the chief.
+    Run(runs_cmd::RunArgs),
+    /// List runs, newest first.
+    Runs,
+    /// Show a run's board: its tasks and where each one is.
+    Board(runs_cmd::BoardArgs),
+    /// Approve the chief's plan so workers can start.
+    ApprovePlan(runs_cmd::RunRef),
+    /// Cancel a run and its unfinished tasks.
+    Cancel(runs_cmd::CancelArgs),
     /// Run one prompt through Claude Code and answer its permission requests here (no daemon).
     Try(try_cmd::TryArgs),
     /// List the Claude sessions running on this Mac, including ones cos didn't start.
@@ -124,6 +136,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Events(args) => commands::events(&home, args).await,
         Command::Project(command) => projects_cmd::project(&home, command).await,
         Command::Workspace(command) => projects_cmd::workspace(&home, command).await,
+        Command::Run(args) => runs_cmd::start(&home, args).await,
+        Command::Runs => runs_cmd::list(&home).await,
+        Command::Board(args) => runs_cmd::board(&home, args).await,
+        Command::ApprovePlan(args) => runs_cmd::approve_plan(&home, args).await,
+        Command::Cancel(args) => runs_cmd::cancel(&home, args).await,
         Command::Try(args) => try_cmd::run(args).await,
         Command::Sessions(args) => sessions_cmd::run(&home, args).await,
         Command::Hook => unreachable!("handled above"),
