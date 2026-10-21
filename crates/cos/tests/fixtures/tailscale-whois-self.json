@@ -1,0 +1,71 @@
+{
+  "Node": {
+    "ID": 2222222222222201,
+    "StableID": "nSELFstableID1CNTRL",
+    "Name": "my-mac.tail0000.ts.net.",
+    "User": 1111111111111111,
+    "Key": "nodekey:0000000000000000000000000000000000000000000000000000000000000001",
+    "KeyExpiry": "2027-02-20T10:18:18Z",
+    "DiscoKey": "discokey:0000000000000000000000000000000000000000000000000000000000000005",
+    "Addresses": [
+      "100.100.1.1/32",
+      "fd7a:115c:a1e0::1:101/128"
+    ],
+    "AllowedIPs": [
+      "100.100.1.1/32",
+      "fd7a:115c:a1e0::1:101/128"
+    ],
+    "Endpoints": [
+      "192.0.2.10:16583"
+    ],
+    "Hostinfo": {
+      "Hostname": "My Mac",
+      "Services": [
+        {
+          "Proto": "peerapi4",
+          "Port": 32929
+        },
+        {
+          "Proto": "peerapi6",
+          "Port": 43615
+        },
+        {
+          "Proto": "peerapi-dns-proxy",
+          "Port": 1
+        }
+      ]
+    },
+    "Created": "2026-08-24T10:18:18.355148327Z",
+    "MachineAuthorized": true,
+    "Capabilities": [
+      "https://tailscale.com/cap/is-admin",
+      "https://tailscale.com/cap/tailnet-lock"
+    ],
+    "CapMap": {
+      "default-auto-update": [
+        true
+      ],
+      "https://tailscale.com/cap/file-sharing": [],
+      "https://tailscale.com/cap/is-admin": [],
+      "https://tailscale.com/cap/is-owner": [],
+      "https://tailscale.com/cap/ssh": [],
+      "https://tailscale.com/cap/tailnet-lock": [],
+      "probe-udp-lifetime": [],
+      "ssh-behavior-v1": [],
+      "ssh-env-vars": [],
+      "store-appc-routes": [],
+      "tailnet-display-name": [
+        "example.com"
+      ]
+    },
+    "ComputedName": "my-mac",
+    "ComputedNameWithHost": "my-mac"
+  },
+  "UserProfile": {
+    "ID": 1111111111111111,
+    "LoginName": "me@example.com",
+    "DisplayName": "Me Example",
+    "ProfilePicURL": ""
+  },
+  "CapMap": null
+}

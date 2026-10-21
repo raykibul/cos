@@ -12,6 +12,9 @@
 | `cos status` | Whether the daemon is running, and its pid, uptime, event count and launchd state. Exits 1 when it isn't running. |
 | `cos events` | The last 20 events. `-n 50` for more, `--after N` to start after event N, `--json` for one JSON object per line. |
 | `cos events -f` | Keep printing new events. If the daemon restarts, it waits and carries on from the last event it printed. |
+| `cos remote [on [--port N] \| off]` | Turn remote access over Tailscale on or off, or show where it listens. See [Remote access](#remote-access). |
+| `cos devices [list \| approve \| deny \| remove <device>]` | The tailnet devices that may use this daemon. |
+| `cos --host <ip or name>[:port] …` | Talk to another machine's daemon over its tailnet listener instead of the local socket (also `COS_HOST`). The port defaults to 7700. |
 
 ## Files
 
@@ -40,11 +43,11 @@ A live subscriber first reads stored events from the database, then switches to 
 
 ## API
 
-HTTP/1.1 over `~/.cos/cos.sock`. The paths are versioned because the iPhone will use the same routes over the tailnet later.
+HTTP/1.1 over `~/.cos/cos.sock`, and over the tailnet when remote access is on (see [Remote access](#remote-access)). The paths are versioned because the iPhone uses the same routes over the tailnet.
 
 | Route | Returns |
 |---|---|
-| `GET /v1/status` | `{version, pid, started_at, home, events, last_seq}` |
+| `GET /v1/status` | `{version, pid, started_at, home, events, last_seq, tailnet}`. `tailnet` is a `TailnetStatus` (below). |
 | `GET /v1/events?after=N&limit=M` | `{events: [...]}`, oldest first. `limit` defaults to 100, max 1000. |
 | `GET /v1/events/stream?after=N` | Server-sent events, one per log event, with `id: <seq>` and the event as JSON `data`. A `Last-Event-ID` header overrides `after`. Keep-alive comments every 15 s. |
 
@@ -102,3 +105,91 @@ Every change is logged, so clients that follow the stream can refresh their proj
 | `workspace.created` | `{workspace_id, project_id, name, branch, path, base}` |
 | `workspace.renamed` | `{workspace_id, project_id, title}` |
 | `workspace.removed` | `{workspace_id, project_id, name, branch}` |
+
+## Remote access
+
+Your other devices (the iPhone app, another Mac, `cos --host`) reach the daemon over Tailscale. It is **off by default**: `cos remote on` turns it on, `cos remote off` turns it off. The setting is stored in the database (`settings` table, key `tailnet`), so it survives restarts and needs no launchd change, and the daemon applies it live.
+
+```
+cos remote on            # listen on port 7700
+cos remote on --port 7701
+cos remote               # where it listens, or why it can't
+cos devices              # who has tried to connect
+cos devices approve 2    # by number, MagicDNS name or Tailscale node ID
+```
+
+### How it works
+
+- **Binding.** The daemon asks `tailscale status --json` for this machine's tailnet addresses (100.64.0.0/10 and fd7a:115c:a1e0::/48 only) and binds the port on each of them. It never binds `0.0.0.0` or loopback. Plain HTTP, because WireGuard already encrypts the traffic.
+- **Finding `tailscale`.** `$COS_TAILSCALE` if set, else `tailscale` on `PATH`, else `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. It is looked up on every call, so installing Tailscale later needs no restart.
+- **When Tailscale isn't usable** (not installed, not running, logged out, switched off, or this machine is a tagged node), the daemon keeps serving the Unix socket, reports why in `tailnet.reason`, and tries again every 30 s. While listening it checks every 30 s that this machine's addresses and owner haven't changed, and rebinds or stops if they have.
+- **macOS firewall.** If the application firewall is on and blocks incoming connections to the `cos` binary, the listener still binds but macOS drops every connection before cos sees it. `tailnet.reason` then says so, with the command to allow it (`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp <path to cos>`), or use System Settings > Network > Firewall > Options. A rebuilt binary at a new path needs allowing again.
+
+### Who gets in
+
+Every request on the tailnet listener goes through two checks, in this order:
+
+1. **Same Tailscale user.** `tailscale whois --json <client ip:port>` must find the peer, the peer must not be a tagged device, and its `UserProfile.ID` must equal this machine's `Self.UserID` from `tailscale status --json`, with matching login names (case-insensitive) when both are known. Anything else gets 403. The answer is cached per client IP for 60 s, so the CLI runs about once a minute per device, not per request.
+2. **Approved device.** The first request from a new device (by Tailscale's stable node ID) records it as `pending` and logs `device.requested`. Pending and denied devices get 403 with a message naming the command to run on the host. Approval is read from the database on every request, so approving or denying takes effect at once.
+
+The Unix socket is trusted as before: only your user can open it. Device and listener management (`/v1/devices…`, `/v1/tailnet`) work **only** on the socket; over the tailnet they answer 403 `host_only`, so a device can't approve itself. Every other route is served on both, and the guard runs before routing, so an unapproved client can't even tell which paths exist.
+
+A connection from this Mac to its own tailnet address is a tailnet peer too: whois names this machine, and it needs approving like any other device. It isn't approved automatically, because any local process, including other OS users' processes, can open that address, while the socket is private to you.
+
+### Refusals
+
+Over the tailnet, refusals carry a stable `code` next to the message, so apps can show the right screen:
+
+```json
+{"error": "this device (phone) is waiting for approval. On my-mac, run `cos devices approve 2`", "code": "device_pending"}
+```
+
+| Status | `code` | When |
+|---|---|---|
+| 403 | `unknown_peer` | Tailscale doesn't know the client address. |
+| 403 | `tagged_device` | The client is a tagged node, which has no user. |
+| 403 | `wrong_user` | The client is logged in as a different Tailscale user. |
+| 403 | `device_pending` | New device, not yet approved. |
+| 403 | `device_denied` | Denied on the host. |
+| 403 | `host_only` | Device or listener management over the tailnet. |
+| 503 | `tailscale_unavailable` | `tailscale whois` failed; try again. |
+
+### Routes (Unix socket only)
+
+| Route | Body | Returns |
+|---|---|---|
+| `GET /v1/devices` | | `{devices: [Device]}`, oldest first |
+| `POST /v1/devices/{id}/approve` | | `Device` |
+| `POST /v1/devices/{id}/deny` | | `Device` |
+| `DELETE /v1/devices/{id}` | | 204. If it connects again it starts over as pending. |
+| `GET /v1/tailnet` | | `TailnetStatus` |
+| `PUT /v1/tailnet` | `{"enabled": true, "port": 7700}` (`port` optional, 1–65535) | `TailnetStatus`, after waiting up to 15 s for the listener to start or stop |
+
+Unknown device ids get 404, a bad port 400.
+
+```jsonc
+// Device
+{"id": 2, "node_id": "nAbC123CNTRL", "name": "phone", "hostname": "My Phone", "os": "iOS",
+ "login_name": "me@example.com", "state": "pending", // or "approved", "denied"
+ "last_ip": "100.101.102.103", "first_seen_at": "2026-10-22T09:00:00Z",
+ "last_seen_at": "2026-10-22T09:00:00Z", "decided_at": "2026-10-22T09:01:00Z"} // decided_at only once decided
+// TailnetStatus
+{"enabled": true, "port": 7700,
+ "state": "listening", // "off", "starting", "listening" or "unavailable"
+ "addresses": ["100.101.102.104:7700", "[fd7a:115c:a1e0::1]:7700"],
+ "reason": "…",            // why it isn't listening, or a warning; absent when there's nothing to say
+ "host": "my-mac",         // this machine's MagicDNS name, once Tailscale has answered
+ "owner": "me@example.com"} // the Tailscale user devices must be logged in as
+```
+
+`last_seen_at` and `last_ip` are refreshed when the whois cache is (about once a minute while a device is active), not on every request.
+
+### Events
+
+| Kind | Data |
+|---|---|
+| `device.requested` | `{device_id, node_id, name, hostname, os}` |
+| `device.approved` | `{device_id, node_id, name}` |
+| `device.denied` | `{device_id, node_id, name}` |
+| `device.removed` | `{device_id, node_id, name}` |
+| `tailnet.changed` | the new `TailnetStatus`, logged whenever it changes (on, off, listening, unavailable with a new reason) |

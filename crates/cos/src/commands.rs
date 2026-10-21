@@ -8,9 +8,9 @@ use cos_core::LoggedEvent;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
-use crate::client::{Client, NotRunning};
+use crate::client::{self, Client, NotRunning};
 use crate::home::CosHome;
-use crate::launchd;
+use crate::{devices_cmd, launchd};
 
 #[derive(clap::Args)]
 pub(crate) struct EventsArgs {
@@ -35,7 +35,11 @@ pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
         "not installed".into()
     };
 
-    match Client::new(home.socket()).status().await {
+    let client = Client::new(home.socket());
+    if client.is_remote() {
+        return remote_status(&client).await;
+    }
+    match client.status().await {
         Ok(status) => {
             let uptime = Timestamp::now().duration_since(status.started_at);
             println!("cos daemon: running");
@@ -48,6 +52,9 @@ pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
             println!("  home     {}", status.home.display());
             println!("  events   {} (last #{})", status.events, status.last_seq);
             println!("  launchd  {launchd}");
+            for line in status.tailnet.iter().flat_map(devices_cmd::describe) {
+                println!("  {line}");
+            }
             Ok(ExitCode::SUCCESS)
         }
         Err(error) if error.is::<NotRunning>() => {
@@ -55,6 +62,33 @@ pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
             println!("  home     {}", home.root().display());
             println!("  launchd  {launchd}");
             println!("  start it with `cos daemon`, or `cos daemon install` to run it at login");
+            Ok(ExitCode::FAILURE)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// `cos --host … status`: the remote daemon's status, without the local
+/// launchd details.
+async fn remote_status(client: &Client) -> anyhow::Result<ExitCode> {
+    let host = client::remote_host().unwrap_or_default();
+    match client.status().await {
+        Ok(status) => {
+            let uptime = Timestamp::now().duration_since(status.started_at);
+            println!("cos daemon at {host}: running");
+            println!(
+                "  pid      {}, up {}, v{}",
+                status.pid,
+                human_duration(uptime.as_secs().max(0) as u64),
+                status.version
+            );
+            println!("  home     {}", status.home.display());
+            println!("  events   {} (last #{})", status.events, status.last_seq);
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) if error.is::<NotRunning>() => {
+            println!("cos daemon at {host}: no answer");
+            println!("  check that remote access is on there (`cos remote`) and that Tailscale is connected");
             Ok(ExitCode::FAILURE)
         }
         Err(error) => Err(error),

@@ -1,15 +1,19 @@
 //! `cos`: chief of staff for coding agents.
 //!
 //! `cos daemon` runs the long-lived process; `cos status`, `cos events`,
-//! `cos project` and `cos workspace` talk to it over `~/.cos/cos.sock`.
+//! `cos project` and `cos workspace` talk to it over `~/.cos/cos.sock`, or to
+//! another machine's daemon over the tailnet with `--host`. `cos remote` and
+//! `cos devices` manage that remote access.
 //! `cos try` runs one prompt through Claude Code without the daemon. See `docs/proposal.md` for where this is going.
 
 mod client;
 mod commands;
 mod daemon;
+mod devices_cmd;
 mod home;
 mod launchd;
 mod projects_cmd;
+mod tailscale;
 mod try_cmd;
 
 use std::io::IsTerminal;
@@ -22,6 +26,10 @@ use crate::home::CosHome;
 #[derive(Parser)]
 #[command(name = "cos", version, about = "Chief of staff for coding agents")]
 struct Cli {
+    /// Talk to the daemon on another machine over its tailnet listener
+    /// (`100.x.y.z`, `my-mac:7700`), instead of the local socket.
+    #[arg(long, global = true, env = "COS_HOST")]
+    host: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -45,6 +53,16 @@ enum Command {
     Workspace(projects_cmd::WorkspaceCommand),
     /// Run one prompt through Claude Code and answer its permission requests here (no daemon).
     Try(try_cmd::TryArgs),
+    /// Let your other devices reach this daemon over Tailscale: `on`, `off` or show the state.
+    Remote {
+        #[command(subcommand)]
+        action: Option<devices_cmd::RemoteCommand>,
+    },
+    /// Approve, deny or remove the tailnet devices that may use this daemon.
+    Devices {
+        #[command(subcommand)]
+        action: Option<devices_cmd::DevicesCommand>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -65,6 +83,13 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let home = CosHome::from_env()?;
+    if let Some(host) = cli
+        .host
+        .as_deref()
+        .filter(|_| !matches!(cli.command, Command::Daemon { .. }))
+    {
+        client::use_remote_host(host);
+    }
     match cli.command {
         Command::Daemon { action: None } => {
             // Under launchd stderr is a log file, so no colours there.
@@ -86,5 +111,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Project(command) => projects_cmd::project(&home, command).await,
         Command::Workspace(command) => projects_cmd::workspace(&home, command).await,
         Command::Try(args) => try_cmd::run(args).await,
+        Command::Remote { action } => devices_cmd::remote(&home, action).await,
+        Command::Devices { action } => devices_cmd::devices(&home, action).await,
     }
 }

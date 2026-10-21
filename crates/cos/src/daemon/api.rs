@@ -7,6 +7,8 @@
 //!   with the sequence number as the SSE id. A `Last-Event-ID` header
 //!   overrides `after`, so a reconnecting client resumes where it stopped.
 //! - Projects and workspaces: see "Projects and workspaces" in `docs/daemon.md`.
+//! - Devices and remote access: [`super::remote_api`], "Remote access" in
+//!   `docs/daemon.md`. The same routes are served on the tailnet listener.
 //!
 //! Errors are `{"error": "..."}` with a message meant for the user.
 
@@ -40,6 +42,9 @@ pub(crate) struct Status {
     pub events: u64,
     /// Sequence number of the newest event, 0 if there are none.
     pub last_seq: u64,
+    /// The tailnet listener. Missing from daemons older than remote access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet: Option<super::tailnet::TailnetStatus>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +79,8 @@ pub(crate) struct RenameWorkspace {
 pub(crate) struct AppState {
     pub log: EventLog,
     pub projects: Arc<Projects>,
+    pub devices: Arc<cos_core::Devices>,
+    pub tailnet: super::tailnet::Tailnet,
     pub started_at: Timestamp,
     pub home: PathBuf,
     /// Flips to true when the daemon is stopping; open streams end then.
@@ -95,6 +102,7 @@ pub(crate) fn router(state: AppState) -> Router {
             "/v1/workspaces/{id}",
             patch(rename_workspace).delete(remove_workspace),
         )
+        .merge(super::remote_api::routes())
         .with_state(state)
 }
 
@@ -107,6 +115,7 @@ async fn status(State(state): State<AppState>) -> Result<Json<Status>, ApiError>
         home: state.home.clone(),
         events,
         last_seq,
+        tailnet: Some(state.tailnet.status()),
     }))
 }
 
@@ -230,13 +239,13 @@ async fn remove_workspace(
 }
 
 /// An error response: `{"error": message}` with a status code.
-struct ApiError {
-    status: StatusCode,
-    message: String,
+pub(crate) struct ApiError {
+    pub(crate) status: StatusCode,
+    pub(crate) message: String,
 }
 
 impl ApiError {
-    fn not_found(message: &str) -> Self {
+    pub(crate) fn not_found(message: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             message: message.to_owned(),
