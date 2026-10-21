@@ -108,7 +108,7 @@ The daemon calls the policy for every permission request of an agent it runs; ho
 | `role` | `worker` / `reviewer` | `chief` | `user-session` |
 | `cwd`, `home` | the hook's `cwd`, `$HOME` | same | same |
 
-- **Which task:** the daemon asks a `TaskLookup` (`daemon::agents::approvals`) which task a worker or reviewer works on, and only trusts a task of the agent's own run. Once agents record their task (`agents.task_id`), the lookup reads that.
+- **Which task:** the agent's own record says (`agents.task_id`, set by the pipeline when it starts a worker or reviewer). The daemon only trusts a task of the agent's own run.
 - **Nothing in scope for the chief:** it explores read-only, so its edits are chief tier, and the chief can't approve its own requests, so they come to you.
 - **Your own agents** are classified only so the apps can show the tier and reason; they always ask you.
 - **Who answered** is stored on the approval (`decided_by`: `rule`, `chief`, `user`, `terminal`, or none for `expired`), and in the run's audit trail for the report.

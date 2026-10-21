@@ -5,6 +5,7 @@
 //! an agent or touches git. The contract is in `docs/daemon.md`.
 
 mod board;
+mod checks;
 mod limits;
 mod plan;
 mod states;
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use board::{Board, TaskCounts, render_board};
+pub use checks::{ReviewVerdict, ScopeCheck, TaskChecks, TaskReview, TestsCheck, TestsStatus};
 pub use limits::{LimitsChange, RunLimits};
 pub use plan::{MAX_TASKS, PlanProposal, ProposedTask};
 pub use states::{RunState, TaskMove, TaskState};
@@ -83,6 +85,15 @@ pub struct Task {
     /// Why it was last blocked, failed or sent back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_failure: Option<String>,
+    /// The task's current (newest) worker agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<i64>,
+    /// The last checks after the worker said it was done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<TaskChecks>,
+    /// The last review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<TaskReview>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -381,6 +392,54 @@ impl Runs {
             .into_iter()
             .find(|task| task.id == task_id)
             .expect("the task belongs to the run"))
+    }
+
+    /// Records a task's checks and logs `task.checked`.
+    pub fn record_checks(&self, task_id: i64, checks: &TaskChecks) -> Result<Task, RunError> {
+        let run_id = self.record(task_id, "checks_json", serde_json::to_string(checks))?;
+        let tests = checks.tests.as_ref().map(|tests| tests.status.as_str());
+        self.log.append(
+            kind::TASK_CHECKED,
+            Some(&run_id.to_string()),
+            json!({ "run_id": run_id, "task_id": task_id, "scope_ok": checks.scope.ok, "tests": tests }),
+        )?;
+        self.task(task_id)
+    }
+
+    /// Records a task's review and logs `task.reviewed`.
+    pub fn record_review(&self, task_id: i64, review: &TaskReview) -> Result<Task, RunError> {
+        let run_id = self.record(task_id, "review_json", serde_json::to_string(review))?;
+        self.log.append(
+            kind::TASK_REVIEWED,
+            Some(&run_id.to_string()),
+            json!({ "run_id": run_id, "task_id": task_id, "verdict": review.verdict.as_str() }),
+        )?;
+        self.task(task_id)
+    }
+
+    /// Logs `task.merged` once the pipeline merged a task.
+    pub fn log_merged(&self, task_id: i64, commit: Option<&str>) -> Result<(), RunError> {
+        let run_id = storage::task_run(&self.store.lock(), task_id)?.ok_or_else(|| no_task(task_id))?;
+        self.log.append(
+            kind::TASK_MERGED,
+            Some(&run_id.to_string()),
+            json!({ "run_id": run_id, "task_id": task_id, "commit": commit }),
+        )?;
+        Ok(())
+    }
+
+    /// Writes one JSON column of a task and returns its run's id.
+    fn record(
+        &self,
+        task_id: i64,
+        column: &'static str,
+        json: serde_json::Result<String>,
+    ) -> Result<i64, RunError> {
+        let json = json.map_err(|error| RunError::Invalid(error.to_string()))?;
+        let conn = self.store.lock();
+        let run_id = storage::task_run(&conn, task_id)?.ok_or_else(|| no_task(task_id))?;
+        storage::save_task_json(&conn, task_id, column, &json, storage::now())?;
+        Ok(run_id)
     }
 
     fn stop(&self, run_id: i64, to: RunState, reason: Option<&str>) -> Result<Board, RunError> {

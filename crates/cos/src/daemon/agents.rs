@@ -11,7 +11,6 @@
 //!   is read only to spot the trust dialog.
 //! - Records live in the database ([`cos_core::Agents`]), so they survive a
 //!   restart; agents that were running come back as `interrupted`.
-//! - [`sessions`] lists the Claude sessions the daemon didn't start.
 
 mod approvals;
 mod hooks;
@@ -25,7 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use cos_core::{
-    Agent, AgentState, Agents, Approval, ApprovalState, NewAgent, ProjectError, Projects, Role, Runs,
+    Agent, AgentState, Agents, Approval, ApprovalState, Launch, NewAgent, ProjectError, Projects, Role, Runs,
     StoreError,
 };
 use cos_harness::claude::hooks::{HookEvent, HookServer};
@@ -34,9 +33,7 @@ use cos_harness::{
     TerminalOptions,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-
-pub(crate) use approvals::{NoTasks, TaskLookup};
+use tokio::sync::{broadcast, mpsc};
 
 use crate::home::CosHome;
 
@@ -58,6 +55,22 @@ const APPROVAL_TIMEOUT: Duration =
 const INTERRUPT_PAUSE: Duration = Duration::from_millis(300);
 /// How often a stopping agent is checked for having exited.
 const EXIT_POLL: Duration = Duration::from_millis(50);
+/// Signals buffered per subscriber; one that falls further behind gets `Lagged`.
+const SIGNAL_BUFFER: usize = 256;
+
+/// What the agents do that the pipeline waits for. In memory only; the
+/// event log has the same facts for apps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AgentSignal {
+    /// A `Stop` hook: the turn ended, with its full last message.
+    TurnEnded { agent_id: i64, message: Option<String> },
+    /// The process ended. `shutdown` if the daemon stopped it on its way down.
+    Exited {
+        agent_id: i64,
+        code: Option<i32>,
+        shutdown: bool,
+    },
+}
 
 /// The environment variable naming the `claude` binary agents run.
 pub(crate) const CLAUDE_BIN_ENV: &str = "COS_CLAUDE_BIN";
@@ -202,10 +215,9 @@ struct Inner {
     projects: Arc<Projects>,
     /// Runs and tasks, for the approvals policy: limits, scopes, the audit.
     runs: Arc<Runs>,
-    /// Which task a worker or reviewer works on.
-    task_lookup: Mutex<Arc<dyn TaskLookup>>,
     config: AgentConfig,
     live: Mutex<Live>,
+    signals: broadcast::Sender<AgentSignal>,
     /// Kept for its socket; dropping it stops the hooks.
     _hook_server: HookServer,
 }
@@ -262,9 +274,9 @@ impl AgentManager {
             agents,
             projects,
             runs,
-            task_lookup: Mutex::new(Arc::new(NoTasks)),
             config,
             live: Mutex::default(),
+            signals: broadcast::channel(SIGNAL_BUFFER).0,
             _hook_server: hook_server,
         });
         tokio::spawn(follow_hooks(Arc::downgrade(&inner), hook_events));
@@ -283,6 +295,21 @@ impl AgentManager {
         self.inner.agent(id)
     }
 
+    /// The agents that worked on a task (workers and reviewers), oldest first.
+    pub(crate) fn of_task(&self, task_id: i64) -> Result<Vec<Agent>, AgentError> {
+        Ok(self.inner.agents.of_task(task_id)?)
+    }
+
+    /// Every agent a run started, oldest first.
+    pub(crate) fn of_run(&self, run_id: i64) -> Result<Vec<Agent>, AgentError> {
+        Ok(self.inner.agents.of_run(run_id)?)
+    }
+
+    /// Every [`AgentSignal`] from now on.
+    pub(crate) fn signals(&self) -> broadcast::Receiver<AgentSignal> {
+        self.inner.signals.subscribe()
+    }
+
     /// Starts an agent in a workspace's folder, with `prompt` submitted
     /// straight away if given.
     pub(crate) fn start_agent(
@@ -291,6 +318,20 @@ impl AgentManager {
         role: Role,
         run_id: Option<i64>,
         request: &StartAgent,
+    ) -> Result<Agent, AgentError> {
+        self.start_agent_with(workspace_id, role, run_id, request, &Launch::default())
+    }
+
+    /// [`Self::start_agent`] for a run's agent: `launch` can give it a task,
+    /// another folder (a task worktree), `--append-system-prompt` and
+    /// `--mcp-config`. They're recorded, so a resume uses them again.
+    pub(crate) fn start_agent_with(
+        &self,
+        workspace_id: i64,
+        role: Role,
+        run_id: Option<i64>,
+        request: &StartAgent,
+        launch: &Launch,
     ) -> Result<Agent, AgentError> {
         let inner = &self.inner;
         let workspace = inner.projects.workspace(workspace_id)?;
@@ -316,12 +357,16 @@ impl AgentManager {
             rows,
             cols,
         })?;
+        let agent = if *launch == Launch::default() {
+            agent
+        } else {
+            inner.agents.set_launch(agent.id, launch)?
+        };
         let prompt = request.prompt.clone().filter(|prompt| !prompt.trim().is_empty());
-        inner
-            .launch(&agent, &workspace.path, prompt, false)
-            .inspect_err(|_| {
-                let _ = inner.agents.discard(agent.id);
-            })
+        let cwd = agent.cwd.clone().unwrap_or(workspace.path);
+        inner.launch(&agent, &cwd, prompt, false).inspect_err(|_| {
+            let _ = inner.agents.discard(agent.id);
+        })
     }
 
     /// Starts `claude --resume` for an exited or interrupted agent, as the
@@ -335,18 +380,34 @@ impl AgentManager {
             )));
         }
         let workspace = inner.projects.workspace(agent.workspace_id)?;
+        let cwd = agent.cwd.clone().unwrap_or(workspace.path);
+        if !cwd.is_dir() {
+            return Err(AgentError::Conflict(format!(
+                "agent {id}'s folder {} is gone, so it can't be resumed",
+                cwd.display()
+            )));
+        }
         let agent = inner.agents.restart(id)?;
-        inner
-            .launch(&agent, &workspace.path, None, true)
-            .inspect_err(|_| {
-                let _ = inner.agents.finish(id, AgentState::Exited, None);
-            })
+        inner.launch(&agent, &cwd, None, true).inspect_err(|_| {
+            let _ = inner.agents.finish(id, AgentState::Exited, None);
+        })
     }
 
     /// Types `text` and presses Return.
     pub(crate) async fn input(&self, id: i64, text: &str) -> Result<(), AgentError> {
         let terminal = self.inner.running_terminal(id)?.0;
         Ok(terminal.submit(text).await?)
+    }
+
+    /// Sends a message as one prompt: typed if it's one line, pasted if it
+    /// has several, then Return.
+    pub(crate) async fn send_message(&self, id: i64, text: &str) -> Result<(), AgentError> {
+        let terminal = self.inner.running_terminal(id)?.0;
+        if text.contains('\n') {
+            Ok(terminal.submit_pasted(text).await?)
+        } else {
+            Ok(terminal.submit(text).await?)
+        }
     }
 
     /// Sends raw keystrokes.
@@ -444,18 +505,6 @@ impl AgentManager {
             .agents
             .approval(id)?
             .ok_or_else(|| AgentError::NotFound(format!("there is no approval {id}")))
-    }
-
-    /// Tells the approvals policy which task each worker and reviewer works
-    /// on. Until then they are judged against their workspace with nothing
-    /// in scope.
-    #[allow(dead_code, reason = "the pipeline sets it until agents record their task")]
-    pub(crate) fn set_task_lookup(&self, lookup: Arc<dyn TaskLookup>) {
-        *self
-            .inner
-            .task_lookup
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = lookup;
     }
 
     /// Answers a pending approval for the run's chief (`approval_decide`),
@@ -606,6 +655,8 @@ impl Inner {
         claude.session_id = agent.session_id.clone();
         claude.resume = resume;
         claude.model = agent.model.clone();
+        claude.append_system_prompt = agent.system_prompt.clone();
+        claude.mcp_config = agent.mcp_config.clone();
         claude.permission_mode = agent.permission_mode.parse().map_err(AgentError::Invalid)?;
         claude.env = self.config.env.clone();
         let mut options = TerminalOptions::new(claude);
@@ -650,6 +701,9 @@ impl Inner {
     }
 
     /// Output arrived. Before the first hook, check for the trust dialog.
+    /// A run's agent works in a registered project, which counts as trusted,
+    /// so the daemon answers the dialog for it (the one exception to "cos
+    /// never answers the trust dialog by itself").
     fn on_output(&self, id: i64) {
         let mut live = self.live();
         let Some(running) = live.terminals.get_mut(&id) else {
@@ -659,6 +713,16 @@ impl Inner {
             return;
         }
         running.trust_seen = true;
+        if running.role != Role::User {
+            let terminal = running.terminal.clone();
+            tracing::info!(agent = id, "answering the trust dialog for a run agent");
+            tokio::spawn(async move {
+                if let Err(error) = terminal.trust_folder().await {
+                    tracing::error!(%error, agent = id, "could not answer the trust dialog");
+                }
+            });
+            return;
+        }
         if let Err(error) = self.agents.set_state(id, AgentState::NeedsTrust) {
             tracing::error!(%error, agent = id, "could not record the trust dialog");
         }
@@ -682,6 +746,11 @@ impl Inner {
         if let Err(error) = result {
             tracing::error!(%error, agent = id, "could not record an agent's exit");
         }
+        let _ = self.signals.send(AgentSignal::Exited {
+            agent_id: id,
+            code,
+            shutdown,
+        });
     }
 }
 

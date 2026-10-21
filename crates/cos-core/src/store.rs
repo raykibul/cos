@@ -174,6 +174,18 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX approval_audit_by_run ON approval_audit (run_id, id);
 ",
+    "
+    -- The pipeline: which task a worker or reviewer works on, and where and
+    -- how a run agent was started, so a resume starts it the same way.
+    ALTER TABLE agents ADD COLUMN task_id INTEGER REFERENCES tasks (id);
+    ALTER TABLE agents ADD COLUMN cwd TEXT;           -- NULL: the workspace folder
+    ALTER TABLE agents ADD COLUMN system_prompt TEXT; -- --append-system-prompt
+    ALTER TABLE agents ADD COLUMN mcp_config TEXT;    -- --mcp-config
+    CREATE INDEX agents_by_task ON agents (task_id, id);
+    -- The last checks and review of a task, as JSON.
+    ALTER TABLE tasks ADD COLUMN checks_json TEXT;
+    ALTER TABLE tasks ADD COLUMN review_json TEXT;
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
