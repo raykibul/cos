@@ -89,6 +89,8 @@ export function list<T>(value: unknown, decode: (item: unknown) => T): T[] {
 
 /** `{key: [...]}`, the daemon's list pages. */
 export function page<T>(body: unknown, key: string, decode: (item: unknown) => T): T[] {
+  // A bare array is accepted too, in case a route drops its wrapper.
+  if (Array.isArray(body)) return list(body, decode);
   if (!isObject(body)) throw new DecodeError(`expected an object with ${key}`);
   return list(body[key], decode);
 }
