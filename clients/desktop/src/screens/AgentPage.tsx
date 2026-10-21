@@ -102,6 +102,16 @@ function AgentView({ agent }: { agent: Agent }) {
                 Stop
               </Button>
             ) : null}
+            {!alive ? (
+              <Button
+                variant="ghost"
+                icon={Trash2}
+                disabled={!canChange}
+                onClick={() => ui.open({ kind: "removeAgent", agentId: agent.id })}
+              >
+                Remove
+              </Button>
+            ) : null}
             {canResume(agent.state) ? (
               <Button
                 variant="primary"
@@ -159,6 +169,9 @@ function AgentView({ agent }: { agent: Agent }) {
         ) : null}
         <span className="truncate font-medium text-ink">{agent.title}</span>
         <StateBadge label={label} className="ml-1.5" />
+        <span className="ml-1 hidden shrink-0 text-[12px] text-ink-3 lg:inline">
+          {agent.model ?? "default model"}
+        </span>
       </PageHeader>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 pb-4">
@@ -221,7 +234,8 @@ function ApprovalBanner({ approval }: { approval: Approval }) {
         </p>
         {why ? <p className="mt-0.5 text-[12px] text-ink-3">{why}</p> : null}
       </div>
-      {withChief ? null : <ApprovalButtons approval={approval} />}
+      {/* You can still answer one the chief is deciding. */}
+      <ApprovalButtons approval={approval} />
     </Banner>
   );
 }

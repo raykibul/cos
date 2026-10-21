@@ -1,8 +1,9 @@
-import { FolderGit2, GitBranch, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { FolderGit2, GitBranch, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import type { Workspace } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { agentLabel, pluralize, runLabel } from "../domain/labels";
 import { agentNeedsYou, currentRun, project as projectOf, userAgents } from "../store/selectors";
+import { cx } from "../ui/cx";
 import { relativeTime } from "../ui/format";
 import { Button, EmptyState, PathText, SectionTitle, StateBadge, StateDot } from "../ui/kit";
 import { Menu } from "../ui/Menu";
@@ -119,7 +120,8 @@ export function ProjectPage({ projectId }: { projectId: number }) {
 }
 
 function WorkspaceCard({ workspace }: { workspace: Workspace }) {
-  const { ui } = useApp();
+  const { cos, ui } = useApp();
+  const canChange = useCanChange();
   const now = useNow();
   const agents = useCos((s) => userAgents(s, workspace.id));
   const waiting = useCos(
@@ -129,20 +131,56 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
   const working = agents.filter((a) => agentLabel(a.state).busy).length;
 
   return (
-    <button
-      type="button"
-      onClick={() => ui.navigate({ kind: "workspace", id: workspace.id })}
-      className="flex flex-col gap-2 rounded-xl border border-line bg-surface p-4 text-left shadow-card transition-colors hover:border-line-strong hover:bg-raised"
-    >
+    <div className="group relative flex flex-col gap-2 rounded-xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong hover:bg-raised">
       <div className="flex w-full items-center gap-2">
-        <span className="truncate font-serif text-[16px] font-medium text-ink">
+        {/* The title's button covers the card, so the whole card opens it. */}
+        <button
+          type="button"
+          onClick={() => ui.navigate({ kind: "workspace", id: workspace.id })}
+          className="truncate rounded text-left font-serif text-[16px] font-medium text-ink after:absolute after:inset-0 after:rounded-xl"
+        >
           {workspace.title}
-        </span>
+        </button>
         {waiting > 0 ? (
           <span className="ml-auto rounded-full bg-accent/12 px-2 py-0.5 text-[11.5px] font-medium text-accent-ink">
             {waiting} waiting
           </span>
         ) : null}
+        <Menu
+          align="end"
+          width={200}
+          items={[
+            {
+              label: "Rename…",
+              icon: Pencil,
+              disabled: !canChange,
+              onSelect: () => ui.open({ kind: "renameWorkspace", workspaceId: workspace.id }),
+            },
+            ...folderItems(cos, workspace.path),
+            "separator",
+            {
+              label: "Remove workspace…",
+              icon: Trash2,
+              danger: true,
+              disabled: !canChange,
+              onSelect: () => ui.open({ kind: "removeWorkspace", workspaceId: workspace.id }),
+            },
+          ]}
+          trigger={(props) => (
+            <button
+              type="button"
+              aria-label={`Actions for ${workspace.title}`}
+              {...props}
+              className={cx(
+                "relative z-10 flex size-6 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-subtle hover:text-ink",
+                "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
+                waiting > 0 ? "" : "ml-auto",
+              )}
+            >
+              <MoreHorizontal className="size-4" strokeWidth={1.8} />
+            </button>
+          )}
+        />
       </div>
       <div className="flex items-center gap-1.5 font-mono text-[12px] text-ink-3">
         <GitBranch className="size-3.5" strokeWidth={1.8} />
@@ -168,6 +206,6 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
           <span className="truncate text-[12.5px] text-ink-3">{agents[0].title}</span>
         </div>
       ) : null}
-    </button>
+    </div>
   );
 }

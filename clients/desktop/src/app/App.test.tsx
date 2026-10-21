@@ -139,15 +139,16 @@ describe("agent page", () => {
     await waitFor(() => expect(written.join("")).toContain("Do you want to proceed?"));
   });
 
-  it("says the chief is deciding for a chief-routed request", async () => {
+  it("says the chief is deciding for a chief-routed request, and still lets you answer", async () => {
     await renderApp({ kind: "agent", id: 25 });
     expect(screen.getByText("The chief is deciding")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
   });
 
   it("offers Resume for an exited agent", async () => {
     await renderApp({ kind: "agent", id: 5 });
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
   });
 });
