@@ -5,6 +5,9 @@
 //! plain-text "UI", and reads lines typed into the terminal.
 //!
 //! What a prompt does:
+//! - starts with `ask:<Tool> <arg>`: like `permission`, but asks for that
+//!   tool. `arg` is Bash's command, a file tool's `file_path` (Write also gets
+//!   a `content`), or the whole input as JSON when it starts with `{`.
 //! - contains `permission`: Bash `touch x` that needs approval. The
 //!   `PermissionRequest` hook runs while the terminal dialog is up, like the
 //!   real CLI: a hook answer settles it, and so does typing `1` (allow) or `3`
@@ -103,8 +106,10 @@ impl Session {
                 std::thread::sleep(Duration::from_secs(3600));
             }
         }
-        let reply = if prompt.contains("permission") {
-            self.permission_turn()
+        let reply = if let Some((tool, input)) = asked_tool(prompt) {
+            self.permission_turn(&tool, input)
+        } else if prompt.contains("permission") {
+            self.permission_turn("Bash", json!({ "command": "touch x" }))
         } else {
             format!("echo: {prompt}")
         };
@@ -115,20 +120,24 @@ impl Session {
         );
     }
 
-    fn permission_turn(&mut self) -> String {
-        let tool = json!({ "tool_name": "Bash", "tool_input": { "command": "touch x" } });
+    fn permission_turn(&mut self, tool_name: &str, tool_input: Value) -> String {
+        let tool = json!({ "tool_name": tool_name, "tool_input": tool_input });
         let mut pre = tool.clone();
         pre["tool_use_id"] = json!("toolu_1");
         self.hook("PreToolUse", pre);
 
-        show("Do you want to run touch x?\r\n ❯ 1. Yes\r\n   3. No");
-        let outcome = match self.start_hook("PermissionRequest", tool) {
+        let what = match tool_input.get("command").and_then(Value::as_str) {
+            Some(command) => format!("run {command}"),
+            None => format!("use {tool_name} {tool_input}"),
+        };
+        show(&format!("Do you want to {what}?\r\n ❯ 1. Yes\r\n   3. No"));
+        let outcome = match self.start_hook("PermissionRequest", tool.clone()) {
             Some(hook) => self.race(hook),
             None => self.answer_in_terminal(),
         };
         let allowed = outcome.starts_with("allowed");
         if allowed {
-            let mut post = json!({ "tool_name": "Bash", "tool_input": { "command": "touch x" } });
+            let mut post = tool;
             post["tool_use_id"] = json!("toolu_1");
             post["tool_response"] = json!({ "stdout": "" });
             self.hook("PostToolUse", post);
@@ -228,6 +237,23 @@ fn kill_group(hook: &mut Child) {
         .args(["-KILL", &format!("-{}", hook.id())])
         .status();
     let _ = hook.wait();
+}
+
+/// The tool and input an `ask:<Tool> <arg>` prompt asks for.
+fn asked_tool(prompt: &str) -> Option<(String, Value)> {
+    let rest = prompt.trim().strip_prefix("ask:")?;
+    let (tool, arg) = rest.split_once(' ').unwrap_or((rest, ""));
+    let arg = arg.trim();
+    let input = if arg.starts_with('{') {
+        serde_json::from_str(arg).ok()?
+    } else {
+        match tool {
+            "Bash" => json!({ "command": arg }),
+            "Write" => json!({ "file_path": arg, "content": "x" }),
+            _ => json!({ "file_path": arg }),
+        }
+    };
+    Some((tool.to_owned(), input))
 }
 
 fn terminal_answer(line: &str) -> String {
