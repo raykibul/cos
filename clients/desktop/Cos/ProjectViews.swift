@@ -82,8 +82,10 @@ struct WorkspaceDetail: View {
                         }
                     }
                     Spacer()
-                    Button("New Agent…") { window.newAgentIn = workspace }
+                    Button("New Run…") { window.newRunIn = workspace }
                         .buttonStyle(.borderedProminent)
+                        .disabled(!canChange || !monitor.runsSupported || monitor.currentRun(inWorkspace: workspace.id) != nil)
+                    Button("New Agent…") { window.newAgentIn = workspace }
                         .disabled(!canChange || !monitor.agentsSupported)
                     Button("Rename…") { window.renaming = workspace }
                         .disabled(!canChange)
@@ -110,6 +112,8 @@ struct WorkspaceDetail: View {
                 }
 
                 FolderButtons(path: workspace.path)
+
+                RunsSection(workspace: workspace, monitor: monitor, window: window)
 
                 AgentsSection(workspace: workspace, monitor: monitor, window: window)
             }

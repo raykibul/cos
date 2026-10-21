@@ -9,12 +9,25 @@ enum Fixtures {
     static let projects = #"""
     {"projects":[{"id":1,"name":"cos","root":"/Users/me/personal/apps/cos","base_branch":"main","has_origin":true,"created_at":"2026-10-22T09:00:00Z","workspaces":[
       {"id":3,"project_id":1,"name":"lisbon","title":"Fix the login flow","branch":"cos/lisbon","path":"/Users/me/.cos/worktrees/cos-1/lisbon","base":"origin","base_ref":"origin/main","base_commit":"3f2c9a1e5b7d4c8f0a6e2b9d1c3f5a7e9b0d2c4f","created_at":"2026-10-22T09:01:00Z"},
-      {"id":4,"project_id":1,"name":"porto","title":"porto","branch":"cos/porto","path":"/Users/me/.cos/worktrees/cos-1/porto","base":"head","base_ref":"HEAD","base_commit":"9b0d2c4f3f2c9a1e5b7d4c8f0a6e2b9d1c3f5a7e","created_at":"2026-10-22T09:05:00Z"}]},
+      \#(workspace(4)),
+      \#(workspace(5)),
+      \#(workspace(6))]},
      {"id":2,"name":"opal-app","root":"/Users/me/work/opal-app","base_branch":"master","has_origin":true,"created_at":"2026-10-22T09:10:00Z","workspaces":[]}]}
     """#
 
+    /// Workspaces 4 to 6, which runs use too.
+    static func workspace(_ id: Int) -> String {
+        let (name, title, commit) = switch id {
+        case 4: ("porto", "porto", "9b0d2c4f3f2c9a1e5b7d4c8f0a6e2b9d1c3f5a7e")
+        case 5: ("madrid", "Dashboard speed", "1c3f5a7e9b0d2c4f3f2c9a1e5b7d4c8f0a6e2b9d")
+        case 6: ("oslo", "React 19", "5b7d4c8f0a6e2b9d1c3f5a7e9b0d2c4f3f2c9a1e")
+        default: ("lisbon", "Fix the login flow", "3f2c9a1e5b7d4c8f0a6e2b9d1c3f5a7e9b0d2c4f")
+        }
+        return #"{"id":\#(id),"project_id":1,"name":"\#(name)","title":"\#(title)","branch":"cos/\#(name)","path":"/Users/me/.cos/worktrees/cos-1/\#(name)","base":"head","base_ref":"HEAD","base_commit":"\#(commit)","created_at":"2026-10-22T09:05:00Z"}"#
+    }
+
     static func agent(
-        id: Int, workspace: Int, title: String, state: String, role: String = "user", model: String? = "sonnet",
+        id: Int, workspace: Int, title: String, state: String, role: String = "user", run: Int? = nil, model: String? = "sonnet",
         rows: Int = 32, cols: Int = 100, startedAgo: Int64, activeAgo: Int64, exitCode: Int? = nil,
         lastMessage: String? = nil, approval: Int? = nil
     ) -> String {
@@ -25,7 +38,7 @@ enum Fixtures {
         }
         let exited = state == "exited" || state == "interrupted"
         return """
-        {"id":\(id),"workspace_id":\(workspace),"run_id":null,"role":"\(role)","title":\(json(title)),\
+        {"id":\(id),"workspace_id":\(workspace),"run_id":\(run.map(String.init) ?? "null"),"role":"\(role)","title":\(json(title)),\
         "session_id":"5504b543-4897-4751-add5-f81f24a6\(String(format: "%04d", id))","pid":\(exited ? "null" : String(25600 + id)),\
         "state":"\(state)","model":\(json(model)),"permission_mode":"default","rows":\(rows),"cols":\(cols),\
         "started_ms":\(now - startedAgo * 1000),"last_activity_ms":\(now - activeAgo * 1000),\
@@ -44,13 +57,17 @@ enum Fixtures {
                   lastMessage: "Done. The release notes are in CHANGELOG.md under 0.2.0."),
             agent(id: 5, workspace: 4, title: "Agent 5", state: "exited", role: "worker", startedAgo: 7200, activeAgo: 5000, exitCode: 0,
                   lastMessage: "All 214 tests pass."),
-        ]
+        ] + RunFixtures.agents
         return #"{"agents":["# + list.joined(separator: ",") + "]}"
     }()
 
-    static let approvals = """
-    {"approvals":[{"id":12,"agent_id":8,"workspace_id":3,"tool_name":"Bash","tool_input":{"command":"npm install left-pad --save","description":"Install left-pad for the padding helper"},"tool_use_id":"toolu_01ABC","summary":"Bash npm install left-pad --save","state":"pending","decided_by":null,"message":null,"created_ms":\(now - 20_000),"decided_ms":null}]}
+    /// From a daemon without routes, so it is yours.
+    static let leftPad = """
+    {"id":12,"agent_id":8,"workspace_id":3,"tool_name":"Bash","tool_input":{"command":"npm install left-pad --save","description":"Install left-pad for the padding helper"},"tool_use_id":"toolu_01ABC","summary":"Bash npm install left-pad --save","state":"pending","decided_by":null,"message":null,"created_ms":\(now - 20_000),"decided_ms":null}
     """
+
+    static let approvals = #"{"approvals":["# + ([leftPad] + RunFixtures.pending).joined(separator: ",") + "]}"
+    static let allApprovals = #"{"approvals":["# + ([leftPad] + RunFixtures.pending + RunFixtures.decided).joined(separator: ",") + "]}"
 }
 
 /// A Claude Code screen in the style of 2.1.x, as raw terminal bytes:

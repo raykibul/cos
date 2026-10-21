@@ -8,6 +8,7 @@ enum SidebarItem: Hashable {
     case project(Int)
     case workspace(Int)
     case agent(Int)
+    case run(Int)
 }
 
 /// What the window is showing or asking. Shared by the sidebar's context
@@ -22,6 +23,10 @@ final class WindowState {
     var removingProject: Project?
     var newAgentIn: Workspace?
     var removingAgent: Agent?
+    var newRunIn: Workspace?
+    var cancellingRun: Run?
+    var taskAction: TaskAction?
+    var editingLimits: LimitsEdit?
     var alert: AlertMessage?
 
     /// Runs a daemon action and shows its error, which the daemon writes to
@@ -41,6 +46,16 @@ struct AlertMessage: Identifiable {
     let id = UUID()
     var title: String
     var message: String
+}
+
+extension Run {
+    var sidebarKey: String { "run-\(id)" }
+}
+
+struct LimitsEdit: Identifiable {
+    var run: Run
+    var limits: RunLimits
+    var id: Int { run.id }
 }
 
 /// Projects and their workspaces in a sidebar, the selection on the right.
@@ -81,6 +96,20 @@ struct MainWindow: View {
             NewAgentSheet(workspace: workspace, monitor: monitor) { agent in
                 window.selection = .agent(agent.id)
             }
+        }
+        .sheet(item: $window.newRunIn) { workspace in
+            NewRunSheet(workspace: workspace, monitor: monitor) { run in
+                window.selection = .run(run.id)
+            }
+        }
+        .sheet(item: $window.cancellingRun) { run in
+            CancelRunSheet(run: run, monitor: monitor)
+        }
+        .sheet(item: $window.taskAction) { action in
+            TaskActionSheet(action: action, monitor: monitor)
+        }
+        .sheet(item: $window.editingLimits) { edit in
+            LimitsSheet(run: edit.run, limits: edit.limits, monitor: monitor)
         }
         .confirmationDialog(
             "Remove agent “\(window.removingAgent?.title ?? "")”?",
@@ -147,6 +176,9 @@ struct MainWindow: View {
         case .agent(let id):
             // A fresh page (and terminal session) per agent.
             AgentPage(agentId: id, monitor: monitor, window: window)
+                .id(id)
+        case .run(let id):
+            RunPage(runId: id, monitor: monitor, window: window)
                 .id(id)
         case .project(let id):
             if let project = monitor.project(id: id) {
@@ -259,23 +291,41 @@ private struct Sidebar: View {
         }
     }
 
-    /// A workspace, with its agents nested under it when it has any.
+    /// A workspace, with its runs and your agents nested under it. A run's
+    /// own agents are on the run's page, not here.
     @ViewBuilder
     private func workspaceRow(_ workspace: Workspace) -> some View {
-        let agents = monitor.agents(inWorkspace: workspace.id)
+        let agents = monitor.agents(inWorkspace: workspace.id).filter { $0.runId == nil }
+        let runs = sidebarRuns(workspace.id)
         let label = Label(workspace.title, systemImage: "arrow.triangle.branch")
             .help(workspace.branch)
             .tag(SidebarItem.workspace(workspace.id))
             .contextMenu { workspaceMenu(workspace) }
-        if agents.isEmpty {
+        if agents.isEmpty && runs.isEmpty {
             label
         } else {
             DisclosureGroup(isExpanded: expanded(workspaceKey(workspace.id))) {
+                // Keyed apart from the agents below: a run and an agent can share an id.
+                ForEach(runs, id: \.sidebarKey) { run in
+                    HStack(spacing: 6) {
+                        Image(systemName: run.state.symbol)
+                            .foregroundStyle(run.state.color)
+                            .imageScale(.small)
+                        Text(run.goal).lineLimit(1)
+                        if monitor.waitingCount(forRun: run.id) > 0 {
+                            Spacer()
+                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                        }
+                    }
+                    .help("\(run.goal): \(run.state.title)")
+                    .tag(SidebarItem.run(run.id))
+                    .contextMenu { runMenu(run) }
+                }
                 ForEach(agents) { agent in
                     HStack(spacing: 6) {
                         AgentStateDot(state: agent.state)
                         Text(agent.title).lineLimit(1)
-                        if monitor.pendingApproval(forAgent: agent.id) != nil || agent.state == .needsTrust {
+                        if monitor.pendingApproval(forAgent: agent.id)?.isForYou == true || agent.state == .needsTrust {
                             Spacer()
                             Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
                         }
@@ -292,6 +342,29 @@ private struct Sidebar: View {
 
     /// Workspaces share the collapsed set with projects, on their own keys.
     private func workspaceKey(_ id: Int) -> Int { -id - 1 }
+
+    /// The current run and the latest finished ones; the rest are on the
+    /// workspace's page. The selected run stays listed.
+    private func sidebarRuns(_ workspaceId: Int) -> [Run] {
+        let runs = monitor.runs(inWorkspace: workspaceId)
+        var shown = Array(runs.filter { !$0.state.isFinished }) + runs.filter(\.state.isFinished).prefix(2)
+        if case .run(let id)? = window.selection, !shown.contains(where: { $0.id == id }), let selected = runs.first(where: { $0.id == id }) {
+            shown.append(selected)
+        }
+        return shown
+    }
+
+    @ViewBuilder
+    private func runMenu(_ run: Run) -> some View {
+        if let chief = run.chiefAgentId {
+            Button("Open Chief's Terminal") { window.selection = .agent(chief) }
+        }
+        if !run.state.isFinished {
+            Divider()
+            Button("Cancel Run…") { window.cancellingRun = run }
+                .disabled(!canChange)
+        }
+    }
 
     @ViewBuilder
     private func agentMenu(_ agent: Agent) -> some View {
@@ -321,6 +394,8 @@ private struct Sidebar: View {
 
     @ViewBuilder
     private func workspaceMenu(_ workspace: Workspace) -> some View {
+        Button("New Run…") { window.newRunIn = workspace }
+            .disabled(!canChange || !monitor.runsSupported || monitor.currentRun(inWorkspace: workspace.id) != nil)
         Button("New Agent…") { window.newAgentIn = workspace }
             .disabled(!canChange || !monitor.agentsSupported)
         Button("Rename…") { window.renaming = workspace }

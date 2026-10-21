@@ -83,7 +83,8 @@ struct AgentsSection: View {
     let monitor: DaemonMonitor
     let window: WindowState
 
-    private var agents: [Agent] { monitor.agents(inWorkspace: workspace.id) }
+    /// Yours; a run's chief, workers and reviewers are on the run's page.
+    private var agents: [Agent] { monitor.agents(inWorkspace: workspace.id).filter { $0.runId == nil } }
     private var canStart: Bool { monitor.connection == .running && monitor.agentsSupported }
 
     var body: some View {
@@ -253,6 +254,12 @@ private struct AgentHeader: View {
                             .buttonStyle(.link)
                         Text("·")
                     }
+                    if let runId = agent.runNumber {
+                        Button(monitor.run(id: runId).map { "Run: \($0.goal)" } ?? "Run \(runId)") { window.selection = .run(runId) }
+                            .buttonStyle(.link)
+                            .lineLimit(1)
+                        Text("·")
+                    }
                     Text(agent.details)
                     if let sessionId = agent.sessionId {
                         Text("·")
@@ -320,15 +327,23 @@ struct ApprovalBanner: View {
     let window: WindowState
 
     var body: some View {
-        Banner(systemImage: "hand.raised.fill", tint: .orange) {
+        // Routed to the chief: it's deciding, so this isn't a call to action.
+        let chief = approval.isWithChief
+        Banner(systemImage: chief ? "person.badge.clock" : "hand.raised.fill", tint: chief ? .indigo : .orange) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(approval.headline).fontWeight(.semibold)
+                Text(chief ? "The chief is deciding whether Claude may \(approval.toolName == "Bash" ? "run" : "use \(approval.toolName)"):" : approval.headline)
+                    .fontWeight(.semibold)
                 Text(approval.detail)
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
                     .lineLimit(3)
                     .truncationMode(.middle)
-                Text("You can also answer in the terminal below.")
+                if let why = approval.routeExplanation {
+                    Text(why)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(chief ? "You can still answer first, here or in the terminal below." : "You can also answer in the terminal below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

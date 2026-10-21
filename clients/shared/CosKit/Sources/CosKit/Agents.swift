@@ -177,11 +177,18 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
     public var message: String?
     public var createdMs: Int64
     public var decidedMs: Int64?
+    /// The policy's tier (docs/orchestration.md). `nil` from a daemon without it.
+    public var tier: ApprovalTier?
+    /// Who answers it: you, the run's chief, or a rule (`auto`).
+    public var route: ApprovalRoute?
+    /// The policy's one-line reason.
+    public var reason: String?
 
     public init(
         id: Int, agentId: Int, workspaceId: Int? = nil, toolName: String, toolInput: JSONValue = .null,
         toolUseId: String? = nil, summary: String, state: ApprovalState = .pending, decidedBy: String? = nil,
-        message: String? = nil, createdMs: Int64, decidedMs: Int64? = nil
+        message: String? = nil, createdMs: Int64, decidedMs: Int64? = nil,
+        tier: ApprovalTier? = nil, route: ApprovalRoute? = nil, reason: String? = nil
     ) {
         self.id = id
         self.agentId = agentId
@@ -195,6 +202,9 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
         self.message = message
         self.createdMs = createdMs
         self.decidedMs = decidedMs
+        self.tier = tier
+        self.route = route
+        self.reason = reason
     }
 
     public init(from decoder: Decoder) throws {
@@ -211,6 +221,9 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
         message = try c.decodeIfPresent(String.self, forKey: .message)
         createdMs = try c.decode(Int64.self, forKey: .createdMs)
         decidedMs = try c.decodeIfPresent(Int64.self, forKey: .decidedMs)
+        tier = try? c.decodeIfPresent(ApprovalTier.self, forKey: .tier)
+        route = try? c.decodeIfPresent(ApprovalRoute.self, forKey: .route)
+        reason = try? c.decodeIfPresent(String.self, forKey: .reason)
     }
 
     public var createdAt: Date { Date(unixMilliseconds: createdMs) }
