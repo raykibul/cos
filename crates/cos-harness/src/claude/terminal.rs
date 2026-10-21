@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use super::{ClaudeOptions, SESSION_MARKERS, hooks, lock};
 use crate::HarnessError;
@@ -26,6 +26,9 @@ const SCROLLBACK: usize = 5_000;
 const SUBMIT_PAUSE: Duration = Duration::from_millis(150);
 /// The answer that marks Claude's "do you trust this folder" dialog.
 const TRUST_ANSWER: &str = "Yes, I trust this folder";
+/// Updates buffered per [`ClaudeTerminal::attach`] watcher. One that falls
+/// further behind gets `Lagged` and should attach again for a fresh snapshot.
+const UPDATE_BUFFER: usize = 1024;
 
 #[derive(Debug, Clone)]
 pub struct TerminalOptions {
@@ -99,6 +102,32 @@ impl TerminalOptions {
     }
 }
 
+/// What a watcher of the terminal sees after its snapshot, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalUpdate {
+    /// Bytes Claude wrote, exactly as read from the terminal.
+    Output(Arc<[u8]>),
+    /// Someone resized the terminal.
+    Resize { rows: u16, cols: u16 },
+    /// The process exited; nothing follows. `code` is `None` if it was killed.
+    Exited { code: Option<i32> },
+}
+
+/// A consistent view of the terminal for someone who starts watching it:
+/// the screen as it is now, then every update after it, with no gap or
+/// repeat in between.
+#[derive(Debug)]
+pub struct TerminalAttach {
+    pub rows: u16,
+    pub cols: u16,
+    /// Escape sequences that redraw the current screen on an empty terminal
+    /// of the same size: see [`snapshot`].
+    pub snapshot: Vec<u8>,
+    /// Set if the process has already exited; then no updates follow.
+    pub exited: Option<Option<i32>>,
+    pub updates: broadcast::Receiver<TerminalUpdate>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalEvent {
     /// Bytes Claude wrote to the terminal, escape sequences and all.
@@ -117,7 +146,16 @@ pub struct ClaudeTerminal {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    screen: Arc<Mutex<vt100::Parser<Replies>>>,
+    screen: Arc<Mutex<Screen>>,
+}
+
+/// The emulated screen, and the channel that tells watchers what changed.
+/// Updates are sent while the screen is locked, so [`ClaudeTerminal::attach`]
+/// sees each one either in its snapshot or on its channel, never both.
+struct Screen {
+    parser: vt100::Parser<Replies>,
+    updates: broadcast::Sender<TerminalUpdate>,
+    exited: Option<Option<i32>>,
 }
 
 impl ClaudeTerminal {
@@ -161,12 +199,16 @@ impl ClaudeTerminal {
         let writer = Arc::new(Mutex::new(pair.master.take_writer().map_err(pty_error)?));
         let killer = child.clone_killer();
         let pid = child.process_id();
-        let screen = Arc::new(Mutex::new(vt100::Parser::new_with_callbacks(
-            size(options.rows),
-            size(options.cols),
-            SCROLLBACK,
-            Replies::default(),
-        )));
+        let screen = Arc::new(Mutex::new(Screen {
+            parser: vt100::Parser::new_with_callbacks(
+                size(options.rows),
+                size(options.cols),
+                SCROLLBACK,
+                Replies::default(),
+            ),
+            updates: broadcast::channel(UPDATE_BUFFER).0,
+            exited: None,
+        }));
 
         let (events, receiver) = mpsc::unbounded_channel();
         let (reader_done, reader_finished) = std::sync::mpsc::channel::<()>();
@@ -182,6 +224,7 @@ impl ClaudeTerminal {
                 })
                 .map_err(|error| HarnessError::Terminal(error.to_string()))?;
         }
+        let exit_screen = screen.clone();
         std::thread::Builder::new()
             .name("claude-pty-wait".into())
             .spawn(move || {
@@ -195,6 +238,11 @@ impl ClaudeTerminal {
                         .is_none()
                         .then(|| i32::try_from(status.exit_code()).unwrap_or(i32::MAX))
                 });
+                {
+                    let mut screen = lock(&exit_screen);
+                    screen.exited = Some(code);
+                    let _ = screen.updates.send(TerminalUpdate::Exited { code });
+                }
                 let _ = events.send(TerminalEvent::Exited { code });
             })
             .map_err(|error| HarnessError::Terminal(error.to_string()))?;
@@ -241,13 +289,52 @@ impl ClaudeTerminal {
                 pixel_height: 0,
             })
             .map_err(pty_error)?;
-        lock(&self.screen).set_size(size(rows), size(cols));
+        let mut screen = lock(&self.screen);
+        screen.parser.screen_mut().set_size(size(rows), size(cols));
+        let _ = screen.updates.send(TerminalUpdate::Resize { rows, cols });
         Ok(())
     }
 
     /// The text currently on screen, one line per row.
     pub fn screen(&self) -> String {
-        lock(&self.screen).screen().contents()
+        lock(&self.screen).parser.screen().contents()
+    }
+
+    /// Escape sequences that redraw the current screen, colours and all.
+    pub fn screen_formatted(&self) -> Vec<u8> {
+        snapshot(lock(&self.screen).parser.screen())
+    }
+
+    /// The terminal's size as `(rows, cols)`.
+    pub fn size(&self) -> (u16, u16) {
+        let screen = lock(&self.screen);
+        let (rows, cols) = screen.parser.screen().size();
+        (rows.get(), cols.get())
+    }
+
+    /// The cursor as `(row, col)`, counted from 0.
+    pub fn cursor(&self) -> (u16, u16) {
+        lock(&self.screen).parser.screen().cursor_position()
+    }
+
+    /// `Some(code)` once the process has exited.
+    pub fn exit_status(&self) -> Option<Option<i32>> {
+        lock(&self.screen).exited
+    }
+
+    /// Starts watching the terminal: the screen now, then every update.
+    /// Watching never slows the terminal down: a watcher that falls more
+    /// than [`UPDATE_BUFFER`] updates behind gets `Lagged` instead.
+    pub fn attach(&self) -> TerminalAttach {
+        let screen = lock(&self.screen);
+        let (rows, cols) = screen.parser.screen().size();
+        TerminalAttach {
+            rows: rows.get(),
+            cols: cols.get(),
+            snapshot: snapshot(screen.parser.screen()),
+            exited: screen.exited,
+            updates: screen.updates.subscribe(),
+        }
     }
 
     /// True while Claude asks whether to trust the folder. It asks before
@@ -285,10 +372,25 @@ fn size(value: u16) -> NonZeroU16 {
     NonZeroU16::new(value).unwrap_or(NonZeroU16::MIN)
 }
 
+/// Escape sequences that bring an empty terminal of the same size to this
+/// screen's state: the alternate screen if it is in use, then vt100's
+/// `state_formatted` (contents, cursor position and visibility, then the
+/// input modes: application keypad and cursor keys, bracketed paste, mouse
+/// reporting, cursor style). Without the input modes, pastes and arrow keys
+/// typed after a reconnect would reach Claude the wrong way.
+fn snapshot(screen: &vt100::Screen) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if screen.alternate_screen() {
+        bytes.extend_from_slice(b"\x1b[?1049h");
+    }
+    bytes.extend_from_slice(screen.state_formatted().as_bytes());
+    bytes
+}
+
 /// Feeds the screen and forwards output until the terminal closes.
 fn read_output(
     mut reader: Box<dyn Read + Send>,
-    screen: &Mutex<vt100::Parser<Replies>>,
+    screen: &Mutex<Screen>,
     writer: &Mutex<Box<dyn Write + Send>>,
     events: &mpsc::UnboundedSender<TerminalEvent>,
 ) {
@@ -301,8 +403,10 @@ fn read_output(
         let bytes = &buffer[..read];
         let replies = {
             let mut screen = lock(screen);
-            screen.process(bytes);
-            std::mem::take(&mut screen.callbacks_mut().0)
+            screen.parser.process(bytes);
+            // Nobody watching is fine.
+            let _ = screen.updates.send(TerminalUpdate::Output(bytes.into()));
+            std::mem::take(&mut screen.parser.callbacks_mut().0)
         };
         if !replies.is_empty() {
             let mut writer = lock(writer);
@@ -417,5 +521,24 @@ mod tests {
 
         let replies = String::from_utf8(parser.callbacks().0.clone()).unwrap();
         assert_eq!(replies, "\x1b[1;3R\x1b[?62;22c\x1b]11;rgb:0000/0000/0000\x1b\\");
+    }
+
+    #[test]
+    fn a_snapshot_restores_the_screen_cursor_and_input_modes() {
+        let mut claude = vt100::Parser::new(size(24), size(80), 0);
+        // Bracketed paste, application cursor keys, the alternate screen,
+        // a hidden cursor, and some text with the cursor left mid-line.
+        claude.process(b"\x1b[?2004h\x1b[?1h\x1b[?1049h\x1b[?25l\x1b[3;5Hhello\x1b[3;7H");
+
+        let mut viewer = vt100::Parser::new(size(24), size(80), 0);
+        viewer.process(&snapshot(claude.screen()));
+
+        let (claude, viewer) = (claude.screen(), viewer.screen());
+        assert_eq!(viewer.contents(), claude.contents());
+        assert_eq!(viewer.cursor_position(), (2, 6));
+        assert!(viewer.hide_cursor());
+        assert!(viewer.bracketed_paste());
+        assert!(viewer.application_cursor());
+        assert!(viewer.alternate_screen());
     }
 }

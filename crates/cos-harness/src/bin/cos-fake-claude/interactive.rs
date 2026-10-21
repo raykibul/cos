@@ -9,9 +9,12 @@
 //!   `PermissionRequest` hook runs while the terminal dialog is up, like the
 //!   real CLI: a hook answer settles it, and so does typing `1` (allow) or `3`
 //!   (deny), which kills the hook.
+//! - contains `hang forever`: never finishes and ignores whatever is typed, so only
+//!   a kill ends the session.
 //! - anything else: replies `echo: <prompt>`.
 //!
-//! `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
+//! `--resume <id>` continues session `<id>`; its `SessionStart` says
+//! `resume`. `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
 //! shows the trust dialog and only carries on after a down arrow and Return.
 
 use std::io::{BufRead, Read, Write};
@@ -52,7 +55,13 @@ pub(crate) fn run(args: &[String]) {
         "fake claude · TERM={}",
         std::env::var("TERM").unwrap_or_default()
     ));
-    session.hook("SessionStart", json!({ "source": "startup" }));
+    let source = if flag("--resume").is_some() {
+        "resume"
+    } else {
+        "startup"
+    };
+    show(&format!("session {} ({source})", session.id));
+    session.hook("SessionStart", json!({ "source": source }));
     if let Some(prompt) = prompt {
         session.turn(&prompt);
     }
@@ -62,7 +71,8 @@ pub(crate) fn run(args: &[String]) {
                 session.hook("SessionEnd", json!({ "reason": "prompt_input_exit" }));
                 return;
             }
-            "" => {}
+            // Esc with nothing to interrupt.
+            "" | ESC => {}
             text => session.turn(text),
         }
     }
@@ -86,6 +96,13 @@ impl Session {
 
     fn turn(&mut self, prompt: &str) {
         self.hook("UserPromptSubmit", json!({ "prompt": prompt }));
+        if prompt.contains("hang forever") {
+            show("working forever…");
+            // Ignores everything typed, `/exit` included; only a kill ends it.
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
         let reply = if prompt.contains("permission") {
             self.permission_turn()
         } else {
@@ -225,13 +242,28 @@ fn read_lines() -> Receiver<String> {
     let (lines, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines().map_while(Result::ok) {
-            if lines.send(line).is_err() {
-                break;
+            for part in split_escape(line) {
+                if lines.send(part).is_err() {
+                    return;
+                }
             }
         }
     });
     receiver
 }
+
+/// The terminal is in line mode, so an Esc pressed on its own arrives with
+/// whatever is typed after it. Split it off so it reads as a key of its own
+/// (it denies an open permission dialog). Escape sequences such as the down
+/// arrow stay whole.
+fn split_escape(line: String) -> Vec<String> {
+    match line.strip_prefix(ESC) {
+        Some(rest) if !rest.starts_with('[') => vec![ESC.to_owned(), rest.to_owned()],
+        _ => vec![line],
+    }
+}
+
+const ESC: &str = "\x1b";
 
 fn show(text: &str) {
     let mut stdout = std::io::stdout().lock();

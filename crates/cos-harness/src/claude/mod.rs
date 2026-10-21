@@ -29,7 +29,9 @@ use tokio::task::JoinHandle;
 
 use crate::{Decision, Event, HarnessError, PermissionRequest};
 use protocol::Incoming;
-pub use terminal::{ClaudeTerminal, HookTarget, TerminalEvent, TerminalOptions};
+pub use terminal::{
+    ClaudeTerminal, HookTarget, TerminalAttach, TerminalEvent, TerminalOptions, TerminalUpdate,
+};
 
 /// How long Claude gets to start up and answer the handshake.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
