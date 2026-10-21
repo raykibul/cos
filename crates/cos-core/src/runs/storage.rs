@@ -14,7 +14,8 @@ use super::{ApprovalPreset, Run, Task, TaskCounts, TaskState};
 const RUN_COLUMNS: &str =
     "id, workspace_id, goal, state, preset, approval_cap, report_path, reason, created_ms, updated_ms";
 const TASK_COLUMNS: &str = "id, run_id, position, title, instructions, files, test_command, depends_on, \
-     state, retries, branch, worktree, last_failure, created_ms, updated_ms";
+     state, retries, branch, worktree, last_failure, created_ms, updated_ms, checks_json, review_json, \
+     (SELECT MAX(a.id) FROM agents a WHERE a.task_id = tasks.id AND a.role = 'worker')";
 
 /// The current time at the precision it's stored with, so what's returned
 /// equals what's read back later.
@@ -153,6 +154,9 @@ pub(super) fn insert_plan(
             branch: None,
             worktree: None,
             last_failure: None,
+            agent_id: None,
+            checks: None,
+            review: None,
             created_at: now,
             updated_at: now,
         };
@@ -240,7 +244,26 @@ fn read_task(row: &Row<'_>) -> rusqlite::Result<Task> {
         last_failure: row.get(12)?,
         created_at: timestamp(row, 13)?,
         updated_at: timestamp(row, 14)?,
+        checks: optional_json(row, 15)?,
+        review: optional_json(row, 16)?,
+        agent_id: row.get(17)?,
     })
+}
+
+/// Sets `checks_json` or `review_json` on a task.
+pub(super) fn save_task_json(
+    conn: &Connection,
+    task_id: i64,
+    column: &'static str,
+    json: &str,
+    now: Timestamp,
+) -> rusqlite::Result<()> {
+    debug_assert!(matches!(column, "checks_json" | "review_json"));
+    conn.execute(
+        &format!("UPDATE tasks SET {column} = ?2, updated_ms = ?3 WHERE id = ?1"),
+        params![task_id, json, now.as_millisecond()],
+    )?;
+    Ok(())
 }
 
 fn parse<T: std::str::FromStr<Err = String>>(row: &Row<'_>, column: usize) -> rusqlite::Result<T> {
@@ -256,6 +279,15 @@ fn to_json<T: serde::Serialize>(value: &T) -> String {
 
 fn from_json<T: serde::de::DeserializeOwned>(row: &Row<'_>, column: usize) -> rusqlite::Result<T> {
     serde_json::from_str(row.get_ref(column)?.as_str()?).map_err(|error| bad_value(column, error.to_string()))
+}
+
+fn optional_json<T: serde::de::DeserializeOwned>(
+    row: &Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Option<T>> {
+    row.get::<_, Option<String>>(column)?
+        .map(|text| serde_json::from_str(&text).map_err(|error| bad_value(column, error.to_string())))
+        .transpose()
 }
 
 fn timestamp(row: &Row<'_>, column: usize) -> rusqlite::Result<Timestamp> {

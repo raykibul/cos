@@ -4,6 +4,7 @@
 //! the records and logs every change to the event log. The contract with the
 //! apps is `docs/agents-api.md`.
 
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -24,8 +25,14 @@ pub struct Agent {
     pub id: i64,
     pub workspace_id: i64,
     pub run_id: Option<i64>,
+    /// The task a worker or reviewer works on.
+    #[serde(default)]
+    pub task_id: Option<i64>,
     pub role: Role,
     pub title: String,
+    /// Where it runs, if not the workspace's folder (a task worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
     pub session_id: String,
     pub pid: Option<u32>,
     pub state: AgentState,
@@ -45,6 +52,23 @@ pub struct Agent {
     pub last_message: Option<String>,
     /// The newest approval of this agent that is still pending.
     pub pending_approval_id: Option<i64>,
+    /// `--append-system-prompt`, kept so a resume passes it again.
+    #[serde(skip)]
+    pub system_prompt: Option<String>,
+    /// `--mcp-config`, kept so a resume passes it again.
+    #[serde(skip)]
+    pub mcp_config: Option<String>,
+}
+
+/// How a run agent is started beyond [`NewAgent`]: recorded with
+/// [`Agents::set_launch`] and used again on every resume.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Launch {
+    pub task_id: Option<i64>,
+    /// `None`: the workspace's folder.
+    pub cwd: Option<PathBuf>,
+    pub system_prompt: Option<String>,
+    pub mcp_config: Option<String>,
 }
 
 /// Who started an agent.
@@ -251,6 +275,40 @@ impl Agents {
             id
         };
         self.require(id)
+    }
+
+    /// Records how a new agent is started beyond [`NewAgent`]. Call it
+    /// between [`Self::create`] and the launch. Logs nothing.
+    pub fn set_launch(&self, id: i64, launch: &Launch) -> Result<Agent, StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET task_id = ?2, cwd = ?3, system_prompt = ?4, mcp_config = ?5 WHERE id = ?1",
+            params![
+                id,
+                launch.task_id,
+                launch.cwd.as_ref().map(|cwd| cwd.to_string_lossy()),
+                launch.system_prompt,
+                launch.mcp_config,
+            ],
+        )?;
+        self.require(id)
+    }
+
+    /// The agents of a task, oldest first.
+    pub fn of_task(&self, task_id: i64) -> Result<Vec<Agent>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!("{AGENT_SELECT} WHERE a.task_id = ?1 ORDER BY a.id"))?
+            .query_map([task_id], read_agent)?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// The agents of a run, oldest first.
+    pub fn of_run(&self, run_id: i64) -> Result<Vec<Agent>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!("{AGENT_SELECT} WHERE a.run_id = ?1 ORDER BY a.id"))?
+            .query_map([run_id], read_agent)?
+            .collect::<Result<_, _>>()?)
     }
 
     /// Forgets an agent whose process never started. Logs nothing.
@@ -653,7 +711,8 @@ const AGENT_SELECT: &str =
     "SELECT a.id, a.workspace_id, a.run_id, a.role, a.title, a.session_id, a.pid, a.state,
         a.model, a.permission_mode, a.user_settings, a.term_rows, a.term_cols, a.started_ms, a.last_activity_ms, a.exited_ms,
         a.exit_code, a.last_message,
-        (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending')
+        (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending'),
+        a.task_id, a.cwd, a.system_prompt, a.mcp_config
     FROM agents a";
 
 const APPROVAL_COLUMNS: &str =
@@ -688,6 +747,10 @@ fn read_agent(row: &Row<'_>) -> rusqlite::Result<Agent> {
         exit_code: row.get(16)?,
         last_message: row.get(17)?,
         pending_approval_id: row.get(18)?,
+        task_id: row.get(19)?,
+        cwd: row.get::<_, Option<String>>(20)?.map(PathBuf::from),
+        system_prompt: row.get(21)?,
+        mcp_config: row.get(22)?,
     })
 }
 

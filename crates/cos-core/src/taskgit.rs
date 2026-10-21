@@ -147,6 +147,28 @@ impl TaskWorktrees {
             base_commit,
         })
     }
+
+    /// The [`TaskWorktree`] of a task created earlier, such as before a
+    /// daemon restart, from the branch and folder recorded on the task. Its
+    /// base is where the task branch left the workspace branch. The folder
+    /// may be gone; [`TaskWorktree::remove`] copes with that.
+    pub async fn reopen(
+        &self,
+        workspace: &Workspace,
+        task_id: i64,
+        branch: &str,
+        path: &Path,
+    ) -> Result<TaskWorktree, TaskGitError> {
+        let base = run(&workspace.path, &["merge-base", &workspace.branch, branch]).await?;
+        Ok(TaskWorktree {
+            task_id,
+            workspace: workspace.path.clone(),
+            workspace_branch: workspace.branch.clone(),
+            path: path.to_path_buf(),
+            branch: branch.to_owned(),
+            base_commit: base.trim().to_owned(),
+        })
+    }
 }
 
 impl TaskWorktree {
@@ -245,6 +267,22 @@ impl TaskWorktree {
             .trim_end()
             .to_owned();
         Ok(summary)
+    }
+
+    /// `git diff` of the task branch since its base, cut at a line boundary
+    /// to at most `max_bytes`. The flag says whether it was cut.
+    pub async fn diff_text(&self, max_bytes: usize) -> Result<(String, bool), TaskGitError> {
+        let range = format!("{}...{}", self.base_commit, self.branch);
+        let diff = run(&self.workspace, &["diff", "--no-color", "-M", &range]).await?;
+        if diff.len() <= max_bytes {
+            return Ok((diff, false));
+        }
+        let mut end = max_bytes;
+        while !diff.is_char_boundary(end) {
+            end -= 1;
+        }
+        let end = diff[..end].rfind('\n').map_or(end, |at| at + 1);
+        Ok((diff[..end].to_owned(), true))
     }
 
     /// Merges the task branch into the workspace branch with `--no-ff` and

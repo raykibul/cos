@@ -32,6 +32,10 @@ pub mod kind {
     pub const PLAN_APPROVED: &str = "plan.approved";
     pub const TASK_STATE_CHANGED: &str = "task.state_changed";
     pub const TASK_WORKTREE_ASSIGNED: &str = "task.worktree_assigned";
+    // The pipeline; see `docs/orchestration.md`.
+    pub const TASK_CHECKED: &str = "task.checked";
+    pub const TASK_REVIEWED: &str = "task.reviewed";
+    pub const TASK_MERGED: &str = "task.merged";
     // Agents and approvals; see `docs/agents-api.md`.
     pub const AGENT_STARTED: &str = "agent.started";
     pub const AGENT_STATE_CHANGED: &str = "agent.state_changed";
