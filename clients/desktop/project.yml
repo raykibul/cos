@@ -1,0 +1,43 @@
+# Generate the Xcode project with `xcodegen generate` (see README.md).
+name: Cos
+options:
+  bundleIdPrefix: local.cos
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  CosKit:
+    path: ../shared/CosKit
+targets:
+  Cos:
+    type: application
+    platform: macOS
+    sources: [Cos]
+    dependencies:
+      - package: CosKit
+    info:
+      path: Cos/Info.plist
+      properties:
+        CFBundleDisplayName: cos
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        # A menu bar app: no Dock icon, no app menu.
+        LSUIElement: true
+    settings:
+      base:
+        PRODUCT_NAME: cos
+        PRODUCT_BUNDLE_IDENTIFIER: local.cos.app
+        SWIFT_VERSION: "6.0"
+        # Ad-hoc signing is enough to run locally. No App Sandbox: the app
+        # has to reach the daemon's socket in ~/.cos.
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+schemes:
+  Cos:
+    build:
+      targets:
+        Cos: all
+    test:
+      targets:
+        - package: CosKit/CosKitTests

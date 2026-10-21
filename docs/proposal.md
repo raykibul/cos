@@ -268,4 +268,6 @@ cos/
 
 - **Milestone 1 (setup): done.** Rust 1.99.1, cargo workspace with `cos`, `cos-core` and `cos-harness`, git repo. Tests and lints run in Docker (`make test`, `make lint`); `make build` builds the macOS binary.
 - **Milestone 2 (harness spike): done.** `cos try "prompt"` runs Claude Code as a child process, streams its events and answers permission requests (ask, allow or deny). Verified against Claude Code 2.1.306. Protocol notes are in [claude-protocol.md](claude-protocol.md).
-- **Next: milestone 3**, the daemon skeleton.
+- **Milestone 3 (daemon skeleton): done.** `cos daemon` serves an HTTP API on `~/.cos/cos.sock`. It keeps a numbered event log in SQLite that clients can page through or follow live and resume by sequence number. `cos status`, `cos events [-f]`, and `cos daemon install|uninstall` (launchd agent) are in. See [daemon.md](daemon.md).
+- **Projects and workspaces (added after milestone 3, modelled on Selene): done on the daemon side.** A project is a registered git repo; a workspace is a cos-owned worktree on a `cos/<city>` branch where agents run. Several agents can share a workspace; parallel task workers get their own short-lived worktrees branched from it. `cos project add|list|remove` and `cos workspace new|rename|remove` are in, and the API is in [daemon.md](daemon.md). The Mac app part is in progress.
+- **Next: milestone 4**, workers: a git worktree per task, a cap on parallel workers, and the file-scope check plus a test run after each worker.

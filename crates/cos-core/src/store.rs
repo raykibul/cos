@@ -1,0 +1,285 @@
+//! The daemon's SQLite database.
+
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+
+use jiff::Timestamp;
+use rusqlite::{Connection, Row, params};
+use serde_json::Value;
+
+use crate::LoggedEvent;
+
+/// Schema changes, applied in order. `PRAGMA user_version` records how many
+/// have run. Never edit one that has shipped; add a new one.
+const MIGRATIONS: &[&str] = &[
+    "
+    -- AUTOINCREMENT so a sequence number is never reused, even after deletes.
+    -- Clients resume streams by sequence number.
+    CREATE TABLE events (
+        seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts_ms  INTEGER NOT NULL,
+        kind   TEXT    NOT NULL,
+        run_id TEXT,
+        data   TEXT    NOT NULL
+    );
+    CREATE INDEX events_by_run ON events (run_id, seq);
+",
+    "
+    -- A registered git repo, by its main checkout.
+    CREATE TABLE projects (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        root        TEXT    NOT NULL UNIQUE,
+        name        TEXT    NOT NULL,
+        base_branch TEXT    NOT NULL,
+        created_ms  INTEGER NOT NULL
+    );
+    -- A worktree cos created for a project. Agents run inside it.
+    CREATE TABLE workspaces (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects (id),
+        name        TEXT    NOT NULL,
+        title       TEXT    NOT NULL,
+        branch      TEXT    NOT NULL,
+        path        TEXT    NOT NULL UNIQUE,
+        base        TEXT    NOT NULL CHECK (base IN ('origin', 'head')),
+        base_ref    TEXT    NOT NULL,
+        base_commit TEXT    NOT NULL,
+        created_ms  INTEGER NOT NULL,
+        UNIQUE (project_id, name)
+    );
+",
+];
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+
+    #[error("the database has schema version {found}, but this cos only knows up to {known}; update cos")]
+    TooNew { found: usize, known: usize },
+
+    #[error("event #{seq} in the database is unreadable: {reason}")]
+    Corrupt { seq: u64, reason: String },
+}
+
+/// The database, behind a lock. Calls are short (single-row writes, small
+/// reads), so they run directly on the async runtime.
+pub struct Store {
+    conn: Mutex<Connection>,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> Result<Self, StoreError> {
+        Self::init(Connection::open(path)?)
+    }
+
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(mut conn: Connection) -> Result<Self, StoreError> {
+        // In-memory databases answer "memory" here, which is fine.
+        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        migrate(&mut conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    /// Stores a new event. `then` runs before the lock is released, so
+    /// whatever it does (publishing the event) happens in sequence order.
+    pub(crate) fn append_event(
+        &self,
+        kind: &str,
+        run_id: Option<&str>,
+        data: Value,
+        then: impl FnOnce(&LoggedEvent),
+    ) -> Result<LoggedEvent, StoreError> {
+        let conn = self.lock();
+        // Stored with millisecond precision, so keep the same precision here.
+        let ts = Timestamp::from_millisecond(Timestamp::now().as_millisecond())
+            .expect("the current time is in range");
+        conn.execute(
+            "INSERT INTO events (ts_ms, kind, run_id, data) VALUES (?1, ?2, ?3, ?4)",
+            params![ts.as_millisecond(), kind, run_id, data.to_string()],
+        )?;
+        let event = LoggedEvent {
+            seq: conn.last_insert_rowid() as u64,
+            ts,
+            kind: kind.to_owned(),
+            run_id: run_id.map(str::to_owned),
+            data,
+        };
+        then(&event);
+        Ok(event)
+    }
+
+    /// Up to `limit` events with a sequence number above `after`, oldest first.
+    pub(crate) fn events_after(&self, after: u64, limit: usize) -> Result<Vec<LoggedEvent>, StoreError> {
+        let conn = self.lock();
+        let mut query = conn.prepare_cached(
+            "SELECT seq, ts_ms, kind, run_id, data FROM events WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+        )?;
+        let rows = query.query_map(params![after as i64, limit as i64], read_event)?;
+        rows.map(|row| row?).collect()
+    }
+
+    /// How many events are stored, and the highest sequence number (0 if none).
+    pub(crate) fn event_stats(&self) -> Result<(u64, u64), StoreError> {
+        let (count, last): (i64, i64) =
+            self.lock()
+                .query_row("SELECT COUNT(*), COALESCE(MAX(seq), 0) FROM events", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+        Ok((count as u64, last as u64))
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
+    let applied: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let applied = applied as usize;
+    if applied > MIGRATIONS.len() {
+        return Err(StoreError::TooNew {
+            found: applied,
+            known: MIGRATIONS.len(),
+        });
+    }
+    let tx = conn.transaction()?;
+    for migration in &MIGRATIONS[applied..] {
+        tx.execute_batch(migration)?;
+    }
+    tx.pragma_update(None, "user_version", MIGRATIONS.len() as i64)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Reads one `events` row. A row that can't be decoded is reported as
+/// corrupt rather than as a SQLite error.
+fn read_event(row: &Row<'_>) -> rusqlite::Result<Result<LoggedEvent, StoreError>> {
+    let seq = row.get::<_, i64>(0)? as u64;
+    let ts_ms: i64 = row.get(1)?;
+    let data: String = row.get(4)?;
+    let corrupt = |reason: String| StoreError::Corrupt { seq, reason };
+
+    let ts = match Timestamp::from_millisecond(ts_ms) {
+        Ok(ts) => ts,
+        Err(error) => return Ok(Err(corrupt(error.to_string()))),
+    };
+    let data = match serde_json::from_str(&data) {
+        Ok(data) => data,
+        Err(error) => return Ok(Err(corrupt(error.to_string()))),
+    };
+    Ok(Ok(LoggedEvent {
+        seq,
+        ts,
+        kind: row.get(2)?,
+        run_id: row.get(3)?,
+        data,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn append(store: &Store, kind: &str) -> LoggedEvent {
+        store.append_event(kind, None, json!({}), |_| {}).unwrap()
+    }
+
+    #[test]
+    fn events_get_increasing_sequence_numbers() {
+        let store = Store::open_in_memory().unwrap();
+
+        let first = append(&store, "a");
+        let second = append(&store, "b");
+
+        assert_eq!((first.seq, second.seq), (1, 2));
+        assert_eq!(store.event_stats().unwrap(), (2, 2));
+    }
+
+    #[test]
+    fn events_after_pages_in_order() {
+        let store = Store::open_in_memory().unwrap();
+        for kind in ["a", "b", "c", "d"] {
+            append(&store, kind);
+        }
+
+        let page = store.events_after(1, 2).unwrap();
+
+        assert_eq!(
+            page.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+            ["b", "c"]
+        );
+        assert!(store.events_after(4, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stored_events_read_back_unchanged() {
+        let store = Store::open_in_memory().unwrap();
+        let written = store
+            .append_event("run.started", Some("run-1"), json!({ "goal": "x" }), |_| {})
+            .unwrap();
+
+        let read = store.events_after(0, 1).unwrap().remove(0);
+
+        assert_eq!(read, written);
+    }
+
+    #[test]
+    fn database_survives_reopening_and_never_reuses_a_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cos.db");
+        {
+            let store = Store::open(&path).unwrap();
+            append(&store, "a");
+            append(&store, "b");
+            store
+                .lock()
+                .execute("DELETE FROM events WHERE seq = 2", [])
+                .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.event_stats().unwrap(), (1, 1));
+        assert_eq!(append(&store, "c").seq, 3);
+    }
+
+    #[test]
+    fn newer_schema_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cos.db");
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 99)
+            .unwrap();
+
+        let error = Store::open(&path).err().expect("open should fail");
+
+        assert!(matches!(error, StoreError::TooNew { found: 99, .. }), "{error}");
+    }
+
+    #[test]
+    fn unreadable_rows_are_reported_as_corrupt() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .lock()
+            .execute(
+                "INSERT INTO events (ts_ms, kind, data) VALUES (0, 'x', 'not json')",
+                [],
+            )
+            .unwrap();
+
+        let error = store.events_after(0, 10).expect_err("read should fail");
+
+        assert!(matches!(error, StoreError::Corrupt { seq: 1, .. }), "{error}");
+    }
+}
