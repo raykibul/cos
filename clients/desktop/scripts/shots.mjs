@@ -32,6 +32,11 @@ const shots = [
   ["run-running", "page=run:10"],
   ["run-plan", "page=run:11"],
   ["run-done", "page=run:7"],
+  [
+    "run-chief-terminal",
+    "page=run:10",
+    (page) => page.getByRole("button", { name: "Chief", exact: true }).click(),
+  ],
   ["not-running", "daemon=off"],
   ["sheet-new-agent", "page=workspace:3&dialog=newAgent:3"],
   ["sheet-new-run", "page=workspace:4&dialog=newRun:4"],
@@ -59,13 +64,14 @@ try {
       deviceScaleFactor: 1,
       colorScheme: scheme,
     });
-    for (const [name, query] of shots) {
+    for (const [name, query, action] of shots) {
       if (only && !name.startsWith(only)) continue;
       const page = await context.newPage();
       page.on("pageerror", (error) => console.error(`${name}: ${error.message}`));
       await page.goto(`http://127.0.0.1:4180/?static&${query}`);
       await page.waitForLoadState("networkidle");
       await page.evaluate(() => document.fonts.ready);
+      if (action) await action(page);
       // Let the store load and terminals draw their snapshot.
       await page.waitForTimeout(1500);
       const file = join(out, `${name}-${scheme}.png`);
