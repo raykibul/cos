@@ -14,7 +14,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 - **Approval:** a permission request from an agent, waiting for an answer. It can be answered:
   - in the app or CLI (`allow` or `deny`),
   - by someone typing in the agent's terminal (then it's `settled`),
-  - by a rule later (the approvals engine).
+  - for agents a run starts: by Rust rules straight away, or by the run's chief within your limits (see [approvals.md](approvals.md#daemon-wiring)). Agents you start always ask you.
 
 ## Agent JSON
 
@@ -78,7 +78,8 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 | `GET /v1/agents/{id}/terminal` | | SSE stream of the terminal (below) |
 | `GET /v1/approvals?state=pending` | | `{"approvals": [Approval]}`, newest first. Without `state`, every approval. |
 | `GET /v1/approvals/{id}` | | Approval |
-| `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. |
+| `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. You can answer any pending approval, including one routed to the chief. |
+| `POST /v1/approvals/{id}/chief` | `{"decision": "allow" \| "deny", "reason"}` | 200 Approval: the chief's `approval_decide`. 400 an allow without a reason, 403 when the run's limits refuse it (the approval then waits for you), 409 no longer pending. See [daemon.md](daemon.md#approvals-policy). |
 
 ### Terminal stream
 
@@ -121,7 +122,10 @@ data: {"exit_code":0}
   "decided_by": null,
   "message": null,
   "created_ms": 1792611174811,
-  "decided_ms": null
+  "decided_ms": null,
+  "tier": "chief",
+  "route": "user",
+  "reason": "changes or downloads dependencies (npm install); installing packages needs the Trusted preset"
 }
 ```
 
@@ -131,6 +135,10 @@ data: {"exit_code":0}
   - `settled`: answered in the terminal, or the tool went ahead some other way,
   - `expired`: nobody answered in 5 minutes, so it was denied and the agent told to carry on without that step. Only for agents a run starts; yours wait for you.
 - **`decided_by`:** `user`, `terminal`, `rule` or `chief`, or null when nobody decided: `expired`, or `settled` because the agent exited or the daemon restarted while it was pending.
+- **`tier`:** how the approvals policy classified the request: `allowed`, `chief`, `ask_user` or `never_delegated` (see [approvals.md](approvals.md#tiers)). Null on approvals from before the policy.
+- **`route`:** who answers it: `auto` (Rust rules allowed it at once, `state: allowed, decided_by: rule`; nobody is notified), `chief` (waiting for the run's chief) or `user` (waiting for you). A chief answer the limits refuse moves it from `chief` to `user`. Agents you start are always `user`.
+- **`reason`:** the policy's one-line reason; for a chief-tier request that came to you, also why it didn't go to the chief.
+- **`message`:** the message sent with a denial, or the chief's reason when the chief answered.
 - **`settled` by `terminal`:** the request's hook was withdrawn (Claude stopped waiting, which is what happens when someone answers in the terminal), or the agent's next hook arrived first. The real CLI doesn't always kill a waiting hook promptly when the terminal answers, so the next hook is the reliable signal.
 - **`tool_use_id`:** taken from the `PreToolUse` just before the request, since `PermissionRequest` has none.
 - **`summary`:** the tool and its main argument, such as `Bash npm install left-pad` or `Write /path/to/file`.
@@ -146,8 +154,9 @@ These go in the event log, so apps get them over `/v1/events/stream`. `data` hol
 | `agent.state_changed` | `{agent_id, state, from}` |
 | `agent.exited` | `{agent_id, exit_code}` |
 | `agent.removed` | `{agent_id}` |
-| `approval.requested` | `{approval_id, agent_id, summary}` |
-| `approval.decided` | `{approval_id, state, decided_by}` |
+| `approval.requested` | `{approval_id, agent_id, summary, tier, route}`. Not logged for `auto` approvals. |
+| `approval.decided` | `{approval_id, state, decided_by}`, plus `route: "auto"` for approvals Rust rules allowed |
+| `approval.routed` | `{approval_id, route, tier, run_id, agent_id, summary, reason}`: sent to the chief, or moved to you. The event's `run_id` is set. |
 
 Terminal output is never in the event log; it's too much data.
 
@@ -171,6 +180,6 @@ Terminal output is never in the event log; it's too much data.
 - **One hook socket:** every agent's hooks go to one listener at `<home>/hooks.sock`, routed by `session_id`. The daemon picks the session id (`--session-id`) and registers it before Claude starts, so even the first hook finds its agent.
 - **The claude binary:** `COS_CLAUDE_BIN`, else `claude` on the daemon's `PATH`. Agents get a clean environment: the daemon's own Claude variables (`CLAUDE_CODE_*`, `CLAUDECODE`) are removed, `CLAUDE_CONFIG_DIR` is kept.
 - **Trust:** the daemon watches the screen for Claude's trust dialog only to set `needs_trust`; everything else comes from hooks.
-- **Pending approvals and decisions:** each `PermissionRequest` goes through a decision seam first (`daemon::agents::hooks::decide`). It answers nothing yet; the approvals policy (`cos-policy`, [approvals.md](approvals.md)) plugs in there, which is where `rule` and `chief` come from.
+- **Pending approvals and decisions:** each `PermissionRequest` is classified by the approvals policy (`cos-policy`, `daemon::agents::approvals`) first; see [approvals.md](approvals.md#daemon-wiring).
 - **Daemon restarts:** agents still running when the daemon starts again (after a crash) become `interrupted` and their pending approvals `settled`. A daemon that stops normally ends its agents first (`/exit`, then kill), and marks them `interrupted` so `resume` brings them back.
 - **Workspaces:** `DELETE /v1/workspaces/{id}` is 409 while an agent runs in it. Removing a workspace forgets its agents and their approvals.

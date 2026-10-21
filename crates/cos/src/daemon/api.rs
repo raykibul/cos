@@ -12,6 +12,8 @@
 //! - Devices and remote access: [`super::remote_api`], "Remote access" in
 //!   `docs/daemon.md`. The same routes are served on the tailnet listener.
 //! - Runs, plans and tasks: see [`super::runs_api`].
+//! - Chief answers to approvals and per-run limits: [`super::approvals_api`],
+//!   "Approvals policy" in `docs/daemon.md`.
 //!
 //! Errors are `{"error": "..."}` with a message meant for the user.
 
@@ -112,6 +114,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::remote_api::routes())
         .merge(super::runs_api::routes())
         .merge(super::agents_api::routes())
+        .merge(super::approvals_api::routes())
         .with_state(state)
 }
 

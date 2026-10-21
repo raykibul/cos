@@ -205,6 +205,19 @@ fn print_approval(approval: &Approval) {
         first_line(&approval.summary, 120),
         ago(approval.created_ms)
     );
+    if let Some(route) = approval.route {
+        let who = match route {
+            cos_core::ApprovalRoute::User => "for you",
+            cos_core::ApprovalRoute::Chief => "for the chief",
+            cos_core::ApprovalRoute::Auto => "by cos's rules",
+        };
+        let reason = approval
+            .reason
+            .as_deref()
+            .map(|reason| format!(": {}", first_line(reason, 110)))
+            .unwrap_or_default();
+        println!("      {who}{reason}");
+    }
 }
 
 /// The serde name of a unit enum variant, such as `waiting_approval`.

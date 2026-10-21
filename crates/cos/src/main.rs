@@ -2,7 +2,7 @@
 //!
 //! `cos daemon` runs the long-lived process; `cos status`, `cos events`,
 //! `cos project`, `cos workspace` and the run commands (`cos run`, `cos runs`,
-//! `cos board`, `cos approve-plan`, `cos cancel`) talk to it over `~/.cos/cos.sock`, or to
+//! `cos board`, `cos approve-plan`, `cos cancel`, `cos limits`) talk to it over `~/.cos/cos.sock`, or to
 //! another machine's daemon over the tailnet with `--host`. `cos remote` and
 //! `cos devices` manage that remote access. `cos agent`, `cos agents`,
 //! `cos approvals`, `cos allow` and `cos deny` drive the agents the daemon
@@ -19,6 +19,7 @@ mod daemon;
 mod devices_cmd;
 mod home;
 mod launchd;
+mod limits_cmd;
 mod projects_cmd;
 mod runs_cmd;
 mod sessions_cmd;
@@ -71,6 +72,8 @@ enum Command {
     ApprovePlan(runs_cmd::RunRef),
     /// Cancel a run and its unfinished tasks.
     Cancel(runs_cmd::CancelArgs),
+    /// Show or change how much the chief may approve for you in a run.
+    Limits(limits_cmd::LimitsArgs),
     /// Run one prompt through Claude Code and answer its permission requests here (no daemon).
     Try(try_cmd::TryArgs),
     /// List the Claude sessions running on this Mac, including ones cos didn't start.
@@ -156,6 +159,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Board(args) => runs_cmd::board(&home, args).await,
         Command::ApprovePlan(args) => runs_cmd::approve_plan(&home, args).await,
         Command::Cancel(args) => runs_cmd::cancel(&home, args).await,
+        Command::Limits(args) => limits_cmd::limits(&home, args).await,
         Command::Try(args) => try_cmd::run(args).await,
         Command::Sessions(args) => sessions_cmd::run(&home, args).await,
         Command::Hook => unreachable!("handled above"),

@@ -39,6 +39,9 @@ pub mod kind {
     pub const AGENT_REMOVED: &str = "agent.removed";
     pub const APPROVAL_REQUESTED: &str = "approval.requested";
     pub const APPROVAL_DECIDED: &str = "approval.decided";
+    // The approvals policy; see `docs/approvals.md`.
+    pub const APPROVAL_ROUTED: &str = "approval.routed";
+    pub const RUN_LIMITS_CHANGED: &str = "run.limits_changed";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

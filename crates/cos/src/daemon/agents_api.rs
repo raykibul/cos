@@ -325,6 +325,7 @@ impl From<AgentError> for ApiError {
             AgentError::Invalid(_) => StatusCode::BAD_REQUEST,
             AgentError::NotFound(_) => StatusCode::NOT_FOUND,
             AgentError::Conflict(_) => StatusCode::CONFLICT,
+            AgentError::Forbidden(_) => StatusCode::FORBIDDEN,
             AgentError::Failed(_) | AgentError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {

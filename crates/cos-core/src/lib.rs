@@ -16,6 +16,7 @@ pub mod taskgit;
 pub use agents::{
     Agent, AgentState, Agents, Approval, ApprovalState, DecidedBy, NewAgent, NewApproval, Role,
 };
+pub use agents::{ApprovalRoute, ApprovalTier};
 pub use devices::{Device, DeviceError, DeviceState, Devices, SeenDevice};
 pub use events::{EventLog, LoggedEvent, Subscription};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};
@@ -23,6 +24,7 @@ pub use runs::{
     ApprovalPreset, Board, NewRun, PlanProposal, ProposedTask, Run, RunError, RunState, RunSummary, Runs,
     Task, TaskCounts, TaskState, render_board,
 };
+pub use runs::{LimitsChange, RunLimits};
 pub use store::{Store, StoreError};
 pub use taskgit::{
     Change, ChangeStatus, DiffSummary, MergeOutcome, Scope, ScopeReport, TaskGitError, TaskWorktree,

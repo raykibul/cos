@@ -14,7 +14,7 @@ PermissionRequest hook / can_use_tool
   → AuditRecord           → report section "Approved on your behalf (N)"
 ```
 
-Unanswered requests are refused after 5 minutes (`timeout::unanswered`), and the worker is told to carry on without that step.
+Unanswered requests are refused after 5 minutes (`timeout::UNANSWERED_AFTER`), and the worker is told to carry on without that step (`timeout::UNANSWERED_MESSAGE`). How the daemon fills in the request is under [Daemon wiring](#daemon-wiring).
 
 ## Tiers
 
@@ -96,6 +96,23 @@ Every answer becomes an `AuditRecord` {request id, time, role, tool, summary, ti
 Rust rules allowed 41 routine requests, the chief refused 1.
 ```
 
+## Daemon wiring
+
+The daemon calls the policy for every permission request of an agent it runs; how it does that (routes, events, storage) is in "Approvals policy" in [daemon.md](daemon.md#approvals-policy). What it fills in:
+
+| `ApprovalRequest` field | Worker / reviewer | Chief | Your own agent |
+|---|---|---|---|
+| `worktree_root` | the task's worktree (the workspace if the task isn't known) | the workspace | the workspace |
+| `scope` | the task's `files` (nothing if the task isn't known) | nothing | everything |
+| `test_command` | the task's | none | none |
+| `role` | `worker` / `reviewer` | `chief` | `user-session` |
+| `cwd`, `home` | the hook's `cwd`, `$HOME` | same | same |
+
+- **Which task:** the daemon asks a `TaskLookup` (`daemon::agents::approvals`) which task a worker or reviewer works on, and only trusts a task of the agent's own run. Once agents record their task (`agents.task_id`), the lookup reads that.
+- **Nothing in scope for the chief:** it explores read-only, so its edits are chief tier, and the chief can't approve its own requests, so they come to you.
+- **Your own agents** are classified only so the apps can show the tier and reason; they always ask you.
+- **Who answered** is stored on the approval (`decided_by`: `rule`, `chief`, `user`, `terminal`, or none for `expired`), and in the run's audit trail for the report.
+
 ## Known gaps
 
 These go to you, or rely on the chief and review rather than on rules:
@@ -105,3 +122,4 @@ These go to you, or rely on the chief and review rather than on rules:
 - Loop variables over command output (`for f in $(git ls-files)`) and `cd "$(…)"` make paths unknown, so those commands ask you.
 - Without the `Filesystem` probe, symlinks already inside the worktree aren't followed.
 - Git aliases, cargo plugins and unknown programs ask you.
+- `POST /v1/approvals/{id}/chief` doesn't check that the caller is the run's chief: anyone who can reach the API can answer as the chief, within the limits. That's no more than they could do with `POST /v1/approvals/{id}`.

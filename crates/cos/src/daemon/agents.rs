@@ -13,6 +13,7 @@
 //!   restart; agents that were running come back as `interrupted`.
 //! - [`sessions`] lists the Claude sessions the daemon didn't start.
 
+mod approvals;
 mod hooks;
 #[cfg(test)]
 mod tests;
@@ -24,7 +25,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use cos_core::{
-    Agent, AgentState, Agents, Approval, ApprovalState, NewAgent, ProjectError, Projects, Role, StoreError,
+    Agent, AgentState, Agents, Approval, ApprovalState, NewAgent, ProjectError, Projects, Role, Runs,
+    StoreError,
 };
 use cos_harness::claude::hooks::{HookEvent, HookServer};
 use cos_harness::{
@@ -33,6 +35,8 @@ use cos_harness::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+
+pub(crate) use approvals::{NoTasks, TaskLookup};
 
 use crate::home::CosHome;
 
@@ -48,7 +52,8 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the daemon gives its agents to exit when it stops itself.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
 /// How long an unanswered approval waits for agents not started by a person.
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const APPROVAL_TIMEOUT: Duration =
+    Duration::from_secs(cos_policy::timeout::UNANSWERED_AFTER.as_secs() as u64);
 /// Between pressing Esc to end a turn and typing `/exit`.
 const INTERRUPT_PAUSE: Duration = Duration::from_millis(300);
 /// How often a stopping agent is checked for having exited.
@@ -116,6 +121,9 @@ pub(crate) enum AgentError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    /// Not allowed for who asked, such as a chief answer the limits refuse.
+    #[error("{0}")]
+    Forbidden(String),
     /// Claude couldn't be started or driven.
     #[error("{0}")]
     Failed(String),
@@ -192,6 +200,10 @@ pub(crate) struct AgentManager {
 struct Inner {
     agents: Agents,
     projects: Arc<Projects>,
+    /// Runs and tasks, for the approvals policy: limits, scopes, the audit.
+    runs: Arc<Runs>,
+    /// Which task a worker or reviewer works on.
+    task_lookup: Mutex<Arc<dyn TaskLookup>>,
     config: AgentConfig,
     live: Mutex<Live>,
     /// Kept for its socket; dropping it stops the hooks.
@@ -235,6 +247,7 @@ impl AgentManager {
     pub(crate) fn start(
         agents: Agents,
         projects: Arc<Projects>,
+        runs: Arc<Runs>,
         config: AgentConfig,
     ) -> anyhow::Result<Self> {
         let (hook_server, hook_events) = HookServer::bind(&config.hook_socket).map_err(|error| {
@@ -248,6 +261,8 @@ impl AgentManager {
         let inner = Arc::new(Inner {
             agents,
             projects,
+            runs,
+            task_lookup: Mutex::new(Arc::new(NoTasks)),
             config,
             live: Mutex::default(),
             _hook_server: hook_server,
@@ -429,6 +444,25 @@ impl AgentManager {
             .agents
             .approval(id)?
             .ok_or_else(|| AgentError::NotFound(format!("there is no approval {id}")))
+    }
+
+    /// Tells the approvals policy which task each worker and reviewer works
+    /// on. Until then they are judged against their workspace with nothing
+    /// in scope.
+    #[allow(dead_code, reason = "the pipeline sets it until agents record their task")]
+    pub(crate) fn set_task_lookup(&self, lookup: Arc<dyn TaskLookup>) {
+        *self
+            .inner
+            .task_lookup
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = lookup;
+    }
+
+    /// Answers a pending approval for the run's chief (`approval_decide`),
+    /// within the run's limits. A refused allow goes to the user and comes
+    /// back as [`AgentError::Forbidden`].
+    pub(crate) fn chief_decide(&self, id: i64, allow: bool, reason: &str) -> Result<Approval, AgentError> {
+        self.inner.chief_answer(id, allow, reason)
     }
 
     /// Answers a pending approval for the user.

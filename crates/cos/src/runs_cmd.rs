@@ -172,7 +172,7 @@ pub(crate) async fn cancel(home: &CosHome, args: CancelArgs) -> anyhow::Result<E
 
 /// Which runs a command can default to.
 #[derive(Clone, Copy, PartialEq)]
-enum Which {
+pub(crate) enum Which {
     /// Any run; falls back to the newest one if none is unfinished.
     Any,
     Unfinished,
@@ -180,7 +180,7 @@ enum Which {
 }
 
 /// The run a command means when none is named.
-async fn current_run(client: &Client, which: Which) -> anyhow::Result<i64> {
+pub(crate) async fn current_run(client: &Client, which: Which) -> anyhow::Result<i64> {
     let runs = client.runs().await?;
     let projects = client.projects().await?;
     let here = current_dir()
