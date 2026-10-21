@@ -19,6 +19,12 @@
 //! `--resume <id>` continues session `<id>`; its `SessionStart` says
 //! `resume`. `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
 //! shows the trust dialog and only carries on after a down arrow and Return.
+//!
+//! **Scripted turns**, for pipeline tests: with `COS_FAKE_CLAUDE_SCRIPT`
+//! naming a JSON file, a session whose prompt holds a marker `[fake:<name>]`
+//! plays the script's turns for that name instead (see [`script`]). The
+//! marker is remembered for the session's later turns, and across a
+//! `--resume`. A bracketed paste arrives as one message, as in the real CLI.
 
 use std::io::{BufRead, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -27,6 +33,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+use crate::script::Script;
 
 pub(crate) fn run(args: &[String]) {
     let flag = |name: &str| {
@@ -41,10 +49,18 @@ pub(crate) fn run(args: &[String]) {
         .iter()
         .position(|arg| arg == "--")
         .and_then(|at| args.get(at + 1).cloned());
+    let id = flag("--session-id")
+        .or_else(|| flag("--resume"))
+        .unwrap_or_else(|| "fake-session".into());
+    // The reviewer is the one started read-only.
+    let role = if flag("--permission-mode").as_deref() == Some("plan") {
+        "reviewer"
+    } else {
+        "worker"
+    };
     let mut session = Session {
-        id: flag("--session-id")
-            .or_else(|| flag("--resume"))
-            .unwrap_or_else(|| "fake-session".into()),
+        script: Script::from_env(&id, role),
+        id,
         cwd: std::env::current_dir().unwrap_or_default().display().to_string(),
         settings,
         input: read_lines(),
@@ -83,6 +99,7 @@ pub(crate) fn run(args: &[String]) {
 
 struct Session {
     id: String,
+    script: Option<Script>,
     cwd: String,
     settings: Value,
     input: Receiver<String>,
@@ -106,7 +123,12 @@ impl Session {
                 std::thread::sleep(Duration::from_secs(3600));
             }
         }
-        let reply = if let Some((tool, input)) = asked_tool(prompt) {
+        let scripted = self.script.as_mut().and_then(|script| script.turn(prompt));
+        let reply = if let Some(turn) = scripted {
+            show("working…");
+            turn.play();
+            turn.say
+        } else if let Some((tool, input)) = asked_tool(prompt) {
             self.permission_turn(&tool, input)
         } else if prompt.contains("permission") {
             self.permission_turn("Bash", json!({ "command": "touch x" }))
@@ -264,10 +286,25 @@ fn terminal_answer(line: &str) -> String {
 }
 
 /// Lines typed into the terminal, read on a thread so a hook can run meanwhile.
+/// A bracketed paste (`ESC[200~` … `ESC[201~`) comes out as one line.
 fn read_lines() -> Receiver<String> {
     let (lines, receiver) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut pasting: Option<String> = None;
         for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            let line = match pasting.take() {
+                Some(mut pasted) => {
+                    pasted.push('\n');
+                    pasted.push_str(&line);
+                    pasted
+                }
+                None => line,
+            };
+            if line.contains(PASTE_START) && !line.contains(PASTE_END) {
+                pasting = Some(line);
+                continue;
+            }
+            let line = line.replace(PASTE_START, "").replace(PASTE_END, "");
             for part in split_escape(line) {
                 if lines.send(part).is_err() {
                     return;
@@ -277,6 +314,9 @@ fn read_lines() -> Receiver<String> {
     });
     receiver
 }
+
+const PASTE_START: &str = "\x1b[200~";
+const PASTE_END: &str = "\x1b[201~";
 
 /// The terminal is in line mode, so an Esc pressed on its own arrives with
 /// whatever is typed after it. Split it off so it reads as a key of its own

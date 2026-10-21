@@ -280,6 +280,19 @@ impl ClaudeTerminal {
         self.write(b"\r")
     }
 
+    /// Pastes `text` into Claude's prompt as one bracketed paste and presses
+    /// Return, so a message with several lines is sent as one message rather
+    /// than one per line.
+    pub async fn submit_pasted(&self, text: &str) -> Result<(), HarnessError> {
+        let mut bytes = Vec::with_capacity(text.len() + 12);
+        bytes.extend_from_slice(b"\x1b[200~");
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.extend_from_slice(b"\x1b[201~");
+        self.write(&bytes)?;
+        tokio::time::sleep(SUBMIT_PAUSE).await;
+        self.write(b"\r")
+    }
+
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), HarnessError> {
         lock(&self.master)
             .resize(PtySize {
