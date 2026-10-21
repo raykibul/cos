@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 cos-core = { path = "crates/cos-core" }
 cos-harness = { path = "crates/cos-harness" }
+cos-policy = { path = "crates/cos-policy" }
 
 anyhow = "1"
 axum = "0.8"
