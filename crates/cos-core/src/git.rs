@@ -125,3 +125,21 @@ pub(crate) async fn remove_worktree(root: &Path, path: &Path) -> Result<(), GitE
 pub(crate) async fn prune_worktrees(root: &Path) -> Result<(), GitError> {
     git(root, &["worktree", "prune"]).await.map(drop)
 }
+
+/// Runs `git -C <dir> <args>` and returns everything it produced, whatever its
+/// exit status. For commands whose exit code is the answer, and for output
+/// that must not be trimmed (`-z`, `--porcelain`).
+pub(crate) async fn output(dir: &Path, args: &[&str]) -> Result<std::process::Output, GitError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .kill_on_drop(true)
+        .output();
+    tokio::time::timeout(TIMEOUT, output)
+        .await
+        .map_err(|_| GitError(format!("git {} took longer than {TIMEOUT:?}", args.join(" "))))?
+        .map_err(|error| GitError(format!("could not run git: {error}")))
+}
