@@ -1,0 +1,754 @@
+//! The daemon's agent runtime: Claude sessions running in terminals the
+//! daemon owns, one per agent, in a workspace's folder. The contract with the
+//! apps is `docs/agents-api.md`.
+//!
+//! - Each agent is a [`ClaudeTerminal`]. Its output feeds a screen and is
+//!   streamed to whoever watches (see [`AgentManager::attach`]); watching
+//!   never slows the terminal down.
+//! - Every agent's hooks report to one [`HookServer`] at `<home>/hooks.sock`,
+//!   routed to agents by session id (see [`hooks`]). That's how the daemon
+//!   follows state and turns permission requests into approvals. The screen
+//!   is read only to spot the trust dialog.
+//! - Records live in the database ([`cos_core::Agents`]), so they survive a
+//!   restart; agents that were running come back as `interrupted`.
+//! - [`sessions`] lists the Claude sessions the daemon didn't start.
+
+mod hooks;
+mod sessions;
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Duration;
+
+use cos_core::{
+    Agent, AgentState, Agents, Approval, ApprovalState, EventLog, NewAgent, ProjectError, Projects, Role,
+    StoreError,
+};
+use cos_harness::claude::hooks::{HookEvent, HookServer};
+use cos_harness::{
+    ClaudeOptions, ClaudeTerminal, HarnessError, HookTarget, PermissionMode, TerminalAttach, TerminalEvent,
+    TerminalOptions,
+};
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+
+pub(crate) use sessions::{ExternalSession, place};
+
+use crate::home::CosHome;
+
+const DEFAULT_ROWS: u16 = 40;
+const DEFAULT_COLS: u16 = 120;
+/// Larger terminals are refused as a mistake.
+const MAX_SIZE: u16 = 1_000;
+/// A missing title becomes this many characters of the prompt.
+const TITLE_FROM_PROMPT: usize = 60;
+const MAX_TITLE_CHARS: usize = 200;
+/// How long `stop` waits for `/exit` before killing the process.
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the daemon gives its agents to exit when it stops itself.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long an unanswered approval waits for agents not started by a person.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// How often the list of other Claude sessions is checked for changes.
+const SESSION_POLL: Duration = Duration::from_secs(2);
+/// Between pressing Esc to end a turn and typing `/exit`.
+const INTERRUPT_PAUSE: Duration = Duration::from_millis(300);
+/// How often a stopping agent is checked for having exited.
+const EXIT_POLL: Duration = Duration::from_millis(50);
+
+/// The environment variable naming the `claude` binary agents run.
+pub(crate) const CLAUDE_BIN_ENV: &str = "COS_CLAUDE_BIN";
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentConfig {
+    /// The `claude` binary. A bare name is looked up on the daemon's PATH
+    /// when an agent starts, never through a shell, so shell functions and
+    /// aliases named `claude` don't apply.
+    pub claude: PathBuf,
+    /// The shell command Claude's hooks run, such as `'/usr/local/bin/cos' hook`.
+    pub hook_command: String,
+    pub hook_socket: PathBuf,
+    /// Extra environment for every agent's process.
+    pub env: Vec<(String, String)>,
+    /// How long approvals of non-`user` agents wait before they are denied.
+    pub approval_timeout: Duration,
+    pub stop_timeout: Duration,
+    pub shutdown_timeout: Duration,
+    /// Claude config dirs to read other sessions from.
+    pub claude_config_dirs: Vec<PathBuf>,
+    pub session_poll: Duration,
+}
+
+impl AgentConfig {
+    /// The daemon's settings: `claude` from `$COS_CLAUDE_BIN` or PATH, and
+    /// this binary's `cos hook` as the relay.
+    pub(crate) fn for_home(home: &CosHome) -> anyhow::Result<Self> {
+        let exe = std::env::current_exe()?;
+        Ok(Self {
+            claude: std::env::var_os(CLAUDE_BIN_ENV).map_or_else(|| PathBuf::from("claude"), PathBuf::from),
+            hook_command: format!("{} hook", crate::try_pty::shell_quote(&exe)),
+            hook_socket: home.hook_socket(),
+            env: Vec::new(),
+            approval_timeout: APPROVAL_TIMEOUT,
+            stop_timeout: STOP_TIMEOUT,
+            shutdown_timeout: SHUTDOWN_TIMEOUT,
+            claude_config_dirs: cos_harness::claude::registry::config_dirs(),
+            session_poll: SESSION_POLL,
+        })
+    }
+
+    /// For tests: `cos-fake-claude` as both Claude and the hook relay, files
+    /// in `dir`, short timeouts.
+    #[cfg(test)]
+    pub(crate) fn for_tests(dir: &Path) -> Self {
+        let fake = tests::fake_claude();
+        Self {
+            hook_command: format!("{} hook", crate::try_pty::shell_quote(&fake)),
+            claude: fake,
+            hook_socket: dir.join("hooks.sock"),
+            env: Vec::new(),
+            approval_timeout: APPROVAL_TIMEOUT,
+            stop_timeout: Duration::from_secs(2),
+            shutdown_timeout: Duration::from_secs(2),
+            claude_config_dirs: vec![dir.join("claude-config")],
+            session_poll: Duration::from_millis(100),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentError {
+    /// Bad input. The message is written for the user.
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
+    /// Claude couldn't be started or driven.
+    #[error("{0}")]
+    Failed(String),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+impl From<ProjectError> for AgentError {
+    fn from(error: ProjectError) -> Self {
+        match error {
+            ProjectError::Invalid(message) => Self::Invalid(message),
+            ProjectError::NotFound(message) => Self::NotFound(message),
+            ProjectError::Conflict(message) => Self::Conflict(message),
+            ProjectError::Store(error) => Self::Store(error),
+        }
+    }
+}
+
+impl From<HarnessError> for AgentError {
+    fn from(error: HarnessError) -> Self {
+        Self::Failed(error.to_string())
+    }
+}
+
+/// Body of `POST /v1/workspaces/{id}/agents`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(crate) struct StartAgent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// Load the user's own settings. Defaults to true for agents a person
+    /// starts, false for agents runs start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_settings: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<u16>,
+}
+
+/// `GET /v1/agents/{id}/screen`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Screen {
+    pub rows: u16,
+    pub cols: u16,
+    pub text: String,
+    /// `[row, col]`, counted from 0.
+    pub cursor: [u16; 2],
+}
+
+/// What someone opening an agent's terminal gets.
+pub(crate) enum TerminalView {
+    /// The terminal the daemon holds, running or exited.
+    Live(TerminalAttach),
+    /// The daemon has no terminal for it (it ran before a restart).
+    Gone {
+        rows: u16,
+        cols: u16,
+        exit_code: Option<i32>,
+    },
+}
+
+/// Runs the agents. Cheap to clone.
+#[derive(Clone)]
+pub(crate) struct AgentManager {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    log: EventLog,
+    agents: Agents,
+    projects: Arc<Projects>,
+    config: AgentConfig,
+    live: Mutex<Live>,
+    /// Kept for its socket; dropping it stops the hooks.
+    _hook_server: HookServer,
+}
+
+/// The daemon's in-memory side of its agents. Changes to an agent's record
+/// are made while this is locked, so they happen in a clear order.
+#[derive(Default)]
+struct Live {
+    /// Every agent with a terminal in this daemon, running or exited.
+    terminals: HashMap<i64, Running>,
+    /// Running agents by session id, for routing hooks.
+    by_session: HashMap<String, i64>,
+    /// Permission hooks waiting for an answer, by approval id.
+    waiting: HashMap<i64, hooks::Waiting>,
+    /// Approval ids by the hook id of their waiting hook.
+    hook_approvals: HashMap<u64, i64>,
+    /// The daemon is stopping: no new agents.
+    stopping: bool,
+}
+
+struct Running {
+    terminal: Arc<ClaudeTerminal>,
+    role: Role,
+    workspace_id: i64,
+    /// A hook has arrived, so Claude is past any trust dialog.
+    heard: bool,
+    /// The trust dialog was spotted, or answered through cos.
+    trust_seen: bool,
+    /// Tools that started (`PreToolUse`) and haven't finished, newest last.
+    open_tools: Vec<hooks::OpenTool>,
+    exited: bool,
+    /// Stopped by the daemon on its way down: it ends `interrupted`.
+    shutdown: bool,
+}
+
+impl AgentManager {
+    /// Listens for hooks, marks agents left running by an earlier daemon as
+    /// interrupted, and starts watching other Claude sessions.
+    pub(crate) fn start(
+        agents: Agents,
+        log: EventLog,
+        projects: Arc<Projects>,
+        config: AgentConfig,
+    ) -> anyhow::Result<Self> {
+        let (hook_server, hook_events) = HookServer::bind(&config.hook_socket).map_err(|error| {
+            anyhow::anyhow!("could not listen on {}: {error}", config.hook_socket.display())
+        })?;
+        agents.interrupt_running()?;
+        // Their hooks died with the daemon that heard them.
+        for approval in agents.approvals(Some(ApprovalState::Pending))? {
+            agents.decide_approval(approval.id, ApprovalState::Settled, None, None)?;
+        }
+        let inner = Arc::new(Inner {
+            log,
+            agents,
+            projects,
+            config,
+            live: Mutex::default(),
+            _hook_server: hook_server,
+        });
+        tokio::spawn(follow_hooks(Arc::downgrade(&inner), hook_events));
+        tokio::spawn(sessions::watch(Arc::downgrade(&inner)));
+        Ok(Self { inner })
+    }
+
+    pub(crate) fn list(
+        &self,
+        workspace_id: Option<i64>,
+        state: Option<AgentState>,
+    ) -> Result<Vec<Agent>, AgentError> {
+        Ok(self.inner.agents.list(workspace_id, state)?)
+    }
+
+    pub(crate) fn get(&self, id: i64) -> Result<Agent, AgentError> {
+        self.inner.agent(id)
+    }
+
+    /// Starts an agent in a workspace's folder, with `prompt` submitted
+    /// straight away if given.
+    pub(crate) fn start_agent(
+        &self,
+        workspace_id: i64,
+        role: Role,
+        run_id: Option<i64>,
+        request: &StartAgent,
+    ) -> Result<Agent, AgentError> {
+        let inner = &self.inner;
+        let workspace = inner.projects.workspace(workspace_id)?;
+        let mode = request.permission_mode.as_deref().unwrap_or("default");
+        mode.parse::<PermissionMode>().map_err(AgentError::Invalid)?;
+        let (rows, cols) = (
+            check_size(request.rows.unwrap_or(DEFAULT_ROWS))?,
+            check_size(request.cols.unwrap_or(DEFAULT_COLS))?,
+        );
+        let title = clean(request.title.as_deref(), MAX_TITLE_CHARS)
+            .or_else(|| clean(request.prompt.as_deref(), TITLE_FROM_PROMPT));
+        let session_id = ClaudeOptions::new(&workspace.path).session_id;
+
+        let agent = inner.agents.create(NewAgent {
+            workspace_id,
+            run_id,
+            role,
+            title,
+            session_id,
+            model: clean(request.model.as_deref(), MAX_TITLE_CHARS),
+            permission_mode: mode.to_owned(),
+            user_settings: request.user_settings.unwrap_or(role == Role::User),
+            rows,
+            cols,
+        })?;
+        let prompt = request.prompt.clone().filter(|prompt| !prompt.trim().is_empty());
+        inner
+            .launch(&agent, &workspace.path, prompt, false)
+            .inspect_err(|_| {
+                let _ = inner.agents.discard(agent.id);
+            })
+    }
+
+    /// Starts `claude --resume` for an exited or interrupted agent, as the
+    /// same agent.
+    pub(crate) fn resume(&self, id: i64) -> Result<Agent, AgentError> {
+        let inner = &self.inner;
+        let agent = inner.agent(id)?;
+        if agent.state.is_running() {
+            return Err(AgentError::Conflict(format!(
+                "agent {id} is still running; only an exited or interrupted agent can be resumed"
+            )));
+        }
+        let workspace = inner.projects.workspace(agent.workspace_id)?;
+        let agent = inner.agents.restart(id)?;
+        inner
+            .launch(&agent, &workspace.path, None, true)
+            .inspect_err(|_| {
+                let _ = inner.agents.finish(id, AgentState::Exited, None);
+            })
+    }
+
+    /// Types `text` and presses Return.
+    pub(crate) async fn input(&self, id: i64, text: &str) -> Result<(), AgentError> {
+        let terminal = self.inner.running_terminal(id)?.0;
+        Ok(terminal.submit(text).await?)
+    }
+
+    /// Sends raw keystrokes.
+    pub(crate) fn keys(&self, id: i64, bytes: &[u8]) -> Result<(), AgentError> {
+        let terminal = self.inner.running_terminal(id)?.0;
+        Ok(terminal.write(bytes)?)
+    }
+
+    pub(crate) fn resize(&self, id: i64, rows: u16, cols: u16) -> Result<(), AgentError> {
+        let (rows, cols) = (check_size(rows)?, check_size(cols)?);
+        let terminal = self.inner.running_terminal(id)?.0;
+        terminal.resize(rows, cols)?;
+        self.inner.agents.set_size(id, rows, cols)?;
+        Ok(())
+    }
+
+    /// Answers Claude's trust dialog with yes.
+    pub(crate) async fn trust(&self, id: i64) -> Result<(), AgentError> {
+        let (terminal, state) = self.inner.running_terminal(id)?;
+        if state != AgentState::NeedsTrust {
+            return Err(AgentError::Conflict(format!(
+                "agent {id} isn't asking whether to trust its folder"
+            )));
+        }
+        terminal.trust_folder().await?;
+        let _live = self.inner.live();
+        self.inner.agents.set_state(id, AgentState::Starting)?;
+        Ok(())
+    }
+
+    /// Asks the agent to exit (`/exit`), and kills it if it hasn't after the
+    /// stop timeout. Returns at once.
+    pub(crate) fn stop(&self, id: i64) -> Result<(), AgentError> {
+        let (terminal, state) = self.inner.running_terminal(id)?;
+        tokio::spawn(end_session(terminal, state, self.inner.config.stop_timeout));
+        Ok(())
+    }
+
+    /// Forgets an exited or interrupted agent.
+    pub(crate) fn remove(&self, id: i64) -> Result<(), AgentError> {
+        let mut live = self.inner.live();
+        let agent = self.inner.agent(id)?;
+        if agent.state.is_running() {
+            return Err(AgentError::Conflict(format!(
+                "agent {id} is still running; stop it first"
+            )));
+        }
+        live.terminals.remove(&id);
+        self.inner.agents.remove(id)?;
+        Ok(())
+    }
+
+    pub(crate) fn screen(&self, id: i64) -> Result<Screen, AgentError> {
+        let agent = self.inner.agent(id)?;
+        let terminal = self.inner.terminal(id);
+        Ok(match terminal {
+            Some(terminal) => {
+                let (rows, cols) = terminal.size();
+                let (row, col) = terminal.cursor();
+                Screen {
+                    rows,
+                    cols,
+                    text: terminal.screen(),
+                    cursor: [row, col],
+                }
+            }
+            None => Screen {
+                rows: agent.rows,
+                cols: agent.cols,
+                text: String::new(),
+                cursor: [0, 0],
+            },
+        })
+    }
+
+    /// The terminal for someone who starts watching it.
+    pub(crate) fn attach(&self, id: i64) -> Result<TerminalView, AgentError> {
+        let agent = self.inner.agent(id)?;
+        Ok(match self.inner.terminal(id) {
+            Some(terminal) => TerminalView::Live(terminal.attach()),
+            None => TerminalView::Gone {
+                rows: agent.rows,
+                cols: agent.cols,
+                exit_code: agent.exit_code,
+            },
+        })
+    }
+
+    pub(crate) fn approvals(&self, state: Option<ApprovalState>) -> Result<Vec<Approval>, AgentError> {
+        Ok(self.inner.agents.approvals(state)?)
+    }
+
+    pub(crate) fn approval(&self, id: i64) -> Result<Approval, AgentError> {
+        self.inner
+            .agents
+            .approval(id)?
+            .ok_or_else(|| AgentError::NotFound(format!("there is no approval {id}")))
+    }
+
+    /// Answers a pending approval for the user.
+    pub(crate) fn decide(
+        &self,
+        id: i64,
+        allow: bool,
+        message: Option<String>,
+    ) -> Result<Approval, AgentError> {
+        self.inner.answer(id, allow, message)
+    }
+
+    /// The Claude sessions running on this machine that the daemon didn't start.
+    pub(crate) async fn sessions(&self) -> Result<Vec<ExternalSession>, AgentError> {
+        let projects = self.inner.projects.list().await?;
+        let sessions = self.inner.external_sessions().await;
+        Ok(sessions
+            .into_iter()
+            .map(|session| ExternalSession::new(session, &projects))
+            .collect())
+    }
+
+    /// Removes a workspace, refusing while any of its agents runs. Its
+    /// exited agents are forgotten with it.
+    pub(crate) async fn remove_workspace(&self, id: i64) -> Result<(), AgentError> {
+        let agents = self.inner.agents.list(Some(id), None)?;
+        if let Some(agent) = agents.iter().find(|agent| agent.state.is_running()) {
+            return Err(AgentError::Conflict(format!(
+                "agent {} ({}) is still running in this workspace; stop it first",
+                agent.id, agent.title
+            )));
+        }
+        self.inner.projects.remove_workspace(id).await?;
+        let mut live = self.inner.live();
+        for agent in agents {
+            live.terminals.remove(&agent.id);
+            self.inner.agents.log_removed(agent.id)?;
+        }
+        Ok(())
+    }
+
+    /// Stops every running agent for a daemon on its way down, killing any
+    /// that haven't exited in time. They end up `interrupted`.
+    pub(crate) async fn shutdown(&self) {
+        let inner = &self.inner;
+        let stopping: Vec<(i64, Arc<ClaudeTerminal>)> = {
+            let mut live = inner.live();
+            live.stopping = true;
+            live.terminals
+                .iter_mut()
+                .filter(|(_, running)| !running.exited)
+                .map(|(id, running)| {
+                    running.shutdown = true;
+                    (*id, running.terminal.clone())
+                })
+                .collect()
+        };
+        let ends: Vec<_> = stopping
+            .iter()
+            .map(|(id, terminal)| {
+                let state = inner
+                    .agents
+                    .get(*id)
+                    .ok()
+                    .flatten()
+                    .map_or(AgentState::Idle, |agent| agent.state);
+                tokio::spawn(end_session(
+                    terminal.clone(),
+                    state,
+                    inner.config.shutdown_timeout,
+                ))
+            })
+            .collect();
+        for end in ends {
+            let _ = end.await;
+        }
+        // Each exit is recorded by its watcher; give them a moment, then
+        // record whatever is left.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        for (id, _) in &stopping {
+            while inner
+                .live()
+                .terminals
+                .get(id)
+                .is_some_and(|running| !running.exited)
+                && tokio::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(EXIT_POLL).await;
+            }
+            let _live = inner.live();
+            if inner.agent(*id).is_ok_and(|agent| agent.state.is_running()) {
+                let _ = inner.agents.finish(*id, AgentState::Interrupted, None);
+            }
+        }
+    }
+}
+
+impl Inner {
+    fn live(&self) -> MutexGuard<'_, Live> {
+        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn agent(&self, id: i64) -> Result<Agent, AgentError> {
+        self.agents
+            .get(id)?
+            .ok_or_else(|| AgentError::NotFound(format!("there is no agent {id}")))
+    }
+
+    fn terminal(&self, id: i64) -> Option<Arc<ClaudeTerminal>> {
+        self.live()
+            .terminals
+            .get(&id)
+            .map(|running| running.terminal.clone())
+    }
+
+    /// The terminal of a running agent, and its state. 409 once it exited.
+    fn running_terminal(&self, id: i64) -> Result<(Arc<ClaudeTerminal>, AgentState), AgentError> {
+        let agent = self.agent(id)?;
+        let terminal = self
+            .terminal(id)
+            .filter(|terminal| agent.state.is_running() && terminal.exit_status().is_none());
+        terminal.map(|terminal| (terminal, agent.state)).ok_or_else(|| {
+            AgentError::Conflict(format!(
+                "agent {id} is not running ({}); resume it first",
+                serde_json::to_value(agent.state)
+                    .ok()
+                    .and_then(|state| state.as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            ))
+        })
+    }
+
+    /// Spawns Claude for `agent` (already recorded as `starting`) and starts
+    /// following it.
+    fn launch(
+        self: &Arc<Self>,
+        agent: &Agent,
+        cwd: &Path,
+        prompt: Option<String>,
+        resume: bool,
+    ) -> Result<Agent, AgentError> {
+        if !cwd.is_dir() {
+            return Err(AgentError::Conflict(format!(
+                "the workspace folder {} is missing",
+                cwd.display()
+            )));
+        }
+        let mut claude = ClaudeOptions::new(cwd);
+        claude.binary = resolve_binary(&self.config.claude, std::env::var_os("PATH").as_deref())
+            .unwrap_or_else(|| self.config.claude.clone());
+        claude.session_id = agent.session_id.clone();
+        claude.resume = resume;
+        claude.model = agent.model.clone();
+        claude.permission_mode = agent.permission_mode.parse().map_err(AgentError::Invalid)?;
+        claude.env = self.config.env.clone();
+        let mut options = TerminalOptions::new(claude);
+        options.prompt = prompt;
+        // An agent you start is your own session, so by default your
+        // settings apply: allow rules, MCP servers, theme. Agents runs start
+        // get only the repo's settings, so nothing personal approves for them.
+        options.user_settings = agent.user_settings;
+        options.rows = agent.rows;
+        options.cols = agent.cols;
+        options.hooks = Some(HookTarget {
+            command: self.config.hook_command.clone(),
+            socket: self.config.hook_socket.clone(),
+        });
+
+        // Locked from before the spawn until the agent is registered, so its
+        // first hook can't arrive before the daemon knows the session.
+        let mut live = self.live();
+        if live.stopping {
+            return Err(AgentError::Conflict("the daemon is stopping".into()));
+        }
+        let (terminal, output) = ClaudeTerminal::spawn(options)?;
+        let terminal = Arc::new(terminal);
+        live.by_session.insert(agent.session_id.clone(), agent.id);
+        live.terminals.insert(
+            agent.id,
+            Running {
+                terminal: terminal.clone(),
+                role: agent.role,
+                workspace_id: agent.workspace_id,
+                heard: false,
+                trust_seen: false,
+                open_tools: Vec::new(),
+                exited: false,
+                shutdown: false,
+            },
+        );
+        let started = self.agents.started(agent.id, terminal.pid());
+        drop(live);
+        tokio::spawn(watch_output(Arc::downgrade(self), agent.id, output));
+        Ok(started?)
+    }
+
+    /// Output arrived. Before the first hook, check for the trust dialog.
+    fn on_output(&self, id: i64) {
+        let mut live = self.live();
+        let Some(running) = live.terminals.get_mut(&id) else {
+            return;
+        };
+        if running.heard || running.trust_seen || !running.terminal.asks_for_trust() {
+            return;
+        }
+        running.trust_seen = true;
+        if let Err(error) = self.agents.set_state(id, AgentState::NeedsTrust) {
+            tracing::error!(%error, agent = id, "could not record the trust dialog");
+        }
+    }
+
+    fn on_exit(&self, id: i64, code: Option<i32>) {
+        let mut live = self.live();
+        let shutdown = live.terminals.get_mut(&id).is_some_and(|running| {
+            running.exited = true;
+            running.shutdown
+        });
+        live.by_session.retain(|_, agent| *agent != id);
+        let state = if shutdown {
+            AgentState::Interrupted
+        } else {
+            AgentState::Exited
+        };
+        let result = self
+            .settle_all(&mut live, id, None)
+            .and_then(|()| self.agents.finish(id, state, code));
+        if let Err(error) = result {
+            tracing::error!(%error, agent = id, "could not record an agent's exit");
+        }
+    }
+}
+
+/// Routes every hook to its agent until the hook server stops.
+async fn follow_hooks(inner: Weak<Inner>, mut events: mpsc::UnboundedReceiver<HookEvent>) {
+    while let Some(event) = events.recv().await {
+        let Some(inner) = inner.upgrade() else { return };
+        inner.on_hook(event);
+    }
+}
+
+/// Feeds an agent's output to the trust check and records its exit.
+async fn watch_output(inner: Weak<Inner>, id: i64, mut output: mpsc::UnboundedReceiver<TerminalEvent>) {
+    while let Some(event) = output.recv().await {
+        let Some(inner) = inner.upgrade() else { return };
+        match event {
+            TerminalEvent::Output(_) => inner.on_output(id),
+            TerminalEvent::Exited { code } => {
+                inner.on_exit(id, code);
+                return;
+            }
+        }
+    }
+}
+
+/// Ends a Claude session: Esc to end a running turn, then `/exit`, then a
+/// kill if it hasn't exited within `timeout`.
+async fn end_session(terminal: Arc<ClaudeTerminal>, state: AgentState, timeout: Duration) {
+    if state == AgentState::NeedsTrust {
+        // The dialog takes no commands, and nothing has run yet.
+        terminal.kill();
+        return;
+    }
+    if matches!(state, AgentState::Working | AgentState::WaitingApproval) {
+        let _ = terminal.write(b"\x1b");
+        tokio::time::sleep(INTERRUPT_PAUSE).await;
+    }
+    let _ = terminal.submit("/exit").await;
+    let deadline = tokio::time::Instant::now() + timeout;
+    while terminal.exit_status().is_none() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(EXIT_POLL).await;
+    }
+    if terminal.exit_status().is_none() {
+        terminal.kill();
+    }
+}
+
+/// `name` as is if it is a path, else the first executable file called
+/// `name` in `path` (a PATH value). `None` if there is none.
+fn resolve_binary(name: &Path, path: Option<&OsStr>) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if name.components().count() > 1 {
+        return Some(name.to_owned());
+    }
+    std::env::split_paths(path?)
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
+}
+
+fn check_size(value: u16) -> Result<u16, AgentError> {
+    if value == 0 || value > MAX_SIZE {
+        return Err(AgentError::Invalid(format!(
+            "a terminal size must be between 1 and {MAX_SIZE}, not {value}"
+        )));
+    }
+    Ok(value)
+}
+
+/// The text on one line, trimmed and cut to `max` characters; `None` if empty.
+fn clean(text: Option<&str>, max: usize) -> Option<String> {
+    let text = text?.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then(|| text.chars().take(max).collect())
+}

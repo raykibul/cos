@@ -1,8 +1,9 @@
 //! Core state for cos: storage, the event log, projects with their
-//! workspaces, the tailnet devices allowed to reach the daemon, and runs
-//! with their tasks and board. The rest of the git work lands in later
-//! milestones (see `docs/proposal.md`).
+//! workspaces, the agents running in them, the tailnet devices allowed to
+//! reach the daemon, and runs with their tasks and board. The rest of the
+//! git work lands in later milestones (see `docs/proposal.md`).
 
+pub mod agents;
 mod cities;
 pub mod devices;
 pub mod events;
@@ -12,6 +13,9 @@ pub mod runs;
 mod store;
 pub mod taskgit;
 
+pub use agents::{
+    Agent, AgentState, Agents, Approval, ApprovalState, DecidedBy, NewAgent, NewApproval, Role,
+};
 pub use devices::{Device, DeviceError, DeviceState, Devices, SeenDevice};
 pub use events::{EventLog, LoggedEvent, Subscription};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};

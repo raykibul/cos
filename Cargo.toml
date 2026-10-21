@@ -14,8 +14,10 @@ cos-harness = { path = "crates/cos-harness" }
 cos-policy = { path = "crates/cos-policy" }
 
 anyhow = "1"
+base64 = "0.22"
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
+crossterm = { version = "0.29", default-features = false }
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

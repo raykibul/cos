@@ -286,4 +286,13 @@ cos/
   - **CosKit:** has every agents, approvals and sessions route. `TerminalStream` follows an agent's terminal and reconnects with a fresh snapshot. `DaemonMonitor` keeps agents, pending approvals and external sessions current from the event stream.
   - **Mac app:** the workspace page lists agents and starts new ones from a prompt. Each agent has a live SwiftTerm terminal page with Stop, Resume and Remove, a Trust banner and Allow/Deny banners. "Waiting on you" shows in the sidebar and the menu bar panel, and other Claude sessions are listed read-only.
   - **Socket fix:** the client's socket moved from Network.framework to plain POSIX sockets. Network sometimes dropped a response when the daemon wrote it and closed at once, which also made the existing tests flaky.
-- **Next:** the daemon's agent runtime (in progress), then milestone 4 wiring: the chief and workers launched through the runtime, `cos_core::taskgit` and `cos-policy` called from runs, and one run end to end.
+- **Agent runtime (daemon side of the terminals work): done.**
+  - **Agents:** the daemon runs Claude Code in PTYs it owns, any number per workspace. It follows them through hooks on one socket (`hooks.sock`, routed by session id) as `starting`, `needs_trust`, `working`, `waiting_approval`, `idle`, `exited` or `interrupted`.
+  - **Terminal:** streamed over SSE (a vt100 snapshot, then raw output, resizes and exit), with keys, text and resize routes.
+  - **Approvals:** permission requests become approvals you answer with `cos allow|deny` or the API. An answer typed in the terminal settles them. Approvals of run-started agents expire after 5 minutes. The decision seam where `cos-policy` plugs in answers nothing yet.
+  - **Lifecycle:** stop, resume (`claude --resume`) and forget. Agents survive a daemon restart as `interrupted`. A workspace with a running agent can't be removed.
+  - **Other sessions:** `GET /v1/sessions` lists the Mac's other Claude sessions, with `session.changed` events.
+  - **CLI:** `cos agent new|stop|resume|rm|say|screen|trust|attach`, `cos agents`, `cos approvals`.
+  - **Verified:** against `cos-fake-claude` in tests, and live with Claude 2.1.306 (haiku). Live runs covered start, idle/working, stop, resume into the same session, shutdown to `interrupted`, an approval answered through cos, one answered in the terminal, and the SSE snapshot.
+  - **Docs:** [agents-api.md](agents-api.md).
+- **Next:** milestone 4 wiring: the chief and workers launched through the agent runtime, `cos_core::taskgit` called from runs, `cos-policy` plugged into the daemon's approval decision seam, and one run end to end.

@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cos_harness::claude::hooks::{Hook, HookEvent, HookServer};
-use cos_harness::{ClaudeOptions, ClaudeTerminal, Decision, HookTarget, TerminalEvent, TerminalOptions};
+use cos_harness::{
+    ClaudeOptions, ClaudeTerminal, Decision, HookTarget, TerminalEvent, TerminalOptions, TerminalUpdate,
+};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -256,4 +258,53 @@ async fn resize_reaches_the_screen() {
     harness.terminal.resize(10, 50).unwrap();
     let screen = harness.terminal.screen();
     assert!(screen.lines().all(|line| line.chars().count() <= 50), "{screen}");
+}
+
+#[tokio::test]
+async fn watchers_get_a_snapshot_then_every_update() {
+    let mut harness = start("hello", |_| {}, None);
+    harness.screen_shows("echo: hello").await;
+
+    let mut attach = harness.terminal.attach();
+    assert_eq!((attach.rows, attach.cols), (40, 120));
+    assert_eq!(attach.exited, None);
+    // Fed to a fresh emulator, the snapshot redraws the same screen.
+    let size = |value: u16| std::num::NonZeroU16::new(value).unwrap();
+    let mut copy = vt100::Parser::new(size(attach.rows), size(attach.cols), 0);
+    copy.process(&attach.snapshot);
+    assert_eq!(copy.screen().contents(), harness.terminal.screen());
+
+    harness.terminal.resize(30, 100).unwrap();
+    harness.terminal.submit("again").await.unwrap();
+    let mut saw_resize = false;
+    let mut exiting = false;
+    let code = loop {
+        let update = tokio::time::timeout(WAIT, attach.updates.recv())
+            .await
+            .expect("no update")
+            .expect("updates ended");
+        match update {
+            TerminalUpdate::Resize { rows, cols } => {
+                assert_eq!((rows, cols), (30, 100));
+                copy.screen_mut().set_size(size(rows), size(cols));
+                saw_resize = true;
+            }
+            TerminalUpdate::Output(bytes) => {
+                copy.process(&bytes);
+                if !exiting && copy.screen().contents().contains("echo: again") {
+                    exiting = true;
+                    harness.terminal.submit("/exit").await.unwrap();
+                }
+            }
+            TerminalUpdate::Exited { code } => break code,
+        }
+    };
+    assert!(saw_resize);
+    assert_eq!(code, Some(0));
+
+    // Watching after the exit: the snapshot, and the exit straight away.
+    harness.exit_code().await;
+    let late = harness.terminal.attach();
+    assert_eq!(late.exited, Some(Some(0)));
+    assert_eq!(harness.terminal.exit_status(), Some(Some(0)));
 }

@@ -224,7 +224,7 @@ async fn sleep_until(deadline: Option<tokio::time::Instant>) {
 }
 
 /// Quotes a path for `sh`.
-fn shell_quote(path: &Path) -> String {
+pub(crate) fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 

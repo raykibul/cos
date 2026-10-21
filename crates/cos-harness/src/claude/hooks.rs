@@ -169,7 +169,17 @@ pub enum HookEvent {
 /// of sessions; [`Hook::session_id`] says which one a hook came from.
 pub struct HookServer {
     path: PathBuf,
+    /// The socket file this server created, so dropping it never removes a
+    /// newer server's socket at the same path.
+    file: Option<(u64, u64)>,
     task: JoinHandle<()>,
+}
+
+/// A file's device and inode.
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    std::fs::metadata(path).ok().map(|meta| (meta.dev(), meta.ino()))
 }
 
 impl HookServer {
@@ -182,6 +192,7 @@ impl HookServer {
         }
         let listener = UnixListener::bind(&path)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let file = file_id(&path);
 
         let (events, receiver) = mpsc::unbounded_channel();
         let ids = Arc::new(AtomicU64::new(1));
@@ -190,7 +201,7 @@ impl HookServer {
                 tokio::spawn(serve(stream, ids.clone(), events.clone()));
             }
         });
-        Ok((Self { path, task }, receiver))
+        Ok((Self { path, file, task }, receiver))
     }
 
     pub fn path(&self) -> &Path {
@@ -201,7 +212,9 @@ impl HookServer {
 impl Drop for HookServer {
     fn drop(&mut self) {
         self.task.abort();
-        let _ = std::fs::remove_file(&self.path);
+        if self.file.is_some() && file_id(&self.path) == self.file {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -274,6 +287,19 @@ mod tests {
             &mut output,
         );
         assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dropping_an_old_server_keeps_a_newer_ones_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.sock");
+        let (old, _) = HookServer::bind(&path).unwrap();
+        let (new, _) = HookServer::bind(&path).unwrap();
+
+        drop(old);
+        assert!(path.exists());
+        drop(new);
+        assert!(!path.exists());
     }
 
     #[test]

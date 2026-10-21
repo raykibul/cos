@@ -344,7 +344,7 @@ impl Projects {
             .ok_or_else(|| ProjectError::NotFound(format!("there is no project {id}")))
     }
 
-    fn workspace(&self, id: i64) -> Result<Workspace, ProjectError> {
+    pub fn workspace(&self, id: i64) -> Result<Workspace, ProjectError> {
         self.store
             .workspace(id)?
             .ok_or_else(|| ProjectError::NotFound(format!("there is no workspace {id}")))

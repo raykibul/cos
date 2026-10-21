@@ -35,6 +35,11 @@ impl CosHome {
         self.root.join("cos.sock")
     }
 
+    /// Where the hooks of the daemon's agents report (see `cos hook`).
+    pub(crate) fn hook_socket(&self) -> PathBuf {
+        self.root.join("hooks.sock")
+    }
+
     pub(crate) fn database(&self) -> PathBuf {
         self.root.join("cos.db")
     }
@@ -63,7 +68,8 @@ impl CosHome {
         // `mode` only applies to directories it creates; tighten an existing one too.
         fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))?;
 
-        let socket = self.socket();
+        // The hook socket has the longer name, so it is the one to check.
+        let socket = self.hook_socket();
         if socket.as_os_str().len() > MAX_SOCKET_PATH {
             bail!(
                 "socket path {} is longer than {MAX_SOCKET_PATH} bytes; set COS_HOME to a shorter directory",

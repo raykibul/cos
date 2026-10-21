@@ -1,0 +1,606 @@
+//! Agents (Claude sessions the daemon runs in terminals, in a workspace's
+//! folder) and their approvals (permission requests waiting for an answer),
+//! as stored in the database. The daemon owns the processes; this module keeps
+//! the records and logs every change to the event log. The contract with the
+//! apps is `docs/agents-api.md`.
+
+use std::str::FromStr;
+use std::sync::Arc;
+
+use jiff::Timestamp;
+use rusqlite::types::Type;
+use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::events::kind;
+use crate::{EventLog, Store, StoreError};
+
+/// `last_message` is cut to this many characters.
+pub const MAX_LAST_MESSAGE_CHARS: usize = 2_000;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Agent {
+    pub id: i64,
+    pub workspace_id: i64,
+    pub run_id: Option<i64>,
+    pub role: Role,
+    pub title: String,
+    pub session_id: String,
+    pub pid: Option<u32>,
+    pub state: AgentState,
+    pub model: Option<String>,
+    pub permission_mode: String,
+    /// Whether Claude loads the user's own settings (allow rules, MCP
+    /// servers). Without them only the repo's settings apply.
+    pub user_settings: bool,
+    pub rows: u16,
+    pub cols: u16,
+    pub started_ms: i64,
+    pub last_activity_ms: i64,
+    pub exited_ms: Option<i64>,
+    /// `None` if the process was killed, or hasn't exited.
+    pub exit_code: Option<i32>,
+    /// The last turn's final message, cut to [`MAX_LAST_MESSAGE_CHARS`].
+    pub last_message: Option<String>,
+    /// The newest approval of this agent that is still pending.
+    pub pending_approval_id: Option<i64>,
+}
+
+/// Who started an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    /// Someone started it from an app or the CLI.
+    User,
+    Chief,
+    Worker,
+    Reviewer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    /// Spawned; no hook yet.
+    Starting,
+    /// Claude is asking whether to trust the folder.
+    NeedsTrust,
+    /// A prompt is running.
+    Working,
+    /// A permission request is open.
+    WaitingApproval,
+    /// The turn ended; waiting for input.
+    Idle,
+    /// The process ended.
+    Exited,
+    /// It was running when the daemon stopped; it can be resumed.
+    Interrupted,
+}
+
+impl AgentState {
+    /// True while the agent's process is (or should be) running.
+    pub fn is_running(self) -> bool {
+        !matches!(self, Self::Exited | Self::Interrupted)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: i64,
+    pub agent_id: i64,
+    pub workspace_id: i64,
+    pub tool_name: String,
+    pub tool_input: Value,
+    /// From the `PreToolUse` just before the request; the request has none.
+    pub tool_use_id: Option<String>,
+    /// One line for people, such as `Bash npm install left-pad`.
+    pub summary: String,
+    pub state: ApprovalState,
+    pub decided_by: Option<DecidedBy>,
+    /// The message sent with a denial.
+    pub message: Option<String>,
+    pub created_ms: i64,
+    pub decided_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalState {
+    Pending,
+    /// Allowed through cos.
+    Allowed,
+    /// Denied through cos.
+    Denied,
+    /// Answered in the terminal, or the tool went ahead some other way.
+    Settled,
+    /// Nobody answered in time, so cos denied it.
+    Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecidedBy {
+    User,
+    Terminal,
+    Rule,
+    Chief,
+}
+
+/// What [`Agents::create`] needs.
+#[derive(Debug, Clone)]
+pub struct NewAgent {
+    pub workspace_id: i64,
+    pub run_id: Option<i64>,
+    pub role: Role,
+    /// `None` becomes "Agent N".
+    pub title: Option<String>,
+    pub session_id: String,
+    pub model: Option<String>,
+    pub permission_mode: String,
+    pub user_settings: bool,
+    pub rows: u16,
+    pub cols: u16,
+}
+
+/// What [`Agents::add_approval`] needs.
+#[derive(Debug, Clone)]
+pub struct NewApproval {
+    pub agent_id: i64,
+    pub workspace_id: i64,
+    pub tool_name: String,
+    pub tool_input: Value,
+    pub tool_use_id: Option<String>,
+    pub summary: String,
+}
+
+/// The agents and approvals tables, with every change logged.
+#[derive(Clone)]
+pub struct Agents {
+    store: Arc<Store>,
+    log: EventLog,
+}
+
+impl Agents {
+    pub fn new(store: Arc<Store>, log: EventLog) -> Self {
+        Self { store, log }
+    }
+
+    /// Records a new agent in `starting`. Logs nothing yet: the daemon calls
+    /// [`Self::started`] once its process is up, or [`Self::discard`].
+    pub fn create(&self, new: NewAgent) -> Result<Agent, StoreError> {
+        let id = {
+            let conn = self.store.lock();
+            let now = now_ms();
+            conn.execute(
+                "INSERT INTO agents (workspace_id, run_id, role, title, session_id, state, model,
+                     permission_mode, user_settings, term_rows, term_cols, started_ms, last_activity_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'starting', ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                params![
+                    new.workspace_id,
+                    new.run_id,
+                    as_text(&new.role),
+                    new.title.clone().unwrap_or_default(),
+                    new.session_id,
+                    new.model,
+                    new.permission_mode,
+                    new.user_settings,
+                    new.rows,
+                    new.cols,
+                    now,
+                ],
+            )?;
+            let id = conn.last_insert_rowid();
+            if new.title.is_none() {
+                conn.execute(
+                    "UPDATE agents SET title = ?2 WHERE id = ?1",
+                    params![id, format!("Agent {id}")],
+                )?;
+            }
+            id
+        };
+        self.require(id)
+    }
+
+    /// Forgets an agent whose process never started. Logs nothing.
+    pub fn discard(&self, id: i64) -> Result<(), StoreError> {
+        self.store
+            .lock()
+            .execute("DELETE FROM agents WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The process is up: records its pid and logs `agent.started`.
+    pub fn started(&self, id: i64, pid: Option<u32>) -> Result<Agent, StoreError> {
+        self.store
+            .lock()
+            .execute("UPDATE agents SET pid = ?2 WHERE id = ?1", params![id, pid])?;
+        let agent = self.require(id)?;
+        self.log.append(
+            kind::AGENT_STARTED,
+            None,
+            json!({
+                "agent_id": id,
+                "workspace_id": agent.workspace_id,
+                "role": agent.role,
+                "session_id": agent.session_id,
+            }),
+        )?;
+        Ok(agent)
+    }
+
+    /// Puts an exited or interrupted agent back in `starting` for a resume.
+    /// Logs `agent.state_changed`; [`Self::started`] follows.
+    pub fn restart(&self, id: i64) -> Result<Agent, StoreError> {
+        let from = self.require(id)?.state;
+        {
+            let conn = self.store.lock();
+            let now = now_ms();
+            conn.execute(
+                "UPDATE agents SET state = 'starting', pid = NULL, started_ms = ?2, last_activity_ms = ?2,
+                     exited_ms = NULL, exit_code = NULL
+                 WHERE id = ?1",
+                params![id, now],
+            )?;
+        }
+        self.log_state_change(id, AgentState::Starting, from)?;
+        self.require(id)
+    }
+
+    pub fn get(&self, id: i64) -> Result<Option<Agent>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!("{AGENT_SELECT} WHERE a.id = ?1"))?
+            .query_row([id], read_agent)
+            .optional()?)
+    }
+
+    /// Agents, newest first, optionally only those in one workspace or state.
+    pub fn list(
+        &self,
+        workspace_id: Option<i64>,
+        state: Option<AgentState>,
+    ) -> Result<Vec<Agent>, StoreError> {
+        let conn = self.store.lock();
+        let state = state.map(|state| as_text(&state));
+        Ok(conn
+            .prepare_cached(&format!(
+                "{AGENT_SELECT} WHERE (?1 IS NULL OR a.workspace_id = ?1) AND (?2 IS NULL OR a.state = ?2)
+                 ORDER BY a.id DESC"
+            ))?
+            .query_map(params![workspace_id, state], read_agent)?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// Moves a running agent to `state` and counts it as activity. Logs
+    /// `agent.state_changed` and returns the previous state if it changed.
+    /// Exited and interrupted agents are left alone; see [`Self::finish`].
+    pub fn set_state(&self, id: i64, state: AgentState) -> Result<Option<AgentState>, StoreError> {
+        let from = {
+            let conn = self.store.lock();
+            let Some(from) = current_state(&conn, id)? else {
+                return Ok(None);
+            };
+            if !from.is_running() {
+                return Ok(None);
+            }
+            conn.execute(
+                "UPDATE agents SET state = ?2, last_activity_ms = ?3 WHERE id = ?1",
+                params![id, as_text(&state), now_ms()],
+            )?;
+            from
+        };
+        if from == state {
+            return Ok(None);
+        }
+        self.log_state_change(id, state, from)?;
+        Ok(Some(from))
+    }
+
+    /// Records activity without a state change.
+    pub fn touch(&self, id: i64) -> Result<(), StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET last_activity_ms = ?2 WHERE id = ?1",
+            params![id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_last_message(&self, id: i64, message: &str) -> Result<(), StoreError> {
+        let message: String = message.chars().take(MAX_LAST_MESSAGE_CHARS).collect();
+        self.store.lock().execute(
+            "UPDATE agents SET last_message = ?2 WHERE id = ?1",
+            params![id, message],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_size(&self, id: i64, rows: u16, cols: u16) -> Result<(), StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET term_rows = ?2, term_cols = ?3 WHERE id = ?1",
+            params![id, rows, cols],
+        )?;
+        Ok(())
+    }
+
+    /// The agent's process ended. `state` is `Exited`, or `Interrupted` when
+    /// the daemon stopped it on its way down. Logs `agent.state_changed` and
+    /// `agent.exited`.
+    pub fn finish(&self, id: i64, state: AgentState, exit_code: Option<i32>) -> Result<(), StoreError> {
+        let from = {
+            let conn = self.store.lock();
+            let Some(from) = current_state(&conn, id)? else {
+                return Ok(());
+            };
+            let now = now_ms();
+            conn.execute(
+                "UPDATE agents SET state = ?2, exited_ms = ?3, exit_code = ?4, last_activity_ms = ?3
+                 WHERE id = ?1",
+                params![id, as_text(&state), now, exit_code],
+            )?;
+            from
+        };
+        if from != state {
+            self.log_state_change(id, state, from)?;
+        }
+        self.log.append(
+            kind::AGENT_EXITED,
+            None,
+            json!({ "agent_id": id, "exit_code": exit_code }),
+        )?;
+        Ok(())
+    }
+
+    /// Marks every agent that was running as `interrupted`, for a daemon
+    /// that starts after one that didn't stop cleanly. Returns their ids.
+    pub fn interrupt_running(&self) -> Result<Vec<i64>, StoreError> {
+        let running: Vec<(i64, AgentState)> = self
+            .list(None, None)?
+            .into_iter()
+            .filter(|agent| agent.state.is_running())
+            .map(|agent| (agent.id, agent.state))
+            .collect();
+        for &(id, from) in &running {
+            self.store
+                .lock()
+                .execute("UPDATE agents SET state = 'interrupted' WHERE id = ?1", [id])?;
+            self.log_state_change(id, AgentState::Interrupted, from)?;
+        }
+        Ok(running.into_iter().map(|(id, _)| id).collect())
+    }
+
+    /// Forgets an agent and its approvals. Logs `agent.removed`.
+    pub fn remove(&self, id: i64) -> Result<(), StoreError> {
+        self.store
+            .lock()
+            .execute("DELETE FROM agents WHERE id = ?1", [id])?;
+        self.log_removed(id)
+    }
+
+    /// Logs `agent.removed` for an agent the database already dropped, such
+    /// as one whose workspace was removed.
+    pub fn log_removed(&self, id: i64) -> Result<(), StoreError> {
+        self.log
+            .append(kind::AGENT_REMOVED, None, json!({ "agent_id": id }))?;
+        Ok(())
+    }
+
+    // ---- Approvals ----
+
+    /// Records a pending approval. Logs `approval.requested`.
+    pub fn add_approval(&self, new: NewApproval) -> Result<Approval, StoreError> {
+        let id = {
+            let conn = self.store.lock();
+            conn.execute(
+                "INSERT INTO approvals (agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary,
+                     state, created_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
+                params![
+                    new.agent_id,
+                    new.workspace_id,
+                    new.tool_name,
+                    new.tool_input.to_string(),
+                    new.tool_use_id,
+                    new.summary,
+                    now_ms(),
+                ],
+            )?;
+            conn.last_insert_rowid()
+        };
+        let approval = self.require_approval(id)?;
+        self.log.append(
+            kind::APPROVAL_REQUESTED,
+            None,
+            json!({ "approval_id": id, "agent_id": new.agent_id, "summary": approval.summary }),
+        )?;
+        Ok(approval)
+    }
+
+    /// Answers a pending approval. Returns `None` if it was no longer
+    /// pending, in which case nothing changes. Logs `approval.decided`.
+    pub fn decide_approval(
+        &self,
+        id: i64,
+        state: ApprovalState,
+        decided_by: Option<DecidedBy>,
+        message: Option<&str>,
+    ) -> Result<Option<Approval>, StoreError> {
+        let changed = self.store.lock().execute(
+            "UPDATE approvals SET state = ?2, decided_by = ?3, message = ?4, decided_ms = ?5
+             WHERE id = ?1 AND state = 'pending'",
+            params![
+                id,
+                as_text(&state),
+                decided_by.map(|by| as_text(&by)),
+                message,
+                now_ms()
+            ],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.log.append(
+            kind::APPROVAL_DECIDED,
+            None,
+            json!({ "approval_id": id, "state": state, "decided_by": decided_by }),
+        )?;
+        self.approval(id)
+    }
+
+    pub fn approval(&self, id: i64) -> Result<Option<Approval>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!("SELECT {APPROVAL_COLUMNS} FROM approvals WHERE id = ?1"))?
+            .query_row([id], read_approval)
+            .optional()?)
+    }
+
+    /// Approvals, oldest first, optionally only those in one state.
+    pub fn approvals(&self, state: Option<ApprovalState>) -> Result<Vec<Approval>, StoreError> {
+        let conn = self.store.lock();
+        let state = state.map(|state| as_text(&state));
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {APPROVAL_COLUMNS} FROM approvals WHERE (?1 IS NULL OR state = ?1) ORDER BY id"
+            ))?
+            .query_map(params![state], read_approval)?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// The ids of an agent's pending approvals, oldest first.
+    pub fn pending_approvals_of(&self, agent_id: i64) -> Result<Vec<i64>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached("SELECT id FROM approvals WHERE agent_id = ?1 AND state = 'pending' ORDER BY id")?
+            .query_map([agent_id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
+    fn require(&self, id: i64) -> Result<Agent, StoreError> {
+        self.get(id)?
+            .ok_or(StoreError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
+    }
+
+    fn require_approval(&self, id: i64) -> Result<Approval, StoreError> {
+        self.approval(id)?
+            .ok_or(StoreError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
+    }
+
+    fn log_state_change(&self, id: i64, state: AgentState, from: AgentState) -> Result<(), StoreError> {
+        self.log.append(
+            kind::AGENT_STATE_CHANGED,
+            None,
+            json!({ "agent_id": id, "state": state, "from": from }),
+        )?;
+        Ok(())
+    }
+}
+
+// ---- Storage ----
+
+const AGENT_SELECT: &str =
+    "SELECT a.id, a.workspace_id, a.run_id, a.role, a.title, a.session_id, a.pid, a.state,
+        a.model, a.permission_mode, a.user_settings, a.term_rows, a.term_cols, a.started_ms, a.last_activity_ms, a.exited_ms,
+        a.exit_code, a.last_message,
+        (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending')
+    FROM agents a";
+
+const APPROVAL_COLUMNS: &str =
+    "id, agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary, state,
+    decided_by, message, created_ms, decided_ms";
+
+fn current_state(conn: &Connection, id: i64) -> rusqlite::Result<Option<AgentState>> {
+    conn.query_row("SELECT state FROM agents WHERE id = ?1", [id], |row| {
+        from_text(row, 0)
+    })
+    .optional()
+}
+
+fn read_agent(row: &Row<'_>) -> rusqlite::Result<Agent> {
+    Ok(Agent {
+        id: row.get(0)?,
+        workspace_id: row.get(1)?,
+        run_id: row.get(2)?,
+        role: from_text(row, 3)?,
+        title: row.get(4)?,
+        session_id: row.get(5)?,
+        pid: row.get(6)?,
+        state: from_text(row, 7)?,
+        model: row.get(8)?,
+        permission_mode: row.get(9)?,
+        user_settings: row.get(10)?,
+        rows: row.get(11)?,
+        cols: row.get(12)?,
+        started_ms: row.get(13)?,
+        last_activity_ms: row.get(14)?,
+        exited_ms: row.get(15)?,
+        exit_code: row.get(16)?,
+        last_message: row.get(17)?,
+        pending_approval_id: row.get(18)?,
+    })
+}
+
+fn read_approval(row: &Row<'_>) -> rusqlite::Result<Approval> {
+    let tool_input: String = row.get(4)?;
+    let decided_by: Option<String> = row.get(8)?;
+    Ok(Approval {
+        id: row.get(0)?,
+        agent_id: row.get(1)?,
+        workspace_id: row.get(2)?,
+        tool_name: row.get(3)?,
+        // Written by us as JSON; anything else is kept as a string.
+        tool_input: serde_json::from_str(&tool_input).unwrap_or(Value::String(tool_input)),
+        tool_use_id: row.get(5)?,
+        summary: row.get(6)?,
+        state: from_text(row, 7)?,
+        decided_by: decided_by
+            .map(|text| parse_text(&text).map_err(|error| conversion_error(8, error)))
+            .transpose()?,
+        message: row.get(9)?,
+        created_ms: row.get(10)?,
+        decided_ms: row.get(11)?,
+    })
+}
+
+/// The serde name of a unit enum variant, as stored in the database.
+fn as_text(value: &impl Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(Value::String(text)) => text,
+        other => unreachable!("stored enums serialize to strings, got {other:?}"),
+    }
+}
+
+fn parse_text<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T, String> {
+    serde_json::from_value(Value::String(text.to_owned())).map_err(|error| error.to_string())
+}
+
+fn from_text<T: for<'de> Deserialize<'de>>(row: &Row<'_>, index: usize) -> rusqlite::Result<T> {
+    let text: String = row.get(index)?;
+    parse_text(&text).map_err(|error| conversion_error(index, error))
+}
+
+fn conversion_error(index: usize, error: String) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(index, Type::Text, error.into())
+}
+
+impl FromStr for AgentState {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_text(text).map_err(|_| format!("unknown agent state `{text}`"))
+    }
+}
+
+impl FromStr for ApprovalState {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_text(text).map_err(|_| format!("unknown approval state `{text}`"))
+    }
+}
+
+fn now_ms() -> i64 {
+    Timestamp::now().as_millisecond()
+}
+
+#[cfg(test)]
+mod tests;
