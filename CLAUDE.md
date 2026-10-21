@@ -1,6 +1,6 @@
 # cos
 
-Rust chief of staff for coding agents. Read `docs/proposal.md` for the design and milestone list. Its Progress section says what's done. `docs/daemon.md` covers the daemon, the event log and the API. `docs/claude-protocol.md` covers how cos drives Claude Code.
+Rust chief of staff for coding agents. Read `docs/proposal.md` for the design and milestone list. Its Progress section says what's done. `docs/daemon.md` covers the daemon, the event log and the API. `docs/claude-protocol.md` covers how cos drives Claude Code. `docs/approvals.md` covers who may answer a permission request (the `cos-policy` crate).
 
 ## Commands
 
