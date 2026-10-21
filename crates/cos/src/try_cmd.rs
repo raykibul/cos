@@ -1,5 +1,8 @@
 //! `cos try`: run one prompt through Claude Code directly (no daemon) and
 //! answer its permission requests from the terminal.
+//!
+//! By default Claude runs headless (stream-json). With `--pty` it runs its own
+//! interactive UI in a pseudo-terminal and cos follows it through hooks.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -13,7 +16,7 @@ use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
 #[derive(clap::Args)]
 pub(crate) struct TryArgs {
     /// What to ask Claude.
-    prompt: String,
+    pub(crate) prompt: String,
     /// Directory Claude works in.
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
@@ -22,7 +25,7 @@ pub(crate) struct TryArgs {
     model: Option<String>,
     /// How to answer permission requests.
     #[arg(long, value_enum, default_value_t = Approve::Ask)]
-    approve: Approve,
+    pub(crate) approve: Approve,
     /// Claude's permission mode: manual, acceptEdits, plan or dontAsk.
     #[arg(long, default_value = "manual")]
     mode: PermissionMode,
@@ -31,17 +34,32 @@ pub(crate) struct TryArgs {
     claude_bin: PathBuf,
     /// Print every event in full, including ones cos doesn't interpret.
     #[arg(long)]
-    raw: bool,
+    pub(crate) raw: bool,
+    /// Run Claude's interactive UI in a pseudo-terminal and follow it through hooks.
+    #[arg(long)]
+    pub(crate) pty: bool,
+    /// With --pty: load your own Claude settings (allow rules, hooks, MCP servers).
+    #[arg(long, requires = "pty")]
+    pub(crate) user_settings: bool,
+    /// With --pty: print the terminal screen when Claude exits.
+    #[arg(long, requires = "pty")]
+    pub(crate) screen: bool,
+    /// With --pty: if Claude asks whether to trust the folder, say yes. Claude remembers it.
+    #[arg(long, requires = "pty")]
+    pub(crate) trust: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Approve {
+pub(crate) enum Approve {
     /// Ask in this terminal.
     Ask,
     /// Allow everything.
     Allow,
     /// Deny everything.
     Deny,
+    /// With --pty: leave the hook waiting and press 1 in Claude's own dialog,
+    /// as someone at the terminal would.
+    Terminal,
 }
 
 pub(crate) async fn run(args: TryArgs) -> anyhow::Result<ExitCode> {
@@ -54,6 +72,13 @@ pub(crate) async fn run(args: TryArgs) -> anyhow::Result<ExitCode> {
     options.binary = args.claude_bin.clone();
     options.model = args.model.clone();
     options.permission_mode = args.mode;
+    if args.pty {
+        return crate::try_pty::run(&args, options).await;
+    }
+    anyhow::ensure!(
+        args.approve != Approve::Terminal,
+        "--approve terminal needs --pty"
+    );
 
     let (session, mut events) = ClaudeSession::spawn(options)
         .await
@@ -151,7 +176,7 @@ pub(crate) async fn run(args: TryArgs) -> anyhow::Result<ExitCode> {
     })
 }
 
-async fn decide(
+pub(crate) async fn decide(
     request: &PermissionRequest,
     approve: Approve,
     terminal: &mut Lines<BufReader<Stdin>>,
@@ -168,7 +193,7 @@ async fn decide(
 
     let allow = match approve {
         Approve::Allow => true,
-        Approve::Deny => false,
+        Approve::Deny | Approve::Terminal => false,
         Approve::Ask => {
             use std::io::Write;
             print!("  allow? [y/N] ");
@@ -197,7 +222,7 @@ async fn decide(
 }
 
 /// A one-line view of a tool call's input.
-fn summarize(tool: &str, input: &Value) -> String {
+pub(crate) fn summarize(tool: &str, input: &Value) -> String {
     let field = |key: &str| input.get(key).and_then(Value::as_str);
     let text = match tool {
         "Bash" => field("command"),
@@ -211,7 +236,7 @@ fn summarize(tool: &str, input: &Value) -> String {
     }
 }
 
-fn first_line(text: &str, max_chars: usize) -> String {
+pub(crate) fn first_line(text: &str, max_chars: usize) -> String {
     let line = text.lines().next().unwrap_or_default();
     let mut short: String = line.chars().take(max_chars).collect();
     if short.len() < line.len() || text.lines().nth(1).is_some() {

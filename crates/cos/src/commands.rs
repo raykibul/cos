@@ -159,7 +159,7 @@ fn print_event(event: &LoggedEvent, json: bool) {
     println!("#{:<5} {time}  {}{run}  {}", event.seq, event.kind, event.data);
 }
 
-fn human_duration(seconds: u64) -> String {
+pub(crate) fn human_duration(seconds: u64) -> String {
     let (days, hours, minutes, secs) = (
         seconds / 86_400,
         seconds / 3600 % 24,

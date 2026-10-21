@@ -1,10 +1,18 @@
-//! Claude Code as a long-running child process.
+//! Claude Code as a child process, in one of two ways:
 //!
-//! cos writes prompts and answers to Claude's stdin and reads events from its
-//! stdout, one JSON object per line. Every permission prompt comes to cos as an
-//! [`Event::PermissionRequest`], so no hooks are needed.
+//! - [`ClaudeSession`]: headless. cos writes prompts and answers to Claude's
+//!   stdin and reads events from its stdout, one JSON object per line. Every
+//!   permission prompt comes to cos as an [`Event::PermissionRequest`].
+//! - [`ClaudeTerminal`]: Claude's own UI in a pseudo-terminal, for people to
+//!   watch and type into. cos follows it through [`hooks`].
+//!
+//! [`registry`] lists the Claude sessions running on the machine, including
+//! ones cos didn't start.
 
+pub mod hooks;
 mod protocol;
+pub mod registry;
+mod terminal;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -21,6 +29,7 @@ use tokio::task::JoinHandle;
 
 use crate::{Decision, Event, HarnessError, PermissionRequest};
 use protocol::Incoming;
+pub use terminal::{ClaudeTerminal, HookTarget, TerminalEvent, TerminalOptions};
 
 /// How long Claude gets to start up and answer the handshake.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -32,6 +41,25 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const EXIT_GRACE: Duration = Duration::from_secs(5);
 /// Stderr lines kept for error messages.
 const STDERR_TAIL: usize = 40;
+
+/// Variables a Claude session sets for its own children. When cos runs from
+/// inside Claude (or is started by something that did), passing them on makes
+/// the new Claude think it is a child session: it stops saving its transcript,
+/// among other things. Settings such as `CLAUDE_CONFIG_DIR` are kept.
+pub(crate) const SESSION_MARKERS: [&str; 12] = [
+    "CLAUDECODE",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CODE_TMPDIR",
+];
 
 /// Claude's `--permission-mode`. Whatever the mode doesn't settle on its own
 /// becomes a permission request to cos.
@@ -187,7 +215,11 @@ impl ClaudeSession {
     pub async fn spawn(
         options: ClaudeOptions,
     ) -> Result<(Self, mpsc::UnboundedReceiver<Event>), HarnessError> {
-        let mut child = Command::new(&options.binary)
+        let mut command = Command::new(&options.binary);
+        for name in SESSION_MARKERS {
+            command.env_remove(name);
+        }
+        let mut child = command
             .args(options.args())
             .current_dir(&options.cwd)
             .envs(options.env.iter().map(|(key, value)| (key, value)))

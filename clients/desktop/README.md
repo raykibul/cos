@@ -1,9 +1,9 @@
 # cos for Mac
 
-A menu bar app that shows the cos daemon's status and its live event log. It only reads from the daemon; it doesn't start or control it yet.
+A menu bar app for the cos daemon. The menu bar panel shows its status and latest events. The window lists your projects (registered git repos) and their workspaces (worktrees cos owns) in a sidebar, where you can add and remove projects and create, rename and remove workspaces. The event log is the sidebar's first item. The app doesn't start the daemon itself yet.
 
 - `Cos/`: the SwiftUI app (macOS 14+). A menu bar item and one window, no Dock icon (`LSUIElement`).
-- `../shared/CosKit/`: the Swift package the app is built on, shared with the iPhone app later. Models, an HTTP/1.1 client for the daemon's Unix socket, an SSE parser, and an event stream that reconnects and resumes after the last event it saw. No AppKit in it.
+- `../shared/CosKit/`: the Swift package the app is built on, shared with the iPhone app later. Models, an HTTP/1.1 client for the daemon's Unix socket, an SSE parser, an event stream that reconnects and resumes after the last event it saw, and `DaemonMonitor`, which keeps status, events and projects current for the UI. No AppKit in it.
 - `project.yml`: the XcodeGen spec. `Cos.xcodeproj` is generated from it and not checked in.
 
 ## Build
@@ -44,7 +44,7 @@ Or through Xcode, from `clients/desktop`:
 xcodebuild -project Cos.xcodeproj -scheme Cos -derivedDataPath build test
 ```
 
-The live test against the real daemon is skipped unless you give it a `cos` binary and a scratch home. It starts the daemon, follows the stream, restarts the daemon with SIGTERM and checks nothing is missed or repeated, then stops it:
+The live tests against the real daemon are skipped unless you give them a `cos` binary and a scratch home. One starts the daemon, follows the stream, restarts the daemon with SIGTERM and checks nothing is missed or repeated. The other makes throwaway git repos next to the scratch home and goes through every project and workspace route, including the 400, 404 and 409 errors. Each stops its own daemon by pid and removes what it created:
 
 ```sh
 cargo build --release   # from the repo root

@@ -2,7 +2,9 @@
 //!
 //! `cos daemon` runs the long-lived process; `cos status`, `cos events`,
 //! `cos project` and `cos workspace` talk to it over `~/.cos/cos.sock`.
-//! `cos try` runs one prompt through Claude Code without the daemon. See `docs/proposal.md` for where this is going.
+//! `cos try` runs one prompt through Claude Code without the daemon, and
+//! `cos sessions` lists the Claude sessions running on this Mac. See
+//! `docs/proposal.md` for where this is going.
 
 mod client;
 mod commands;
@@ -10,7 +12,9 @@ mod daemon;
 mod home;
 mod launchd;
 mod projects_cmd;
+mod sessions_cmd;
 mod try_cmd;
+mod try_pty;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -45,6 +49,11 @@ enum Command {
     Workspace(projects_cmd::WorkspaceCommand),
     /// Run one prompt through Claude Code and answer its permission requests here (no daemon).
     Try(try_cmd::TryArgs),
+    /// List the Claude sessions running on this Mac, including ones cos didn't start.
+    Sessions(sessions_cmd::SessionsArgs),
+    /// Run by Claude Code's hooks in sessions cos starts: forwards the hook to cos.
+    #[command(hide = true)]
+    Hook,
 }
 
 #[derive(Subcommand)]
@@ -64,6 +73,11 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
+    if let Command::Hook = cli.command {
+        let socket = std::env::var_os(cos_harness::claude::hooks::SOCKET_ENV).map(std::path::PathBuf::from);
+        cos_harness::claude::hooks::relay(socket.as_deref(), &mut std::io::stdin(), &mut std::io::stdout());
+        return Ok(ExitCode::SUCCESS);
+    }
     let home = CosHome::from_env()?;
     match cli.command {
         Command::Daemon { action: None } => {
@@ -86,5 +100,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Project(command) => projects_cmd::project(&home, command).await,
         Command::Workspace(command) => projects_cmd::workspace(&home, command).await,
         Command::Try(args) => try_cmd::run(args).await,
+        Command::Sessions(args) => sessions_cmd::run(&home, args).await,
+        Command::Hook => unreachable!("handled above"),
     }
 }

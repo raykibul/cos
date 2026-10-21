@@ -7,6 +7,8 @@ pub mod claude;
 mod error;
 mod event;
 
-pub use claude::{ClaudeOptions, ClaudeSession, PermissionMode};
+pub use claude::{
+    ClaudeOptions, ClaudeSession, ClaudeTerminal, HookTarget, PermissionMode, TerminalEvent, TerminalOptions,
+};
 pub use error::HarnessError;
 pub use event::{Decision, Event, PermissionRequest, TurnResult};

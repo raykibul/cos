@@ -9,6 +9,11 @@
 //!
 //! With `COS_FAKE_CLAUDE_FAIL` set it prints to stderr and exits 2 at startup.
 //! It exits 3 if a flag the real CLI needs to route prompts to cos is missing.
+//!
+//! Without `-p` it plays the interactive UI instead (see [`interactive`]), and
+//! `cos-fake-claude hook` is the hook relay, like `cos hook`.
+
+mod interactive;
 
 use std::io::{BufRead, Write};
 
@@ -27,6 +32,15 @@ fn main() {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("hook") {
+        let socket = std::env::var_os(cos_harness::claude::hooks::SOCKET_ENV).map(std::path::PathBuf::from);
+        cos_harness::claude::hooks::relay(socket.as_deref(), &mut std::io::stdin(), &mut std::io::stdout());
+        return;
+    }
+    if !args.iter().any(|arg| arg == "-p") {
+        interactive::run(&args);
+        return;
+    }
     for (flag, value) in REQUIRED_FLAGS {
         if !args.windows(2).any(|pair| pair[0] == flag && pair[1] == value) {
             eprintln!("fake-claude: missing {flag} {value}");

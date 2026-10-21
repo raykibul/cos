@@ -22,6 +22,9 @@ pub enum HarnessError {
     #[error("the agent's input is already closed")]
     InputClosed,
 
+    #[error("terminal: {0}")]
+    Terminal(String),
+
     #[error("could not write to the agent: {0}")]
     Write(#[source] std::io::Error),
 }

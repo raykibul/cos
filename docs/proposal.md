@@ -8,6 +8,8 @@ This file collects the design agreed on 21 Oct 2026, before any code existed. Th
 
 **In one line:** take Selene's Chief of Staff and drop everything around it. One Rust daemon drives Claude Code and Codex through their headless JSON interfaces, so no hooks. A SwiftUI Mac app and iPhone app connect to it over your tailnet.
 
+> **Changed on 22 Oct 2026:** agents run in terminals after all. See "Terminals and hooks" under Progress. Every agent cos launches (chief, workers, reviewer) runs Claude's own UI in a PTY that the daemon owns, so you can watch or type into any of them from the apps. cos follows each session through hooks it passes for that session only, and never through your settings or a shell wrapper. The headless harness stays for `cos try`.
+
 ### What Selene teaches
 
 Selene is about 100K lines: 47K Go, 25K Electron, 26K Flutter and 4.5K Swift. Most of that weight comes from things a chief of staff doesn't need.
@@ -270,4 +272,10 @@ cos/
 - **Milestone 2 (harness spike): done.** `cos try "prompt"` runs Claude Code as a child process, streams its events and answers permission requests (ask, allow or deny). Verified against Claude Code 2.1.306. Protocol notes are in [claude-protocol.md](claude-protocol.md).
 - **Milestone 3 (daemon skeleton): done.** `cos daemon` serves an HTTP API on `~/.cos/cos.sock`. It keeps a numbered event log in SQLite that clients can page through or follow live and resume by sequence number. `cos status`, `cos events [-f]`, and `cos daemon install|uninstall` (launchd agent) are in. See [daemon.md](daemon.md).
 - **Projects and workspaces (added after milestone 3, modelled on Selene): done on the daemon side.** A project is a registered git repo; a workspace is a cos-owned worktree on a `cos/<city>` branch where agents run. Several agents can share a workspace; parallel task workers get their own short-lived worktrees branched from it. `cos project add|list|remove` and `cos workspace new|rename|remove` are in, and the API is in [daemon.md](daemon.md). The Mac app part is in progress.
-- **Next: milestone 4**, workers: a git worktree per task, a cap on parallel workers, and the file-scope check plus a test run after each worker.
+- **Terminals and hooks (22 Oct 2026): spike done.** You asked for a terminal view of agents, so agents run in a PTY instead of headless.
+  - **`cos try --pty`:** runs Claude's interactive UI in a pseudo-terminal (`ClaudeTerminal`: `portable-pty`, with a `vt100` screen) and follows it through per-session hooks passed with `--settings`. A hidden `cos hook` relays each hook to a socket (`HookServer`).
+  - **Verified with Claude 2.1.306:** the hooks fire, and the permission hook can allow or deny. Answering in the terminal also works and withdraws the hook.
+  - **Folder trust:** a worktree of a trusted repo is trusted. Otherwise `--trust` answers the trust dialog.
+  - **`cos sessions`:** lists every Claude session running on the Mac (busy or idle, folder, session id, matching cos workspace) from Claude's own `sessions/<pid>.json` files. It's read-only and needs no wrapper.
+  - **Details:** see [claude-protocol.md](claude-protocol.md).
+- **Next:** the daemon's agent runtime. Agents in workspaces run as PTY sessions with hooks, the terminal streams to the apps, and permission requests go through the approvals engine. After that, milestone 4 (workers) uses it.

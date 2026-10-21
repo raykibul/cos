@@ -2,3 +2,4 @@
 # Scratch folder for trying `cos try` against a throwaway directory.
 /.sandbox
 .DS_Store
+/.claude/worktrees/
