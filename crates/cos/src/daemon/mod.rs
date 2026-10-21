@@ -7,6 +7,8 @@ pub(crate) mod agents;
 pub(crate) mod agents_api;
 pub(crate) mod api;
 pub(crate) mod approvals_api;
+pub(crate) mod chief;
+pub(crate) mod chief_api;
 pub(crate) mod pipeline;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
@@ -72,7 +74,15 @@ pub(crate) async fn run_with(
         runs.clone(),
         AgentConfig::for_home(home)?,
     )?;
-    let tailnet = tailnet::Tailnet::load(store, log.clone());
+    let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());
+    let chief = chief::Chief::start(
+        store,
+        log.clone(),
+        runs.clone(),
+        agents.clone(),
+        home.root().to_path_buf(),
+        chief::ChiefConfig::from_env(),
+    )?;
     let pipeline = pipeline::Pipeline::start(
         runs.clone(),
         agents.clone(),
@@ -98,6 +108,7 @@ pub(crate) async fn run_with(
         tailnet,
         runs,
         agents: agents.clone(),
+        chief,
         started_at: Timestamp::now(),
         home: home.root().to_path_buf(),
         stopping: stopping.clone(),

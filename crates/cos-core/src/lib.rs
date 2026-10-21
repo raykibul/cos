@@ -4,6 +4,7 @@
 //! git work lands in later milestones (see `docs/proposal.md`).
 
 pub mod agents;
+pub mod chief;
 mod cities;
 pub mod devices;
 pub mod events;
@@ -17,6 +18,7 @@ pub use agents::{
     Agent, AgentState, Agents, Approval, ApprovalState, DecidedBy, Launch, NewAgent, NewApproval, Role,
 };
 pub use agents::{ApprovalRoute, ApprovalTier};
+pub use chief::{Inbox, InboxItem, InboxKind, Question, QuestionState, Questions, Wakeup};
 pub use devices::{Device, DeviceError, DeviceState, Devices, SeenDevice};
 pub use events::{EventLog, LoggedEvent, Subscription};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};

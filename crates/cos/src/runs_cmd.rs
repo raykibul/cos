@@ -97,10 +97,14 @@ pub(crate) async fn start(home: &CosHome, args: RunArgs) -> anyhow::Result<ExitC
         workspace.branch,
         preview(&run.goal)
     );
-    println!("  The chief isn't wired up yet, so nothing plans the run for now.");
+    if let Some(chief) = run.chief_agent_id {
+        println!(
+            "  The chief (agent {chief}) is exploring and will propose a plan; `cos agent attach {chief}` to watch it."
+        );
+    }
     println!(
-        "  Watch it with `cos board {}`; stop it with `cos cancel {}`.",
-        run.id, run.id
+        "  Watch the board with `cos board {}`, then `cos approve-plan {}`. Questions: `cos questions`; stop it with `cos cancel {}`.",
+        run.id, run.id, run.id
     );
     Ok(ExitCode::SUCCESS)
 }
@@ -282,6 +286,7 @@ mod tests {
                 approval_cap: 20,
                 report_path: None,
                 reason: None,
+                chief_agent_id: None,
                 created_at: Timestamp::UNIX_EPOCH,
                 updated_at: Timestamp::UNIX_EPOCH,
             },
