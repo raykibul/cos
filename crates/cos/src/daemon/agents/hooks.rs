@@ -120,10 +120,19 @@ impl Inner {
                 if let Some(running) = live.terminals.get_mut(&id) {
                     running.open_tools.clear();
                 }
-                if let Some(message) = hook.input.get("last_assistant_message").and_then(Value::as_str) {
+                let message = hook
+                    .input
+                    .get("last_assistant_message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if let Some(message) = &message {
                     self.agents.set_last_message(id, message)?;
                 }
                 self.agents.set_state(id, AgentState::Idle)?;
+                let _ = self.signals.send(super::AgentSignal::TurnEnded {
+                    agent_id: id,
+                    message,
+                });
             }
             _ => self.agents.touch(id)?,
         }

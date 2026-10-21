@@ -7,6 +7,7 @@ pub(crate) mod agents;
 pub(crate) mod agents_api;
 pub(crate) mod api;
 pub(crate) mod approvals_api;
+pub(crate) mod pipeline;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
 pub(crate) mod tailnet;
@@ -72,6 +73,13 @@ pub(crate) async fn run_with(
         AgentConfig::for_home(home)?,
     )?;
     let tailnet = tailnet::Tailnet::load(store, log.clone());
+    let pipeline = pipeline::Pipeline::start(
+        runs.clone(),
+        agents.clone(),
+        projects.clone(),
+        log.clone(),
+        pipeline::PipelineConfig::for_home(home),
+    )?;
 
     let socket = home.socket();
     // We hold the lock, so any socket file left behind is from a dead daemon.
@@ -107,6 +115,8 @@ pub(crate) async fn run_with(
     let reason = stop.await;
     tracing::info!(%reason, "cos daemon stopping");
     let _ = stopping_tx.send(true);
+    // Before the agents go, so their exits aren't taken for crashes.
+    pipeline.shutdown();
     // Bounded: agents that don't exit in time are killed. They end up
     // `interrupted`, ready to resume.
     agents.shutdown().await;

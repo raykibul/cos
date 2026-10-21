@@ -3,27 +3,17 @@
 //! The fake's `ask:<Tool> <arg>` prompts make the requests.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use cos_core::events::kind;
 use cos_core::{
-    Agent, ApprovalPreset, ApprovalRoute, ApprovalState, ApprovalTier, DecidedBy, LimitsChange, NewRun,
-    PlanProposal, ProposedTask, Role, Runs,
+    Agent, ApprovalPreset, ApprovalRoute, ApprovalState, ApprovalTier, DecidedBy, Launch, LimitsChange,
+    NewRun, PlanProposal, ProposedTask, Role, Runs,
 };
 use cos_policy::{Decider, Outcome};
 
-use super::super::{StartAgent, TaskLookup};
+use super::super::StartAgent;
 use super::{Fixture, status, until};
-
-/// Says every worker and reviewer works on one task.
-struct OneTask(i64);
-
-impl TaskLookup for OneTask {
-    fn task_of(&self, agent: &Agent) -> Option<i64> {
-        matches!(agent.role, Role::Worker | Role::Reviewer).then_some(self.0)
-    }
-}
 
 /// A fixture with a running run whose one task (`src/**`, tested with
 /// `cargo test`) works in the workspace folder, where agents start.
@@ -31,6 +21,7 @@ struct RunFixture {
     fixture: Fixture,
     runs: Runs,
     run_id: i64,
+    task_id: i64,
     root: PathBuf,
 }
 
@@ -62,11 +53,11 @@ impl RunFixture {
         let task_id = runs.approve_plan(run.id).unwrap().tasks[0].id;
         let root = fixture.projects.workspace(fixture.workspace_id).unwrap().path;
         runs.assign_worktree(task_id, "cos/oslo-1", &root).unwrap();
-        fixture.manager.set_task_lookup(Arc::new(OneTask(task_id)));
         Self {
             fixture,
             runs,
             run_id: run.id,
+            task_id,
             root,
         }
     }
@@ -77,9 +68,20 @@ impl RunFixture {
             user_settings: Some(false),
             ..StartAgent::default()
         };
+        // Workers and reviewers work on the run's one task.
+        let launch = Launch {
+            task_id: matches!(role, Role::Worker | Role::Reviewer).then_some(self.task_id),
+            ..Launch::default()
+        };
         self.fixture
             .manager
-            .start_agent(self.fixture.workspace_id, role, Some(self.run_id), &request)
+            .start_agent_with(
+                self.fixture.workspace_id,
+                role,
+                Some(self.run_id),
+                &request,
+                &launch,
+            )
             .unwrap()
     }
 

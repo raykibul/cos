@@ -16,7 +16,6 @@
 //! "Approved on your behalf" ([`cos_core::Runs::approvals_report_section`]).
 
 use std::path::PathBuf;
-use std::sync::PoisonError;
 
 use cos_core::{Agent, Approval, ApprovalRoute, ApprovalState, DecidedBy, Role, RunError, Task, Workspace};
 use cos_harness::Decision;
@@ -28,22 +27,6 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::{AgentError, Inner};
-
-/// Finds the task a worker or reviewer works on, for its worktree, scope and
-/// test command. The pipeline knows; once agents record their task
-/// (`agents.task_id`), [`Inner::task_of`] reads that instead.
-pub(crate) trait TaskLookup: Send + Sync {
-    fn task_of(&self, agent: &Agent) -> Option<i64>;
-}
-
-/// Knows no tasks.
-pub(crate) struct NoTasks;
-
-impl TaskLookup for NoTasks {
-    fn task_of(&self, _agent: &Agent) -> Option<i64> {
-        None
-    }
-}
 
 /// How the policy judged one request; kept with it until it's answered.
 #[derive(Debug, Clone)]
@@ -145,14 +128,10 @@ impl Inner {
         request
     }
 
-    /// The task a worker or reviewer works on, if it belongs to its run.
+    /// The task a worker or reviewer works on (`agents.task_id`), if it
+    /// belongs to its run.
     fn task_of(&self, agent: &Agent) -> Option<Task> {
-        let lookup = self
-            .task_lookup
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let task = self.runs.task(lookup.task_of(agent)?).ok()?;
+        let task = self.runs.task(agent.task_id?).ok()?;
         (Some(task.run_id) == agent.run_id).then_some(task)
     }
 
