@@ -158,7 +158,7 @@ When the chief is `idle` and its inbox isn't empty, the daemon types one wakeup 
 
 ### Chief
 
-- **Migration:** one entry (`runs.chief_agent_id`, and the `wakeups`, `inbox` and `questions` tables), index 7 after rebasing onto the approvals merge (6 on its branch before that).
+- **Migration:** one entry (`runs.chief_agent_id`, and the `wakeups`, `inbox` and `questions` tables), index 7, after the pipeline's 6.
 - **MCP crate:** `rmcp` 3.4.1 (`server`, `transport-io`), with `ServerHandler` written by hand rather than the tool macros, so the descriptions and JSON schemas sit next to each other in `crates/cos/src/mcp.rs`.
 - **The MCP server's env** carries `COS_HOME`, so `cos mcp` reaches the daemon that started it, not `~/.cos`.
 - **`--allowedTools mcp__cos`** is passed to the chief, so its own tools never ask for permission; the daemon checks every call itself.
@@ -168,9 +168,12 @@ When the chief is `idle` and its inbox isn't empty, the daemon types one wakeup 
 - **Open questions of finished runs** are left out of `GET /v1/questions?state=open`, and answering one is a 409.
 - **Trust:** run agents answer the trust dialog themselves, as the contract says; it's done for every non-`user` role.
 - **`agent.started`** gains `run_id`, so the apps can tie a chief to its run from the event.
-- **`task_send`** finds the task's worker through a `WorkerLookup` (`Chief::set_worker_lookup`), which returns nothing until the pipeline plugs in (or the chief reads `agents.task_id`). Until then `task_send` answers 409 "no running worker".
+- **Starting:** `start_agent_with` with `Launch { system_prompt: ROLE }`, so a resume keeps the role. The MCP config names the agent's id, which isn't known until the agent is created, so `launch` adds it (and `--allowedTools mcp__cos`) for `role: chief` on every launch and resume (`chief::configure`) instead of storing it in `Launch`.
+- **Model:** `COS_CHIEF_MODEL`, else `COS_RUN_MODEL`, else Claude's default.
+- **`task_send`** types into the task's `agent_id` (its newest worker) with `send_message`, only while the task is `running` (409 otherwise).
+- **Stopping:** a cancelled or failed run's chief is stopped by the pipeline with the run's other agents; the chief component stops it only when the run is done, after its last turn.
 - **Wakeup pacing:** after a wakeup, the next waits until the chief has started working on it (or 20 s), so one idle moment can't get two wakeups.
-- **Multi-line input:** `ClaudeTerminal::submit` sends text with line breaks as a bracketed paste (Claude turns it on), so a wakeup arrives as one message.
+- **Wakeups** are typed with `send_message`, so a wakeup's lines arrive as one bracketed paste and one message.
 
 ### Approvals
 

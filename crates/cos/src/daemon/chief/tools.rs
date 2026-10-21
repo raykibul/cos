@@ -164,12 +164,7 @@ impl Chief {
                 format!("the message must be 1 to {MAX_SEND_CHARS} characters"),
             ));
         }
-        let lookup = inner
-            .workers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let Some(worker) = lookup(&task).filter(|_| task.state == TaskState::Running) else {
+        let Some(worker) = task.agent_id.filter(|_| task.state == TaskState::Running) else {
             return Err(error(
                 StatusCode::CONFLICT,
                 format!("task {} has no running worker (it is {})", task.id, task.state),
@@ -177,7 +172,7 @@ impl Chief {
         };
         inner
             .agents
-            .input(worker, &format!("Message from the chief: {message}"))
+            .send_message(worker, &format!("Message from the chief: {message}"))
             .await?;
         Ok(format!(
             "Sent to the worker of task {} (agent {worker}).",

@@ -667,6 +667,8 @@ impl Inner {
         claude.mcp_config = agent.mcp_config.clone();
         claude.permission_mode = agent.permission_mode.parse().map_err(AgentError::Invalid)?;
         claude.env = self.config.env.clone();
+        // The chief's MCP server names the agent, so it's added here, where
+        // the id is known, on every launch and resume.
         if agent.role == Role::Chief {
             super::chief::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
         }
@@ -736,16 +738,6 @@ impl Inner {
         }
         if let Err(error) = self.agents.set_state(id, AgentState::NeedsTrust) {
             tracing::error!(%error, agent = id, "could not record the trust dialog");
-        }
-        if running.role != Role::User {
-            // Run agents work in registered projects, and registering a
-            // project counts as trusting it (docs/orchestration.md).
-            let terminal = running.terminal.clone();
-            tokio::spawn(async move {
-                if let Err(error) = terminal.trust_folder().await {
-                    tracing::warn!(%error, agent = id, "could not answer the trust dialog");
-                }
-            });
         }
     }
 

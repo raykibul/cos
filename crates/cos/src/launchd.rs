@@ -41,8 +41,8 @@ pub(crate) fn install(home: &CosHome) -> anyhow::Result<PathBuf> {
         crate::daemon::chief::MODEL_ENV,
     ]
     .into_iter()
-        .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
-        .collect();
+    .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
+    .collect();
     let plist = plist_path()?;
 
     std::fs::create_dir_all(plist.parent().expect("plist path has a parent"))?;

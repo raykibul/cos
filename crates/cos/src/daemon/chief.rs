@@ -30,8 +30,8 @@ use axum::http::StatusCode;
 use cos_core::chief::{MAX_WAKEUPS_PER_HOUR, next_batch};
 use cos_core::events::kind;
 use cos_core::{
-    AgentState, EventLog, Inbox, InboxKind, LoggedEvent, Question, QuestionState, Questions, Role, Run, Runs,
-    Store, Subscription, Task, render_board,
+    AgentState, EventLog, Inbox, InboxKind, Launch, LoggedEvent, Question, QuestionState, Questions, Role,
+    Run, Runs, Store, Subscription, render_board,
 };
 use jiff::Timestamp;
 use serde_json::Value;
@@ -42,7 +42,8 @@ pub(crate) use prompt::configure;
 use super::agents::{AgentManager, StartAgent};
 use super::api::ApiError;
 
-/// The model chiefs run, if set; Claude's default otherwise.
+/// The model chiefs run, if set; else `COS_RUN_MODEL`, the workers' model;
+/// else Claude's default.
 pub(crate) const MODEL_ENV: &str = "COS_CHIEF_MODEL";
 const HOUR_MS: i64 = 3_600_000;
 const MAX_MESSAGE_CHARS: usize = 10_000;
@@ -63,10 +64,11 @@ pub(crate) struct ChiefConfig {
 impl ChiefConfig {
     pub(crate) fn from_env() -> Self {
         Self {
-            model: std::env::var(MODEL_ENV)
-                .ok()
+            model: [MODEL_ENV, super::pipeline::RUN_MODEL_ENV]
+                .into_iter()
+                .filter_map(|name| std::env::var(name).ok())
                 .map(|model| model.trim().to_owned())
-                .filter(|model| !model.is_empty()),
+                .find(|model| !model.is_empty()),
             poll: Duration::from_secs(30),
             settle: Duration::from_secs(20),
             stop_wait: Duration::from_secs(120),
@@ -83,10 +85,6 @@ impl ChiefConfig {
         }
     }
 }
-
-/// Finds the worker running a task, for `task_send`. The pipeline owns
-/// which agent works on which task; until it plugs in, nothing is found.
-pub(crate) type WorkerLookup = Arc<dyn Fn(&Task) -> Option<i64> + Send + Sync>;
 
 /// Runs the chiefs. Cheap to clone.
 #[derive(Clone)]
@@ -107,7 +105,6 @@ struct Inner {
     wake: Arc<Notify>,
     /// Chiefs that got a wakeup and haven't started working on it yet.
     woken: Mutex<HashMap<i64, Instant>>,
-    workers: Mutex<WorkerLookup>,
 }
 
 impl Chief {
@@ -133,17 +130,10 @@ impl Chief {
             config,
             wake: wake.clone(),
             woken: Mutex::default(),
-            workers: Mutex::new(Arc::new(|_: &Task| None)),
         });
         tokio::spawn(follow(Arc::downgrade(&inner), subscription));
         tokio::spawn(deliver_loop(Arc::downgrade(&inner), wake));
         Ok(Self { inner })
-    }
-
-    /// Plugs in how `task_send` finds a task's worker.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the pipeline plugs in here"))]
-    pub(crate) fn set_worker_lookup(&self, lookup: WorkerLookup) {
-        *self.inner.workers.lock().unwrap_or_else(PoisonError::into_inner) = lookup;
     }
 
     /// Starts the chief of a new run and records it on the run.
@@ -164,9 +154,16 @@ impl Chief {
             user_settings: Some(false),
             ..StartAgent::default()
         };
-        let agent = inner
-            .agents
-            .start_agent(run.workspace_id, Role::Chief, Some(run.id), &request)?;
+        // Stored with the agent, so a resume gets the role again. The MCP
+        // server names the agent, so `launch` adds it (`prompt::configure`).
+        let launch = Launch {
+            system_prompt: Some(prompt::ROLE.into()),
+            ..Launch::default()
+        };
+        let agent =
+            inner
+                .agents
+                .start_agent_with(run.workspace_id, Role::Chief, Some(run.id), &request, &launch)?;
         Ok(inner.runs.set_chief_agent(run.id, agent.id)?)
     }
 
@@ -344,8 +341,9 @@ impl Inner {
                 "Every task is merged, failed or cancelled. Write the report now with report_write: \
                  what was done, what wasn't and why, and anything the user should check.",
             ),
-            Some("done") => self.stop_chief(run_id, true),
-            Some("failed" | "cancelled") => self.stop_chief(run_id, false),
+            // A cancelled or failed run's agents, the chief too, are
+            // stopped by the pipeline.
+            Some("done") => self.stop_chief(run_id),
             _ => Ok(()),
         }
     }
@@ -379,18 +377,14 @@ impl Inner {
         self.add(run_id, InboxKind::Approval, &text)
     }
 
-    /// Stops a finished run's chief: at once, or once it ends its turn
-    /// (`wait`), so it finishes writing the report.
-    fn stop_chief(&self, run_id: i64, wait: bool) -> Result<(), ApiError> {
+    /// Stops a done run's chief once it ends its turn (or after
+    /// `stop_wait`), so it finishes the turn that wrote the report.
+    fn stop_chief(&self, run_id: i64) -> Result<(), ApiError> {
         let Some(chief) = self.runs.run(run_id)?.chief_agent_id else {
             return Ok(());
         };
         let agents = self.agents.clone();
-        let wait_for = if wait {
-            self.config.stop_wait
-        } else {
-            Duration::ZERO
-        };
+        let wait_for = self.config.stop_wait;
         tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + wait_for;
             while tokio::time::Instant::now() < deadline
@@ -483,7 +477,7 @@ impl Inner {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(chief, Instant::now());
-        if let Err(failure) = self.agents.input(chief, &text).await {
+        if let Err(failure) = self.agents.send_message(chief, &text).await {
             self.woken
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)

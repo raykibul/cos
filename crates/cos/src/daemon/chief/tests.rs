@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use cos_core::events::kind;
 use cos_core::{
-    Agent, AgentState, Agents, ApprovalRoute, Base, EventLog, Inbox, InboxKind, NewRun, Projects,
+    Agent, AgentState, Agents, ApprovalRoute, Base, EventLog, Inbox, InboxKind, Launch, NewRun, Projects,
     QuestionState, Role, Run, RunState, Runs, Store, TaskState,
 };
 use jiff::Timestamp;
@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use super::{Chief, ChiefConfig};
 use crate::client::Client;
 use crate::daemon::agents::tests::{cos_binary, fake_claude, git_repo, status, until};
-use crate::daemon::agents::{AgentConfig, AgentManager, StartAgent, TaskLookup};
+use crate::daemon::agents::{AgentConfig, AgentManager, StartAgent};
 use crate::daemon::{api, serve, tailnet::Tailnet};
 
 struct Fixture {
@@ -29,7 +29,7 @@ struct Fixture {
     runs: Arc<Runs>,
     projects: Arc<Projects>,
     manager: AgentManager,
-    chief: Chief,
+    _chief: Chief,
     client: Client,
     workspace_id: i64,
     _stop: watch::Sender<bool>,
@@ -100,7 +100,7 @@ impl Fixture {
             runs,
             projects,
             manager,
-            chief,
+            _chief: chief,
             workspace_id: workspace.id,
             _stop: stop,
         }
@@ -174,6 +174,23 @@ impl Fixture {
 
     async fn tool(&self, agent: i64, name: &str, arguments: Value) -> anyhow::Result<String> {
         self.client.chief_tool(agent, name, &arguments).await
+    }
+
+    /// A worker of the task, as the pipeline would start it.
+    fn worker(&self, run_id: i64, task_id: i64, prompt: &str) -> Agent {
+        let request = StartAgent {
+            prompt: Some(prompt.into()),
+            permission_mode: Some("acceptEdits".into()),
+            user_settings: Some(false),
+            ..StartAgent::default()
+        };
+        let launch = Launch {
+            task_id: Some(task_id),
+            ..Launch::default()
+        };
+        self.manager
+            .start_agent_with(self.workspace_id, Role::Worker, Some(run_id), &request, &launch)
+            .unwrap()
     }
 
     fn board_file(&self, run_id: i64) -> PathBuf {
@@ -524,23 +541,10 @@ async fn tools_check_who_calls_and_what_state_the_run_is_in() {
 async fn task_send_types_into_the_tasks_worker() {
     let fixture = Fixture::start().await;
     let (run, chief) = fixture.run_with_idle_chief("send things").await;
-    let worker = fixture
-        .client
-        .start_agent(
-            fixture.workspace_id,
-            &StartAgent {
-                prompt: Some("ready".into()),
-                ..StartAgent::default()
-            },
-        )
-        .await
-        .unwrap();
-    fixture.until_says(worker.id, "echo: ready").await;
-    let worker_id = worker.id;
-    fixture
-        .chief
-        .set_worker_lookup(Arc::new(move |_| Some(worker_id)));
     let task = fixture.approved_plan(run.id, &["one"])[0];
+    // Stands in for the pipeline's worker.
+    let worker_id = fixture.worker(run.id, task, "ready").id;
+    fixture.until_says(worker_id, "echo: ready").await;
     let send =
         |message: &str| fixture.tool(chief, "task_send", json!({ "task_id": task, "message": message }));
 
@@ -633,8 +637,8 @@ async fn questions_go_to_you_and_answers_wake_the_chief() {
         404
     );
 
-    // Cancelling the run stops its chief, and its open questions stop
-    // waiting for you.
+    // Once the run is cancelled, its open questions stop waiting for you,
+    // and its chief takes no more answers or messages.
     fixture
         .tool(chief, "ask_user", json!({ "question": "Still there?" }))
         .await
@@ -646,7 +650,6 @@ async fn questions_go_to_you_and_answers_wake_the_chief() {
         .cancel_run(run.id, Some("changed my mind".into()))
         .await
         .unwrap();
-    fixture.until_state(chief, AgentState::Exited).await;
     assert!(fixture.client.questions(Some("open")).await.unwrap().is_empty());
     assert_eq!(fixture.client.questions(None).await.unwrap().len(), 2);
     assert_eq!(
@@ -745,15 +748,6 @@ async fn wakeups_are_capped_at_30_an_hour() {
     );
 }
 
-/// Says every worker works on one task.
-struct OneTask(i64);
-
-impl TaskLookup for OneTask {
-    fn task_of(&self, agent: &Agent) -> Option<i64> {
-        (agent.role == Role::Worker).then_some(self.0)
-    }
-}
-
 #[tokio::test]
 async fn approvals_routed_to_the_chief_wake_it_and_it_decides() {
     let fixture = Fixture::start().await;
@@ -761,16 +755,11 @@ async fn approvals_routed_to_the_chief_wake_it_and_it_decides() {
     let task = fixture.approved_plan(run.id, &["limits"])[0];
     let root = fixture.projects.workspace(fixture.workspace_id).unwrap().path;
     fixture.runs.assign_worktree(task, "cos/oslo-1", &root).unwrap();
-    fixture.manager.set_task_lookup(Arc::new(OneTask(task)));
-    let request = StartAgent {
-        prompt: Some(format!("ask:Write {}", root.join("docs/limits.md").display())),
-        user_settings: Some(false),
-        ..StartAgent::default()
-    };
-    let worker = fixture
-        .manager
-        .start_agent(fixture.workspace_id, Role::Worker, Some(run.id), &request)
-        .unwrap();
+    let worker = fixture.worker(
+        run.id,
+        task,
+        &format!("ask:Write {}", root.join("docs/limits.md").display()),
+    );
 
     let routed = until("an approval routed to the chief", || async {
         fixture

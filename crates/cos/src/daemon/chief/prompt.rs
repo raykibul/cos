@@ -87,10 +87,13 @@ pub(crate) fn mcp_config(cos: &Path, home: &Path, agent_id: i64) -> String {
     .to_string()
 }
 
-/// Gives a chief agent its role, its MCP server and the rule allowing its
-/// tools. Called for every launch, so a resumed chief gets them too.
+/// Gives a chief agent its MCP server and the rule allowing its tools, and
+/// its role if the agent has none stored (its `Launch` normally carries it).
+/// Called for every launch, so a resumed chief gets them too.
 pub(crate) fn configure(claude: &mut ClaudeOptions, cos: &Path, home: &Path, agent_id: i64) {
-    claude.append_system_prompt = Some(ROLE.into());
+    if claude.append_system_prompt.is_none() {
+        claude.append_system_prompt = Some(ROLE.into());
+    }
     claude.mcp_config = Some(mcp_config(cos, home, agent_id));
     if !claude.allowed_tools.iter().any(|tool| tool == ALLOW_TOOLS) {
         claude.allowed_tools.push(ALLOW_TOOLS.into());
