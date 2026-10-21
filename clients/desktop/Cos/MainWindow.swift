@@ -4,8 +4,12 @@ import SwiftUI
 
 enum SidebarItem: Hashable {
     case events
+    case waiting
     case project(Int)
     case workspace(Int)
+    case agent(Int)
+    /// An external Claude session, by pid.
+    case session(Int)
 }
 
 /// What the window is showing or asking. Shared by the sidebar's context
@@ -18,6 +22,8 @@ final class WindowState {
     var renaming: Workspace?
     var removingWorkspace: Workspace?
     var removingProject: Project?
+    var newAgentIn: Workspace?
+    var removingAgent: Agent?
     var alert: AlertMessage?
 
     /// Runs a daemon action and shows its error, which the daemon writes to
@@ -44,11 +50,11 @@ struct MainWindow: View {
     static let id = "main"
 
     let monitor: DaemonMonitor
-    @State private var window: WindowState
+    @Bindable var window: WindowState
 
-    init(monitor: DaemonMonitor, window: WindowState = WindowState()) {
+    init(monitor: DaemonMonitor, window: WindowState) {
         self.monitor = monitor
-        _window = State(initialValue: window)
+        self.window = window
     }
 
     var body: some View {
@@ -72,6 +78,27 @@ struct MainWindow: View {
         }
         .sheet(item: $window.renaming) { workspace in
             RenameWorkspaceSheet(workspace: workspace, monitor: monitor)
+        }
+        .sheet(item: $window.newAgentIn) { workspace in
+            NewAgentSheet(workspace: workspace, monitor: monitor) { agent in
+                window.selection = .agent(agent.id)
+            }
+        }
+        .confirmationDialog(
+            "Remove agent “\(window.removingAgent?.title ?? "")”?",
+            isPresented: isPresented($window.removingAgent),
+            presenting: window.removingAgent
+        ) { agent in
+            Button("Remove Agent", role: .destructive) {
+                window.perform("Couldn't remove the agent") {
+                    try await monitor.removeAgent(id: agent.id)
+                    if window.selection == .agent(agent.id) {
+                        window.selection = .workspace(agent.workspaceId)
+                    }
+                }
+            }
+        } message: { agent in
+            Text("cos forgets this agent and its terminal. The Claude session \(agent.sessionId ?? "") stays in Claude's history, and the workspace's files aren't touched.")
         }
         .confirmationDialog(
             "Remove workspace “\(window.removingWorkspace?.title ?? "")”?",
@@ -117,6 +144,18 @@ struct MainWindow: View {
         switch window.selection {
         case .events, nil:
             EventLogView(monitor: monitor)
+        case .waiting:
+            WaitingOnYouView(monitor: monitor, window: window)
+        case .agent(let id):
+            // A fresh page (and terminal session) per agent.
+            AgentPage(agentId: id, monitor: monitor, window: window)
+                .id(id)
+        case .session(let pid):
+            if let session = monitor.sessions.first(where: { $0.pid == pid }) {
+                ExternalSessionDetail(session: session, monitor: monitor)
+            } else {
+                ContentUnavailableView("Session ended", systemImage: "terminal", description: Text("This Claude session is no longer running."))
+            }
         case .project(let id):
             if let project = monitor.project(id: id) {
                 ProjectDetail(project: project, monitor: monitor, window: window)
@@ -168,6 +207,12 @@ private struct Sidebar: View {
         List(selection: $window.selection) {
             Label("Event Log", systemImage: "list.bullet.rectangle")
                 .tag(SidebarItem.events)
+            if monitor.waitingCount > 0 || window.selection == .waiting {
+                Label("Waiting on you", systemImage: "exclamationmark.bubble.fill")
+                    .foregroundStyle(monitor.waitingCount > 0 ? Color.orange : Color.secondary)
+                    .badge(monitor.waitingCount)
+                    .tag(SidebarItem.waiting)
+            }
 
             Section("Projects") {
                 if monitor.projects.isEmpty {
@@ -179,10 +224,7 @@ private struct Sidebar: View {
                 ForEach(monitor.projects) { project in
                     DisclosureGroup(isExpanded: expanded(project.id)) {
                         ForEach(project.workspaces) { workspace in
-                            Label(workspace.title, systemImage: "arrow.triangle.branch")
-                                .help(workspace.branch)
-                                .tag(SidebarItem.workspace(workspace.id))
-                                .contextMenu { workspaceMenu(workspace) }
+                            workspaceRow(workspace)
                         }
                     } label: {
                         Label(project.name, systemImage: "folder")
@@ -196,6 +238,29 @@ private struct Sidebar: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .selectionDisabled()
+                }
+            }
+
+            if !monitor.sessions.isEmpty {
+                Section("Other Claude sessions") {
+                    ForEach(SessionGroup.groups(monitor)) { group in
+                        Text(group.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .selectionDisabled()
+                        ForEach(group.sessions) { session in
+                            HStack(spacing: 6) {
+                                SessionStatusDot(session: session)
+                                Text(session.displayName).lineLimit(1)
+                            }
+                            .help(session.cwd)
+                            .tag(SidebarItem.session(session.pid))
+                            .contextMenu {
+                                Button("Reveal in Finder") { Files.reveal(session.cwd) }
+                                Button("Open in Terminal") { Files.openInTerminal(session.cwd) }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -225,6 +290,54 @@ private struct Sidebar: View {
         }
     }
 
+    /// A workspace, with its agents nested under it when it has any.
+    @ViewBuilder
+    private func workspaceRow(_ workspace: Workspace) -> some View {
+        let agents = monitor.agents(inWorkspace: workspace.id)
+        let label = Label(workspace.title, systemImage: "arrow.triangle.branch")
+            .help(workspace.branch)
+            .tag(SidebarItem.workspace(workspace.id))
+            .contextMenu { workspaceMenu(workspace) }
+        if agents.isEmpty {
+            label
+        } else {
+            DisclosureGroup(isExpanded: expanded(workspaceKey(workspace.id))) {
+                ForEach(agents) { agent in
+                    HStack(spacing: 6) {
+                        AgentStateDot(state: agent.state)
+                        Text(agent.title).lineLimit(1)
+                        if monitor.pendingApproval(forAgent: agent.id) != nil || agent.state == .needsTrust {
+                            Spacer()
+                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                        }
+                    }
+                    .help("\(agent.title): \(agent.state.title)")
+                    .tag(SidebarItem.agent(agent.id))
+                    .contextMenu { agentMenu(agent) }
+                }
+            } label: {
+                label
+            }
+        }
+    }
+
+    /// Workspaces share the collapsed set with projects, on their own keys.
+    private func workspaceKey(_ id: Int) -> Int { -id - 1 }
+
+    @ViewBuilder
+    private func agentMenu(_ agent: Agent) -> some View {
+        if agent.state.isAlive {
+            Button("Stop") { window.perform("Couldn't stop the agent") { try await monitor.stopAgent(id: agent.id) } }
+                .disabled(!canChange)
+        } else {
+            Button("Resume") { window.perform("Couldn't resume the agent") { try await monitor.resumeAgent(id: agent.id) } }
+                .disabled(!canChange)
+        }
+        Divider()
+        Button("Remove Agent…") { window.removingAgent = agent }
+            .disabled(!canChange || agent.state.isAlive)
+    }
+
     @ViewBuilder
     private func projectMenu(_ project: Project) -> some View {
         Button("New Workspace…") { window.newWorkspaceIn = project }
@@ -239,6 +352,8 @@ private struct Sidebar: View {
 
     @ViewBuilder
     private func workspaceMenu(_ workspace: Workspace) -> some View {
+        Button("New Agent…") { window.newAgentIn = workspace }
+            .disabled(!canChange || !monitor.agentsSupported)
         Button("Rename…") { window.renaming = workspace }
             .disabled(!canChange)
         Divider()

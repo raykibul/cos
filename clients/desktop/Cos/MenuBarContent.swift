@@ -5,6 +5,7 @@ import SwiftUI
 /// The panel under the menu bar icon.
 struct MenuBarContent: View {
     let monitor: DaemonMonitor
+    let window: WindowState
     @Environment(\.openWindow) private var openWindow
 
     private var recent: [LoggedEvent] { monitor.events.suffix(5).reversed() }
@@ -15,6 +16,14 @@ struct MenuBarContent: View {
             if monitor.connection == .notRunning {
                 StartHelp(socketPath: monitor.client.socketPath)
                     .font(.callout)
+            }
+
+            if monitor.waitingCount > 0 {
+                Divider()
+                MenuBarWaiting(monitor: monitor, window: window) { item in
+                    window.selection = item
+                    openMainWindow()
+                }
             }
 
             Divider()
@@ -45,11 +54,7 @@ struct MenuBarContent: View {
             Divider()
 
             HStack {
-                Button("Open cos…") {
-                    openWindow(id: MainWindow.id)
-                    // A menu bar app isn't active by default; bring the window forward.
-                    NSApp.activate()
-                }
+                Button("Open cos…") { openMainWindow() }
                 .keyboardShortcut("o")
                 Spacer()
                 Button("Quit cos") { NSApp.terminate(nil) }
@@ -57,6 +62,12 @@ struct MenuBarContent: View {
             }
         }
         .padding(14)
-        .frame(width: 340)
+        .frame(width: 360)
+    }
+
+    private func openMainWindow() {
+        openWindow(id: MainWindow.id)
+        // A menu bar app isn't active by default; bring the window forward.
+        NSApp.activate()
     }
 }

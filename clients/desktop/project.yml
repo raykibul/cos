@@ -7,6 +7,12 @@ options:
 packages:
   CosKit:
     path: ../shared/CosKit
+  # The terminal emulator for agents' live terminals. Pinned exactly: 1.11.2
+  # is the last release before SwiftTerm added a Metal renderer (1.12), whose
+  # shaders need Xcode's separately downloaded Metal toolchain to build.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.11.2
 targets:
   Cos:
     type: application
@@ -14,6 +20,8 @@ targets:
     sources: [Cos]
     dependencies:
       - package: CosKit
+      - package: SwiftTerm
+        product: SwiftTerm
     info:
       path: Cos/Info.plist
       properties:
@@ -33,6 +41,25 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
         ENABLE_HARDENED_RUNTIME: NO
+  # Renders the app's views to PNGs against an in-process fake daemon, for
+  # checking layout without a real daemon or a screen. See README.md.
+  CosSnapshots:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Cos
+        excludes: [CosApp.swift, Info.plist]
+      - path: Snapshots
+    dependencies:
+      - package: CosKit
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
 schemes:
   Cos:
     build:
@@ -41,3 +68,7 @@ schemes:
     test:
       targets:
         - package: CosKit/CosKitTests
+  CosSnapshots:
+    build:
+      targets:
+        CosSnapshots: all

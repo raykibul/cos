@@ -27,17 +27,76 @@ public final class DaemonMonitor {
     public private(set) var projects: [Project] = []
     /// Why the last project refresh failed, if it did.
     public private(set) var projectsError: String?
+    /// Agents in every workspace, newest first. Kept while the daemon is away.
+    public private(set) var agents: [Agent] = []
+    /// Approvals waiting for an answer, oldest first.
+    public private(set) var approvals: [Approval] = []
+    /// Claude sessions the daemon didn't start.
+    public private(set) var sessions: [ExternalSession] = []
+    /// False when the daemon answers 404 for the agents routes: an older
+    /// daemon that doesn't run agents yet.
+    public private(set) var agentsSupported = true
+    /// Why the last agent or approval refresh failed, if it did.
+    public private(set) var agentsError: String?
 
     public let client: CosClient
     /// How many events to keep in memory.
     public let keep: Int
     private var task: Task<Void, Never>?
-    private var refreshing = false
-    private var refreshAgain = false
+    private var projectsRefresh: CoalescedRefresh<[Project]>!
+    private var agentsRefresh: CoalescedRefresh<[Agent]>!
+    private var approvalsRefresh: CoalescedRefresh<[Approval]>!
+    private var sessionsRefresh: CoalescedRefresh<[ExternalSession]>!
 
     public init(client: CosClient = CosClient(), keep: Int = 1000) {
         self.client = client
         self.keep = keep
+        projectsRefresh = CoalescedRefresh(fetch: { try await client.projects() }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let projects):
+                self.projects = projects
+                projectsError = nil
+            case .failure(let error):
+                projectsError = error.localizedDescription
+            }
+        }
+        agentsRefresh = CoalescedRefresh(fetch: { try await client.agents() }) { [weak self] result in
+            self?.applyAgentsResult(result) { $0.agents = $1 }
+        }
+        approvalsRefresh = CoalescedRefresh(fetch: { try await client.approvals(state: .pending) }) { [weak self] result in
+            self?.applyAgentsResult(result) { monitor, approvals in
+                monitor.approvals = approvals.filter { $0.state == .pending }.sorted { $0.createdMs < $1.createdMs }
+            }
+        }
+        sessionsRefresh = CoalescedRefresh(fetch: { try await client.externalSessions() }) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let sessions):
+                self.sessions = sessions
+            case .failure(let error):
+                // Not knowing the route means an older daemon: nothing to list.
+                if case CosError.notFound = error { self.sessions = [] }
+            }
+        }
+    }
+
+    /// Applies an agents or approvals answer. A 404 means the daemon has no
+    /// agents API, which isn't an error worth showing.
+    private func applyAgentsResult<T>(_ result: Result<T, Error>, _ store: (DaemonMonitor, T) -> Void) {
+        switch result {
+        case .success(let value):
+            store(self, value)
+            agentsSupported = true
+            agentsError = nil
+        case .failure(CosError.notFound):
+            agentsSupported = false
+            agents = []
+            approvals = []
+            agentsError = nil
+        case .failure(let error):
+            agentsError = error.localizedDescription
+        }
     }
 
     public func start() {
@@ -61,8 +120,12 @@ public final class DaemonMonitor {
             self.status = status
             connection = .running
             refreshProjects()
+            refreshAgents()
         case .event(let event):
             if event.changesProjects { refreshProjects() }
+            if event.changesAgents { agentsRefresh.request() }
+            if event.changesApprovals { approvalsRefresh.request() }
+            if event.changesSessions { sessionsRefresh.request() }
             events.append(event)
             if events.count > keep { events.removeFirst(events.count - keep) }
             // Events only ever append, so keep the counts current without
@@ -92,28 +155,15 @@ public final class DaemonMonitor {
     /// Reloads the project list. Calls made while one is in flight are folded
     /// into a single follow-up, so a burst of events costs two requests.
     public func refreshProjects() {
-        if refreshing {
-            refreshAgain = true
-            return
-        }
-        refreshing = true
-        Task {
-            repeat {
-                refreshAgain = false
-                do {
-                    let projects = try await client.projects()
-                    // A newer refresh was asked for while this one ran (often
-                    // right after a local change); its answer may be stale.
-                    if !refreshAgain {
-                        self.projects = projects
-                        projectsError = nil
-                    }
-                } catch {
-                    if !refreshAgain { projectsError = error.localizedDescription }
-                }
-            } while refreshAgain
-            refreshing = false
-        }
+        projectsRefresh.request()
+    }
+
+    /// Reloads agents, pending approvals and external sessions, folded the
+    /// same way.
+    public func refreshAgents() {
+        agentsRefresh.request()
+        approvalsRefresh.request()
+        sessionsRefresh.request()
     }
 
     // The actions below apply the daemon's answer at once, so the UI doesn't
@@ -175,6 +225,138 @@ public final class DaemonMonitor {
     private func updateProject(_ id: Int, _ change: (inout Project) -> Void) {
         if let index = projects.firstIndex(where: { $0.id == id }) {
             change(&projects[index])
+        }
+    }
+
+    // MARK: Agents
+
+    public func agent(id: Int) -> Agent? {
+        agents.first { $0.id == id }
+    }
+
+    /// A workspace's agents, newest first.
+    public func agents(inWorkspace id: Int) -> [Agent] {
+        agents.filter { $0.workspaceId == id }
+    }
+
+    /// The approval an agent is waiting on, if any.
+    public func pendingApproval(forAgent id: Int) -> Approval? {
+        approvals.first { $0.agentId == id && $0.state == .pending }
+    }
+
+    /// Agents that can't go on until you answer something: a permission
+    /// request or the trust dialog.
+    public var agentsWaitingOnYou: [Agent] {
+        agents.filter { $0.state == .needsTrust || pendingApproval(forAgent: $0.id) != nil || $0.state == .waitingApproval }
+    }
+
+    /// Pending approvals plus agents stuck on the trust dialog.
+    public var waitingCount: Int {
+        approvals.count + agents.filter { $0.state == .needsTrust }.count
+    }
+
+    /// External sessions in a cos workspace or project's folder come first,
+    /// grouped by where they run.
+    public func sessions(inWorkspace id: Int) -> [ExternalSession] {
+        sessions.filter { $0.workspaceId == id }
+    }
+
+    @discardableResult
+    public func createAgent(workspaceId: Int, _ request: NewAgent) async throws -> Agent {
+        let agent = try await client.createAgent(workspaceId: workspaceId, request)
+        upsert(agent)
+        agentsRefresh.request()
+        return agent
+    }
+
+    /// Sends `/exit`. The agent's state follows through events.
+    public func stopAgent(id: Int) async throws {
+        try await client.stopAgent(id: id)
+        agentsRefresh.request()
+    }
+
+    @discardableResult
+    public func resumeAgent(id: Int) async throws -> Agent {
+        let agent = try await client.resumeAgent(id: id)
+        upsert(agent)
+        agentsRefresh.request()
+        return agent
+    }
+
+    public func removeAgent(id: Int) async throws {
+        try await client.removeAgent(id: id)
+        agents.removeAll { $0.id == id }
+        approvals.removeAll { $0.agentId == id }
+        agentsRefresh.request()
+    }
+
+    public func trustAgent(id: Int) async throws {
+        try await client.trustAgent(id: id)
+        agentsRefresh.request()
+    }
+
+    /// Allows or denies. If it was already answered in the terminal (409),
+    /// it is dropped from the list anyway and the error is rethrown.
+    @discardableResult
+    public func decide(_ approval: Approval, _ decision: ApprovalDecision, message: String? = nil) async throws -> Approval {
+        defer {
+            approvalsRefresh.request()
+            agentsRefresh.request()
+        }
+        do {
+            let decided = try await client.decide(approvalId: approval.id, decision, message: message)
+            approvals.removeAll { $0.id == approval.id }
+            return decided
+        } catch CosError.conflict(let message) {
+            approvals.removeAll { $0.id == approval.id }
+            throw CosError.conflict(message)
+        }
+    }
+
+    private func upsert(_ agent: Agent) {
+        if let index = agents.firstIndex(where: { $0.id == agent.id }) {
+            agents[index] = agent
+        } else {
+            agents.insert(agent, at: 0)
+        }
+    }
+}
+
+/// A reload that never runs twice at once. Requests made while one is in
+/// flight are folded into a single follow-up, so a burst of events costs at
+/// most two requests, and an answer that a newer request overtook is dropped.
+@MainActor
+final class CoalescedRefresh<Value: Sendable> {
+    private let fetch: @Sendable () async throws -> Value
+    private let apply: @MainActor (Result<Value, Error>) -> Void
+    private var running = false
+    private var again = false
+
+    init(fetch: @escaping @Sendable () async throws -> Value, apply: @escaping @MainActor (Result<Value, Error>) -> Void) {
+        self.fetch = fetch
+        self.apply = apply
+    }
+
+    func request() {
+        if running {
+            again = true
+            return
+        }
+        running = true
+        Task {
+            repeat {
+                again = false
+                let result: Result<Value, Error>
+                do {
+                    result = .success(try await fetch())
+                } catch {
+                    result = .failure(error)
+                }
+                // A newer refresh was asked for while this one ran (often
+                // right after a local change); its answer may be stale.
+                if !again { apply(result) }
+            } while again
+            running = false
         }
     }
 }

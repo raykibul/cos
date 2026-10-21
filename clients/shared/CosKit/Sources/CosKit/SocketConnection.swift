@@ -1,106 +1,125 @@
+import Darwin
 import Foundation
-import Network
 import os
 
-/// A stream connection through Network.framework. URLSession can't reach a
-/// Unix socket; NWConnection can, and the same code will later carry TCP to
-/// the daemon over the tailnet.
-final class SocketConnection: ByteReader {
-    private let connection: NWConnection
-    private let queue = DispatchQueue(label: "cos.socket")
+/// A stream connection to the daemon's Unix socket over plain POSIX
+/// sockets. URLSession can't reach a Unix socket. NWConnection can, but when
+/// the daemon writes a response and closes at once (every response here),
+/// it sometimes drops the data and reports ECANCELED instead, so cos uses
+/// the socket directly. Blocking calls run on the connection's own queue;
+/// cancelling shuts the socket down, which wakes a waiting read.
+final class SocketConnection: ByteReader, @unchecked Sendable {
     private let socketPath: String
+    private let queue = DispatchQueue(label: "cos.socket")
+    /// The descriptor, and whether we shut it down ourselves. It is only
+    /// closed in `deinit`, so a read still running on the queue never sees
+    /// a reused descriptor.
+    private let state = OSAllocatedUnfairLock(initialState: (fd: Int32(-1), shutDown: false))
 
     init(unixPath: String) {
         socketPath = unixPath
-        connection = NWConnection(to: .unix(path: unixPath), using: .tcp)
+    }
+
+    deinit {
+        let fd = state.withLock { $0.fd }
+        if fd >= 0 { Darwin.close(fd) }
     }
 
     /// Connects, mapping "no socket" and "nobody listening" to `.notRunning`.
     func open() async throws {
-        // State callbacks keep coming after we've resumed; only the first counts.
-        let resumed = OSAllocatedUnfairLock(initialState: false)
-        let socketPath = socketPath
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                connection.stateUpdateHandler = { [connection] state in
-                    let result: Result<Void, Error>?
-                    switch state {
-                    case .ready:
-                        result = .success(())
-                    // A Unix socket that can't connect reports "waiting" rather
-                    // than "failed", since Network would retry it forever.
-                    case .waiting(let error), .failed(let error):
-                        connection.cancel()
-                        result = .failure(Self.map(error, socketPath: socketPath))
-                    case .cancelled:
-                        result = .failure(CancellationError())
-                    default:
-                        result = nil
-                    }
-                    guard let result else { return }
-                    let first = resumed.withLock { done in
-                        defer { done = true }
-                        return !done
-                    }
-                    if first { continuation.resume(with: result) }
-                }
-                connection.start(queue: queue)
+        try await run { [socketPath, state] in
+            var address = sockaddr_un()
+            address.sun_family = sa_family_t(AF_UNIX)
+            let path = Array(socketPath.utf8)
+            let capacity = MemoryLayout.size(ofValue: address.sun_path)
+            guard path.count < capacity else {
+                throw CosError.transport("The socket path is too long: \(socketPath)")
             }
-        } onCancel: {
-            connection.cancel()
+            withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path) }
+
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard fd >= 0 else { throw Self.error(errno, socketPath: socketPath) }
+            var on: Int32 = 1
+            // A write to a closed socket returns EPIPE instead of killing the app.
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            let alreadyShutDown = state.withLock { state in
+                state.fd = fd
+                return state.shutDown
+            }
+            if alreadyShutDown { throw CancellationError() }
+            let connected = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                }
+            }
+            guard connected == 0 else { throw Self.error(errno, socketPath: socketPath) }
         }
     }
 
     func send(_ bytes: [UInt8]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: Data(bytes), completion: .contentProcessed { [socketPath] error in
-                if let error {
-                    continuation.resume(throwing: Self.map(error, socketPath: socketPath))
-                } else {
-                    continuation.resume()
+        try await run { [socketPath, state] in
+            let fd = state.withLock { $0.fd }
+            var offset = 0
+            while offset < bytes.count {
+                let written = bytes[offset...].withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw Self.error(errno, socketPath: socketPath)
                 }
-            })
+                offset += written
+            }
         }
     }
 
+    /// The next bytes, or `nil` once the daemon has closed its end.
     func read() async throws -> [UInt8]? {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[UInt8]?, Error>) in
-                connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [socketPath] data, _, isComplete, error in
-                    if let data, !data.isEmpty {
-                        continuation.resume(returning: Array(data))
-                    } else if let error {
-                        continuation.resume(throwing: Self.map(error, socketPath: socketPath))
-                    } else if isComplete {
-                        continuation.resume(returning: nil)
-                    } else {
-                        continuation.resume(returning: [])
-                    }
-                }
+        try await run { [socketPath, state] in
+            let fd = state.withLock { $0.fd }
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            while true {
+                let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+                if count > 0 { return Array(buffer[..<count]) }
+                if count < 0, errno == EINTR { continue }
+                // Our own shutdown also ends the read; that's a cancellation.
+                if state.withLock({ $0.shutDown }) { throw CancellationError() }
+                if count == 0 { return nil }
+                throw Self.error(errno, socketPath: socketPath)
             }
-        } onCancel: {
-            // Ends a read that is waiting for a quiet stream.
-            connection.cancel()
         }
     }
 
     func close() {
-        connection.cancel()
+        let fd = state.withLock { state in
+            state.shutDown = true
+            return state.fd
+        }
+        if fd >= 0 { shutdown(fd, SHUT_RDWR) }
     }
 
-    private static func map(_ error: NWError, socketPath: String) -> Error {
-        if case .posix(let code) = error {
-            switch code {
-            case .ENOENT, .ECONNREFUSED:
-                return CosError.notRunning(socket: socketPath)
-            case .ECANCELED:
-                return CancellationError()
-            case .ECONNRESET, .EPIPE:
-                return CosError.connectionClosed
-            default:
-                break
+    /// Runs blocking socket calls on the connection's queue. Cancelling the
+    /// task shuts the socket down, which ends whatever call is waiting.
+    private func run<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+                queue.async {
+                    continuation.resume(with: Result { try work() })
+                }
             }
+        } onCancel: {
+            close()
         }
-        return CosError.transport(error.localizedDescription)
+    }
+
+    private static func error(_ code: Int32, socketPath: String) -> Error {
+        switch code {
+        case ENOENT, ECONNREFUSED:
+            return CosError.notRunning(socket: socketPath)
+        case ECONNRESET, EPIPE, ENOTCONN:
+            return CosError.connectionClosed
+        case ECANCELED:
+            return CancellationError()
+        default:
+            return CosError.transport(String(cString: strerror(code)))
+        }
     }
 }

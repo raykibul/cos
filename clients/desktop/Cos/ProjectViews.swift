@@ -82,6 +82,9 @@ struct WorkspaceDetail: View {
                         }
                     }
                     Spacer()
+                    Button("New Agent…") { window.newAgentIn = workspace }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canChange || !monitor.agentsSupported)
                     Button("Rename…") { window.renaming = workspace }
                         .disabled(!canChange)
                     Button("Remove…", role: .destructive) { window.removingWorkspace = workspace }
@@ -108,7 +111,7 @@ struct WorkspaceDetail: View {
 
                 FolderButtons(path: workspace.path)
 
-                AgentsSection(workspace: workspace)
+                AgentsSection(workspace: workspace, monitor: monitor, window: window)
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -121,31 +124,6 @@ struct WorkspaceDetail: View {
         case .origin: "Started from the latest commit on origin."
         case .head: "Started from your checkout's HEAD."
         default: "Started from \(workspace.base.rawValue)."
-        }
-    }
-}
-
-/// Where the workspace's agents will be listed. Agents aren't in the
-/// daemon's API yet; this is their place in the layout.
-private struct AgentsSection: View {
-    let workspace: Workspace
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Agents").font(.headline)
-            VStack(spacing: 8) {
-                Image(systemName: "person.2")
-                    .font(.title)
-                    .foregroundStyle(.secondary)
-                Text("No agents yet")
-                    .font(.headline)
-                Text("Agents running in this workspace will appear here. They all share its folder and branch.")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 160)
-            .padding()
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
         }
     }
 }
