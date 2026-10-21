@@ -13,6 +13,7 @@
 
 mod agents_cmd;
 mod attach;
+mod chief_cmd;
 mod client;
 mod commands;
 mod daemon;
@@ -20,6 +21,7 @@ mod devices_cmd;
 mod home;
 mod launchd;
 mod limits_cmd;
+mod mcp;
 mod projects_cmd;
 mod runs_cmd;
 mod sessions_cmd;
@@ -102,6 +104,17 @@ enum Command {
     Allow { id: i64 },
     /// Deny a pending permission request. The message is shown to Claude.
     Deny { id: i64, message: Option<String> },
+    /// List the questions run chiefs are waiting for you to answer.
+    Questions(chief_cmd::QuestionsArgs),
+    /// Answer a chief's question.
+    Answer(chief_cmd::AnswerArgs),
+    /// Send a message to a run's chief: `cos say [run] "text"`.
+    Say(chief_cmd::SayArgs),
+    /// Print a run's report.
+    Report(chief_cmd::ReportArgs),
+    /// Run by a chief's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
+    #[command(hide = true)]
+    Mcp(mcp::McpArgs),
 }
 
 #[derive(Subcommand)]
@@ -130,7 +143,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Some(host) = cli
         .host
         .as_deref()
-        .filter(|_| !matches!(cli.command, Command::Daemon { .. }))
+        .filter(|_| !matches!(cli.command, Command::Daemon { .. } | Command::Mcp(_)))
     {
         client::use_remote_host(host);
     }
@@ -170,5 +183,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Approvals(args) => agents_cmd::approvals(&home, args).await,
         Command::Allow { id } => agents_cmd::answer(&home, id, true, None).await,
         Command::Deny { id, message } => agents_cmd::answer(&home, id, false, message).await,
+        Command::Questions(args) => chief_cmd::questions(&home, args).await,
+        Command::Answer(args) => chief_cmd::answer(&home, args).await,
+        Command::Say(args) => chief_cmd::say(&home, args).await,
+        Command::Report(args) => chief_cmd::report(&home, args).await,
+        Command::Mcp(args) => mcp::run(&home, args).await,
     }
 }

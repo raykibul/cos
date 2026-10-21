@@ -90,6 +90,7 @@ pub(crate) struct AppState {
     pub tailnet: super::tailnet::Tailnet,
     pub runs: Arc<Runs>,
     pub agents: super::agents::AgentManager,
+    pub chief: super::chief::Chief,
     pub started_at: Timestamp,
     pub home: PathBuf,
     /// Flips to true when the daemon is stopping; open streams end then.
@@ -115,6 +116,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::runs_api::routes())
         .merge(super::agents_api::routes())
         .merge(super::approvals_api::routes())
+        .merge(super::chief_api::routes())
         .with_state(state)
 }
 

@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 pub use board::{Board, TaskCounts, render_board};
 pub use checks::{ReviewVerdict, ScopeCheck, TaskChecks, TaskReview, TestsCheck, TestsStatus};
 pub use limits::{LimitsChange, RunLimits};
-pub use plan::{MAX_TASKS, PlanProposal, ProposedTask};
+pub use plan::{MAX_TASKS, PlanProposal, ProposedTask, problems as plan_problems};
 pub use states::{RunState, TaskMove, TaskState};
 
 use crate::events::kind;
@@ -54,6 +54,9 @@ pub struct Run {
     /// Why the run failed or was cancelled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The agent planning and steering the run, once started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chief_agent_id: Option<i64>,
     pub created_at: Timestamp,
     /// Changes whenever the run or one of its tasks does.
     pub updated_at: Timestamp,
@@ -220,6 +223,7 @@ impl Runs {
             approval_cap,
             report_path: None,
             reason: None,
+            chief_agent_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -370,6 +374,16 @@ impl Runs {
             }
             Ok(())
         })
+    }
+
+    /// Records the chief agent the daemon started for the run. Logs nothing:
+    /// `agent.started` already names the run.
+    pub fn set_chief_agent(&self, run_id: i64, agent_id: i64) -> Result<Run, RunError> {
+        let changed = storage::set_chief_agent(&self.store.lock(), run_id, agent_id)?;
+        if changed == 0 {
+            return Err(no_run(run_id));
+        }
+        self.run(run_id)
     }
 
     /// Records the branch and worktree the git side made for a task.

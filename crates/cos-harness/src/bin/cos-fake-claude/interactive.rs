@@ -14,6 +14,11 @@
 //!   (deny), which kills the hook.
 //! - contains `hang forever`: never finishes and ignores whatever is typed, so only
 //!   a kill ends the session.
+//! - `mcp tools`: lists the tools of the server in `--mcp-config` (see
+//!   [`crate::mcp`]) and replies with their names, comma-separated.
+//! - `mcp <tool> <json arguments>`: calls that tool, between `PreToolUse` and
+//!   `PostToolUse` hooks for `mcp__<server>__<tool>`, and replies with what it
+//!   returned (`error: …` for a tool error).
 //! - anything else: replies `echo: <prompt>`.
 //!
 //! `--resume <id>` continues session `<id>`; its `SessionStart` says
@@ -34,6 +39,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::mcp::Server;
 use crate::script::Script;
 
 pub(crate) fn run(args: &[String]) {
@@ -64,6 +70,8 @@ pub(crate) fn run(args: &[String]) {
         cwd: std::env::current_dir().unwrap_or_default().display().to_string(),
         settings,
         input: read_lines(),
+        mcp: flag("--mcp-config").and_then(|config| Server::from_config(&config)),
+        tool_uses: 0,
     };
 
     if std::env::var_os("COS_FAKE_CLAUDE_UNTRUSTED").is_some() && !session.trust() {
@@ -103,6 +111,8 @@ struct Session {
     cwd: String,
     settings: Value,
     input: Receiver<String>,
+    mcp: Option<Server>,
+    tool_uses: u32,
 }
 
 impl Session {
@@ -128,6 +138,8 @@ impl Session {
             show("working…");
             turn.play();
             turn.say
+        } else if let Some(command) = prompt.strip_prefix("mcp ") {
+            self.mcp_turn(command.trim())
         } else if let Some((tool, input)) = asked_tool(prompt) {
             self.permission_turn(&tool, input)
         } else if prompt.contains("permission") {
@@ -140,6 +152,35 @@ impl Session {
             "Stop",
             json!({ "last_assistant_message": reply, "stop_hook_active": false }),
         );
+    }
+
+    /// `tools`, or `<tool> <json arguments>`.
+    fn mcp_turn(&mut self, command: &str) -> String {
+        self.tool_uses += 1;
+        let Some(server) = &self.mcp else {
+            return "error: no --mcp-config".into();
+        };
+        if command == "tools" {
+            return server.list().unwrap_or_else(|error| format!("error: {error}"));
+        }
+        let (tool, arguments) = command.split_once(' ').unwrap_or((command, "{}"));
+        let arguments: Value = match serde_json::from_str(arguments.trim()) {
+            Ok(arguments) => arguments,
+            Err(error) => return format!("error: bad arguments: {error}"),
+        };
+        let tool_use = json!({
+            "tool_name": format!("mcp__{}__{tool}", server.name),
+            "tool_input": arguments,
+            "tool_use_id": format!("toolu_mcp_{}", self.tool_uses),
+        });
+        self.hook("PreToolUse", tool_use.clone());
+        let reply = server
+            .call(tool, arguments)
+            .unwrap_or_else(|error| format!("error: {error}"));
+        let mut post = tool_use;
+        post["tool_response"] = json!(reply);
+        self.hook("PostToolUse", post);
+        reply
     }
 
     fn permission_turn(&mut self, tool_name: &str, tool_input: Value) -> String {

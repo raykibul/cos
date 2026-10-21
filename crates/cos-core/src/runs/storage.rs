@@ -11,8 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use super::plan::CheckedTask;
 use super::{ApprovalPreset, Run, Task, TaskCounts, TaskState};
 
-const RUN_COLUMNS: &str =
-    "id, workspace_id, goal, state, preset, approval_cap, report_path, reason, created_ms, updated_ms";
+const RUN_COLUMNS: &str = "id, workspace_id, goal, state, preset, approval_cap, report_path, reason, created_ms, updated_ms, chief_agent_id";
 const TASK_COLUMNS: &str = "id, run_id, position, title, instructions, files, test_command, depends_on, \
      state, retries, branch, worktree, last_failure, created_ms, updated_ms, checks_json, review_json, \
      (SELECT MAX(a.id) FROM agents a WHERE a.task_id = tasks.id AND a.role = 'worker')";
@@ -56,6 +55,14 @@ pub(super) fn save_run(conn: &Connection, run: &Run) -> rusqlite::Result<()> {
         ],
     )?;
     Ok(())
+}
+
+/// Returns how many runs changed: 0 if there is no such run.
+pub(super) fn set_chief_agent(conn: &Connection, run_id: i64, agent_id: i64) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE runs SET chief_agent_id = ?2 WHERE id = ?1",
+        params![run_id, agent_id],
+    )
 }
 
 pub(super) fn run(conn: &Connection, id: i64) -> rusqlite::Result<Option<Run>> {
@@ -224,6 +231,7 @@ fn read_run(row: &Row<'_>) -> rusqlite::Result<Run> {
         reason: row.get(7)?,
         created_at: timestamp(row, 8)?,
         updated_at: timestamp(row, 9)?,
+        chief_agent_id: row.get(10)?,
     })
 }
 

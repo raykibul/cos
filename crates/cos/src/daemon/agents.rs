@@ -15,7 +15,7 @@
 mod approvals;
 mod hooks;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -90,6 +90,10 @@ pub(crate) struct AgentConfig {
     pub approval_timeout: Duration,
     pub stop_timeout: Duration,
     pub shutdown_timeout: Duration,
+    /// The `cos` binary a chief runs as its MCP server (`cos mcp`).
+    pub cos_exe: PathBuf,
+    /// The cos home that server talks to.
+    pub cos_home: PathBuf,
 }
 
 impl AgentConfig {
@@ -105,6 +109,8 @@ impl AgentConfig {
             approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: STOP_TIMEOUT,
             shutdown_timeout: SHUTDOWN_TIMEOUT,
+            cos_exe: exe,
+            cos_home: home.root().to_path_buf(),
         })
     }
 
@@ -121,6 +127,8 @@ impl AgentConfig {
             approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: Duration::from_secs(2),
             shutdown_timeout: Duration::from_secs(2),
+            cos_exe: tests::cos_binary(),
+            cos_home: dir.to_path_buf(),
         }
     }
 }
@@ -659,6 +667,11 @@ impl Inner {
         claude.mcp_config = agent.mcp_config.clone();
         claude.permission_mode = agent.permission_mode.parse().map_err(AgentError::Invalid)?;
         claude.env = self.config.env.clone();
+        // The chief's MCP server names the agent, so it's added here, where
+        // the id is known, on every launch and resume.
+        if agent.role == Role::Chief {
+            super::chief::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
+        }
         let mut options = TerminalOptions::new(claude);
         options.prompt = prompt;
         // An agent you start is your own session, so by default your
