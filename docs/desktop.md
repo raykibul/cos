@@ -40,7 +40,7 @@ The UI never talks to the socket. It calls these commands with `invoke` from `@t
 | Command | Arguments | Result |
 |---|---|---|
 | `daemon_info` | – | `{socket: string, home: string}`: where the bridge looks for the daemon (`$COS_HOME/cos.sock`, else `~/.cos/cos.sock`) |
-| `daemon_request` | `{method: "GET"\|"POST"\|"PUT"\|"DELETE", path: string, body?: any}` | `{status: number, body: any \| null}`. `path` must start with `/v1/`, else it is refused. `body` is the parsed JSON, or null for an empty response. A non-JSON response comes back as a string. Any HTTP status is a normal result; only failing to reach the daemon is an error. |
+| `daemon_request` | `{method: "GET"\|"POST"\|"PUT"\|"PATCH"\|"DELETE", path: string, body?: any}` (`PATCH` renames workspaces and moves tasks) | `{status: number, body: any \| null}`. `path` must start with `/v1/`, else it is refused. `body` is the parsed JSON, or null for an empty response. A non-JSON response comes back as a string. Any HTTP status is a normal result; only failing to reach the daemon is an error. |
 | `follow_events` | `{after: number \| null, onMessage: Channel<EventMessage>}` | `number`: a stream id |
 | `attach_terminal` | `{agentId: number, onMessage: Channel<TerminalMessage>}` | `number`: a stream id |
 | `close_stream` | `{id: number}` | – |
@@ -79,7 +79,7 @@ type TerminalMessage =
 
 ## Shell: window and tray
 
-- **Window:** one main window, 1200×780 by default, minimum 900×560. The title bar is hidden with the traffic lights inset over the sidebar (`titleBarStyle: "Overlay"`, `hiddenTitle: true`), as in Claude's and Codex's desktop apps. The UI leaves a 28 px drag region (`data-tauri-drag-region`) at the top.
+- **Window:** one main window, 1200×780 by default, minimum 900×560. The title bar is hidden with the traffic lights inset over the sidebar (`titleBarStyle: "Overlay"`, `hiddenTitle: true`), as in Claude's and Codex's desktop apps. The UI leaves a 28 px drag region (`data-tauri-drag-region`) at the top: the sidebar's top and each page's 52 px header bar are drag regions, so the window drags from anywhere up there except its buttons.
 - **Tray icon:** a menu bar icon whose menu has Open cos, a "N waiting on you" line, and Quit. The UI calls `set_waiting_count({count})` to update it. Closing the window hides it; the app keeps running in the tray, and clicking the Dock icon or Open cos shows it again.
 - **Notifications:** `notify({title, body})` posts a macOS notification (tauri-plugin-notification). The UI calls it for a new approval or question while the window isn't focused.
 - **Identity:** product name `cos`, identifier `local.cos.desktop`, version from `package.json`, ad-hoc signed. `make desktop` needs no Apple account.
