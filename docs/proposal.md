@@ -278,4 +278,8 @@ cos/
   - **Folder trust:** a worktree of a trusted repo is trusted. Otherwise `--trust` answers the trust dialog.
   - **`cos sessions`:** lists every Claude session running on the Mac (busy or idle, folder, session id, matching cos workspace) from Claude's own `sessions/<pid>.json` files. It's read-only and needs no wrapper.
   - **Details:** see [claude-protocol.md](claude-protocol.md).
+- **Agents in the Mac app (22 Oct 2026): done on the app side, against the contract in [agents-api.md](agents-api.md).** Tested against a fake daemon; the daemon side is being built in parallel.
+  - **CosKit:** has every agents, approvals and sessions route. `TerminalStream` follows an agent's terminal and reconnects with a fresh snapshot. `DaemonMonitor` keeps agents, pending approvals and external sessions current from the event stream.
+  - **Mac app:** the workspace page lists agents and starts new ones from a prompt. Each agent has a live SwiftTerm terminal page with Stop, Resume and Remove, a Trust banner and Allow/Deny banners. "Waiting on you" shows in the sidebar and the menu bar panel, and other Claude sessions are listed read-only.
+  - **Socket fix:** the client's socket moved from Network.framework to plain POSIX sockets. Network sometimes dropped a response when the daemon wrote it and closed at once, which also made the existing tests flaky.
 - **Next:** the daemon's agent runtime. Agents in workspaces run as PTY sessions with hooks, the terminal streams to the apps, and permission requests go through the approvals engine. After that, milestone 4 (workers) uses it.

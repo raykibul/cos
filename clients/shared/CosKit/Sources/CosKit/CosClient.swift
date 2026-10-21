@@ -104,29 +104,46 @@ public struct CosClient: Sendable {
 
     // MARK: Plumbing
 
-    private func getJSON<T: Decodable>(_ path: String) async throws -> T {
+    func getJSON<T: Decodable>(_ path: String) async throws -> T {
         let (connection, response) = try await request("GET", path)
         defer { connection.close() }
         return try decode(T.self, from: try await response.readBody())
     }
 
-    private func sendJSON<T: Decodable>(_ method: String, _ path: String, body: [String: String]) async throws -> T {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        let (connection, response) = try await request(method, path, json: try encoder.encode(body))
+    func sendJSON<T: Decodable>(_ method: String, _ path: String, body: some Encodable) async throws -> T {
+        let (connection, response) = try await request(method, path, json: try encodeBody(body))
         defer { connection.close() }
         return try decode(T.self, from: try await response.readBody())
     }
 
-    private func send(_ method: String, _ path: String) async throws {
+    func sendJSON<T: Decodable>(_ method: String, _ path: String) async throws -> T {
+        let (connection, response) = try await request(method, path)
+        defer { connection.close() }
+        return try decode(T.self, from: try await response.readBody())
+    }
+
+    /// A request whose answer has no body worth reading (204, 202).
+    func send(_ method: String, _ path: String) async throws {
         let (connection, response) = try await request(method, path)
         defer { connection.close() }
         _ = try await response.readBody()
     }
 
+    func send(_ method: String, _ path: String, body: some Encodable) async throws {
+        let (connection, response) = try await request(method, path, json: try encodeBody(body))
+        defer { connection.close() }
+        _ = try await response.readBody()
+    }
+
+    private func encodeBody(_ body: some Encodable) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try encoder.encode(body)
+    }
+
     /// Sends a request and reads the response head. Non-2xx answers become
     /// `CosError`s carrying the daemon's message.
-    private func request(
+    func request(
         _ method: String,
         _ path: String,
         headers: [(String, String)] = [],

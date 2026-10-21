@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import os
+@testable import CosKit
 
 /// A tiny HTTP server on a Unix socket that answers like the daemon, from a
 /// handler. It lets tests check the exact requests `CosClient` sends and how
@@ -15,6 +16,11 @@ final class FakeDaemon: Sendable {
         var json: [String: String]? {
             try? JSONDecoder().decode([String: String].self, from: Data(body))
         }
+
+        /// The body as any JSON, for bodies with numbers.
+        var value: JSONValue? {
+            try? JSONDecoder().decode(JSONValue.self, from: Data(body))
+        }
     }
 
     enum Reply: Sendable {
@@ -23,6 +29,11 @@ final class FakeDaemon: Sendable {
         /// An SSE response: these messages, then the connection stays open
         /// until the server stops.
         case stream(String)
+        /// An SSE response that ends properly after these messages.
+        case streamThenEnd(String)
+        /// An SSE response whose connection breaks after these messages,
+        /// without the closing chunk: the daemon died, say.
+        case streamThenDrop(String)
     }
 
     let socketPath: String
@@ -52,11 +63,12 @@ final class FakeDaemon: Sendable {
     }
 
     func stop() {
-        let open = state.withLock { state in
+        // Under the lock, so a connection can't close (and its number be
+        // reused) between reading the list and shutting it down.
+        state.withLock { state in
             state.stopped = true
-            return state.open
+            for client in state.open { shutdown(client, SHUT_RDWR) }
         }
-        for client in open { shutdown(client, SHUT_RDWR) }
         shutdown(listener, SHUT_RDWR)
         close(listener)
         unlink(socketPath)
@@ -71,7 +83,12 @@ final class FakeDaemon: Sendable {
     }
 
     private func serve(_ client: Int32) {
-        defer { close(client) }
+        defer {
+            // Forget it before closing: once closed, the number can be reused
+            // by another test's connection, which stop() must not shut down.
+            state.withLock { $0.open.removeAll { $0 == client } }
+            close(client)
+        }
         guard let request = readRequest(client) else { return }
         state.withLock { $0.requests.append(request) }
         switch handler(request) {
@@ -86,6 +103,12 @@ final class FakeDaemon: Sendable {
             // Hold the stream open until stop() shuts the socket down.
             var byte: UInt8 = 0
             while read(client, &byte, 1) > 0 {}
+        case .streamThenEnd(let messages):
+            let chunk = messages.isEmpty ? "" : String(messages.utf8.count, radix: 16) + "\r\n" + messages + "\r\n"
+            write(client, head(200, ["Content-Type: text/event-stream", "Transfer-Encoding: chunked"]) + chunk + "0\r\n\r\n")
+        case .streamThenDrop(let messages):
+            let chunk = messages.isEmpty ? "" : String(messages.utf8.count, radix: 16) + "\r\n" + messages + "\r\n"
+            write(client, head(200, ["Content-Type: text/event-stream", "Transfer-Encoding: chunked"]) + chunk)
         }
     }
 
