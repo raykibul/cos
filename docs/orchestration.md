@@ -156,6 +156,22 @@ When the chief is `idle` and its inbox isn't empty, the daemon types one wakeup 
 
 ## Deviations and notes from the pieces
 
+### Chief
+
+- **Migration:** one entry (`runs.chief_agent_id`, and the `wakeups`, `inbox` and `questions` tables), index 7 after rebasing onto the approvals merge (6 on its branch before that).
+- **MCP crate:** `rmcp` 3.4.1 (`server`, `transport-io`), with `ServerHandler` written by hand rather than the tool macros, so the descriptions and JSON schemas sit next to each other in `crates/cos/src/mcp.rs`.
+- **The MCP server's env** carries `COS_HOME`, so `cos mcp` reaches the daemon that started it, not `~/.cos`.
+- **`--allowedTools mcp__cos`** is passed to the chief, so its own tools never ask for permission; the daemon checks every call itself.
+- **`approval_decide`** goes from `cos mcp` straight to the approvals route `POST /v1/approvals/{id}/chief` `{decision, reason}`, after the bridge checks the approval's agent is in the chief's run. The daemon's tool route answers it with 400. The bridge requires a reason for deny too.
+- **Tool route:** `POST /v1/agents/{id}/tools/{name}`, Unix socket only, `{text}` back.
+- **`GET /v1/runs/{id}/report`** returns `{markdown, path}`, not just `{markdown}`.
+- **Open questions of finished runs** are left out of `GET /v1/questions?state=open`, and answering one is a 409.
+- **Trust:** run agents answer the trust dialog themselves, as the contract says; it's done for every non-`user` role.
+- **`agent.started`** gains `run_id`, so the apps can tie a chief to its run from the event.
+- **`task_send`** finds the task's worker through a `WorkerLookup` (`Chief::set_worker_lookup`), which returns nothing until the pipeline plugs in (or the chief reads `agents.task_id`). Until then `task_send` answers 409 "no running worker".
+- **Wakeup pacing:** after a wakeup, the next waits until the chief has started working on it (or 20 s), so one idle moment can't get two wakeups.
+- **Multi-line input:** `ClaudeTerminal::submit` sends text with line breaks as a bracketed paste (Claude turns it on), so a wakeup arrives as one message.
+
 ### Approvals
 
 - **Migration:** one entry (`approvals.tier/route/reason`, `runs.chief_approvals`, `approval_audit`), index 5 on its branch.

@@ -153,7 +153,7 @@ These go in the event log, so apps get them over `/v1/events/stream`. `data` hol
 
 | Kind | `data` |
 |---|---|
-| `agent.started` | `{agent_id, workspace_id, role, session_id}` |
+| `agent.started` | `{agent_id, workspace_id, role, run_id, session_id}` (`run_id` is null for your own agents) |
 | `agent.state_changed` | `{agent_id, state, from}` |
 | `agent.exited` | `{agent_id, exit_code}` |
 | `agent.removed` | `{agent_id}` |

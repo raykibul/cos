@@ -28,8 +28,10 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | `daemon.lock` | Holds the running daemon's pid. Its lock means only one daemon runs per home. |
 | `logs/daemon.log` | The daemon's stderr when launchd runs it. |
 | `tasks/` | Task worktrees (`tasks/<workspace>-<id>/t<task id>-<slug>`), one per task a run is working on. Removed once the task merges, or when it fails or is cancelled with no commits. |
+| `runs/<run id>/board.md` | The run's board as markdown, rewritten whenever it changes. Nothing is written inside the repo. |
+| `runs/<run id>/report.md` | The chief's report, with the "Approved on your behalf" section appended. |
 
-The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR` and `COS_CLAUDE_BIN` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
+The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR`, `COS_CLAUDE_BIN` and `COS_CHIEF_MODEL` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
 
 ## Event log
 
@@ -329,7 +331,7 @@ The chief proposes a plan with `board_propose`. It is checked before it reaches 
 
 `preset` is `strict`, `normal` or `trusted` (see "Approving on your behalf" in [proposal.md](proposal.md)).
 
-The board is also rendered as markdown by `cos_core::render_board`. `cos board` prints it, and the daemon will write it to `<repo>/.cos/board.md`.
+The board is also rendered as markdown by `cos_core::render_board`. `cos board` prints it, and the chief component writes it to `<cos home>/runs/<run id>/board.md` whenever the board changes.
 
 ### CLI
 
@@ -411,3 +413,48 @@ The `cos-policy` crate decides who answers each permission request; the rules ar
 - **Expiry:** approvals of non-`user` agents are denied after `cos_policy::timeout::UNANSWERED_AFTER` (5 minutes) with `UNANSWERED_MESSAGE`, state `expired`, whoever they were routed to.
 - **Audit:** the `approval_audit` table holds a `cos_policy::AuditRecord` (as JSON) for every answer to a run agent's request given through cos: by rule, by the chief (allowed or denied), by timeout, and by you through the API or CLI. Answers typed in the terminal aren't recorded, since their outcome isn't known. `Runs::approvals_report_section(run_id)` renders "Approved on your behalf (N)" from it for the report.
 
+## The chief
+
+Every run gets a chief: a runtime agent (`role: chief`) that plans the run, reacts to what happens and writes the report. The contract is [orchestration.md](orchestration.md); the code is `crates/cos/src/daemon/chief.rs` (with `chief/prompt.rs` and `chief/tools.rs`), `daemon/chief_api.rs`, `crates/cos/src/mcp.rs` (`cos mcp`) and `cos_core::chief` (the `inbox`, `wakeups` and `questions` tables).
+
+- **Starting:** `POST /v1/runs` starts the chief in the workspace folder right after creating the run and stores its id in `runs.chief_agent_id`. It runs with `user_settings: false` (`--setting-sources project --strict-mcp-config`), permission mode `default`, the model in `COS_CHIEF_MODEL` (Claude's default if unset), its role in `--append-system-prompt`, `--allowedTools mcp__cos`, and `--mcp-config` with one server, `cos`: `<cos exe> mcp --agent <id>` with `COS_HOME` in its env. The role and the MCP server are set on every launch, so a resumed chief keeps them. If the chief can't start, the run fails with "the chief could not start: …" and the request returns that error. Run agents answer Claude's trust dialog by themselves (the project is registered, so it counts as trusted).
+- **Tools:** `cos mcp --agent <id>` is a stdio MCP server (the `rmcp` crate) with `board_get`, `board_propose`, `task_update`, `task_send`, `ask_user`, `approval_decide` and `report_write`. It forwards each call to `POST /v1/agents/{id}/tools/{name}` (body: the arguments, result `{text}`). The daemon checks that the agent is the current chief of a run and acts on that run only (403 otherwise, 404 for an unknown tool, 400 for bad arguments, 409 when the run's state doesn't allow it). A failed call comes back to Claude as a tool error with the daemon's message, which for `board_propose` lists every problem with the plan. `approval_decide` goes from the bridge straight to `POST /v1/approvals/{id}/chief`, after checking the approval comes from an agent of the chief's run.
+- **Inbox:** the chief follows the event log. `task.state_changed` to `merged`, `blocked` or `failed`, `approval.routed` with `route: chief`, and the run reaching `reporting` become inbox items; so do your answers and messages. When the chief is `idle`, a wakeup is typed into it: a brief (run state, goal, board counts, open questions) and up to 20 items or 24 KiB, oldest first (an item is cut to 4 KiB). At most 30 wakeups go out per run per hour; past that, items wait. After a wakeup, no other goes out until the chief has started working on it (or 20 s have passed). Waiting inboxes are rechecked every 30 s.
+- **Stopping:** the chief is stopped when its run is cancelled or fails, and when the run is done, once it ends its turn (at most 2 minutes later).
+- **Report:** `report_write` works only while the run is `reporting`. It saves the markdown plus `Runs::approvals_report_section` to `runs/<id>/report.md`, calls `Runs::finish` and logs `run.report_written`.
+
+### Routes
+
+| Route | Body | Result |
+|---|---|---|
+| `POST /v1/agents/{id}/tools/{name}` | the tool's arguments | `{text}`. Unix socket only. |
+| `GET /v1/questions?state=open\|answered&run_id=N` | | `{questions: [Question]}`, oldest first. Open questions of finished runs are left out of `state=open`. |
+| `GET /v1/questions/{id}` | | Question |
+| `POST /v1/questions/{id}/answer` | `{answer}` | Question. 409 if already answered or the run is finished. |
+| `POST /v1/runs/{id}/message` | `{text}` | 202. Goes to the chief's inbox. 400 if empty or over 10,000 characters, 409 if the run is finished. |
+| `GET /v1/runs/{id}/report` | | `{markdown, path}`, or 404 before it exists. |
+
+```jsonc
+// Question
+{"id": 4, "run_id": 2, "agent_id": 9, "question": "Use Redis or in-memory?", "choices": ["redis", "memory"],
+ "state": "open", "answer": null, "created_ms": 0, "answered_ms": null}
+```
+
+Run JSON gains `chief_agent_id`. The `agent.started` event gains `run_id`.
+
+### CLI
+
+| Command | What it does |
+|---|---|
+| `cos questions [--all]` | The questions chiefs are waiting for you to answer (`--all`: answered ones too). |
+| `cos answer <id> "text"` | Answers one; the chief gets it at its next wakeup. |
+| `cos say [run] "text"` | A message to the run's chief. |
+| `cos report [run]` | Prints the run's report. |
+
+### Events
+
+| Kind | Data |
+|---|---|
+| `question.asked` | `{question_id, run_id}` |
+| `question.answered` | `{question_id, run_id}` |
+| `run.report_written` | `{run_id, path}` |
