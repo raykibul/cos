@@ -1,12 +1,12 @@
 # cos for Mac
 
-A menu bar app for the cos daemon. The menu bar panel shows its status, what's waiting on you (permission requests and trust dialogs, answerable right there) and the latest events. The window's sidebar has the event log, "Waiting on you", your projects (registered git repos) with their workspaces (worktrees cos owns) and each workspace's agents. You can add and remove projects and create, rename and remove workspaces. The app doesn't start the daemon itself yet.
+A Mac app for the cos daemon. It opens its window at launch and has a Dock icon and a menu bar item. The menu bar panel shows its status, what's waiting on you (permission requests and trust dialogs, answerable right there) and the latest events. The window's sidebar has the event log, "Waiting on you", your projects (registered git repos) with their workspaces (worktrees cos owns) and each workspace's agents. You can add and remove projects and create, rename and remove workspaces. The app doesn't start the daemon itself yet.
 
 - **Agents:** a workspace's page lists its agents (state, role, model, last message) and starts new ones from a prompt, with an optional title and model. Selecting an agent shows its live terminal: Claude's own UI, which the daemon runs in a PTY, drawn with [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). You can type into it and copy and paste, and it resizes the agent to fit the window. The header has Stop, Resume and Remove. A banner offers Trust when Claude asks to trust the folder, and Allow or Deny when it asks permission for a tool; answering in the terminal works too.
 
 The agents API is in [docs/agents-api.md](../../docs/agents-api.md). Against a daemon without it, the workspace page says so and everything else works as before.
 
-- `Cos/`: the SwiftUI app (macOS 14+). A menu bar item and one window, no Dock icon (`LSUIElement`).
+- `Cos/`: the SwiftUI app (macOS 14+). One window, a Dock icon and a menu bar item. Closing the window leaves the app in the menu bar.
 - `../shared/CosKit/`: the Swift package the app is built on, shared with the iPhone app later. Models, an HTTP/1.1 client for the daemon's Unix socket (plain POSIX sockets), an SSE parser, an event stream that reconnects and resumes after the last event it saw, `TerminalStream` and `TerminalSession` for agents' terminals (base64 decoding, reconnecting with a fresh snapshot, ordered and batched keystrokes, debounced resizes), and `DaemonMonitor`, which keeps status, events, projects, agents and pending approvals current for the UI. No AppKit in it.
 - `Snapshots/`: `CosSnapshots`, a debug tool that renders the app's views to PNGs against an in-process fake daemon (see below).
 - `project.yml`: the XcodeGen spec. `Cos.xcodeproj` is generated from it and not checked in. SwiftTerm is pinned to exactly 1.11.2, the last release before its Metal renderer, whose shaders need Xcode's separately downloaded Metal toolchain.

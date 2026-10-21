@@ -22,7 +22,5 @@
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
-	<key>LSUIElement</key>
-	<true/>
 </dict>
 </plist>

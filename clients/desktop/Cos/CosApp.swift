@@ -16,6 +16,13 @@ struct CosApp: App {
     }
 
     var body: some Scene {
+        // First, so it opens at launch. Closing it leaves the app running in
+        // the menu bar; the Dock icon or the panel brings it back.
+        Window("cos", id: MainWindow.id) {
+            MainWindow(monitor: monitor, window: window)
+        }
+        .defaultSize(width: 1000, height: 640)
+
         MenuBarExtra {
             MenuBarContent(monitor: monitor, window: window)
         } label: {
@@ -24,10 +31,5 @@ struct CosApp: App {
                 .accessibilityLabel(monitor.waitingCount > 0 ? "\(monitor.waitingCount) waiting on you" : monitor.connection.title)
         }
         .menuBarExtraStyle(.window)
-
-        Window("cos", id: MainWindow.id) {
-            MainWindow(monitor: monitor, window: window)
-        }
-        .defaultSize(width: 1000, height: 640)
     }
 }

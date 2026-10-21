@@ -107,8 +107,8 @@ final class CosTerminalNSView: TerminalView, TerminalSink {
 
     // MARK: Copy and paste
 
-    /// The app has no main menu (it's a menu bar app), so Cmd-C, Cmd-V and
-    /// Cmd-A are handled here rather than through Edit menu items.
+    /// Cmd-C, Cmd-V and Cmd-A are handled here, before the Edit menu, so
+    /// they act on the terminal rather than going to Claude as keystrokes.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self,
               event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,

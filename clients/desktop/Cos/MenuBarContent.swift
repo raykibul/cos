@@ -67,7 +67,7 @@ struct MenuBarContent: View {
 
     private func openMainWindow() {
         openWindow(id: MainWindow.id)
-        // A menu bar app isn't active by default; bring the window forward.
+        // Opening from the panel doesn't activate the app; bring the window forward.
         NSApp.activate()
     }
 }
