@@ -102,3 +102,36 @@ Every change is logged, so clients that follow the stream can refresh their proj
 | `workspace.created` | `{workspace_id, project_id, name, branch, path, base}` |
 | `workspace.renamed` | `{workspace_id, project_id, title}` |
 | `workspace.removed` | `{workspace_id, project_id, name, branch}` |
+
+## Task git lifecycle
+
+When the chief runs tasks in parallel, each worker gets its own worktree. The git side of that is `cos_core::taskgit`. It has no database tables and no routes: the orchestrator stores the `TaskWorktree` it gets back and calls these steps in order.
+
+| Step | Call | Result |
+|---|---|---|
+| Wait for a slot | `WorkerLimiter::acquire(workspace_id)` | A `WorkerPermit`; hold it while the worker runs |
+| Create | `TaskWorktrees::new(<cos home>/tasks).create(&workspace, task_id, title)` | `TaskWorktree {task_id, workspace, workspace_branch, path, branch, base_commit}` |
+| Check scope | `task.check_scope(&Scope::new(globs)?)` | `ScopeReport`; `is_ok()` or the violations |
+| Test | `task.run_tests(command, &TestOptions::default())` | `TestOutcome {status: passed/failed/timed_out, exit_code, signal, output, truncated, duration_ms}` |
+| Review | `task.diff_summary()`, `task.commits_ahead()` | Files changed, insertions, deletions, `git diff --stat` text |
+| Merge | `task.merge(title)` | `Merged {commit}`, `AlreadyMerged`, or `Conflict {paths}` |
+| Clean up | `task.remove(force)`, then `task.delete_branch()` | |
+
+**Naming.** A task worktree starts at the tip of the workspace branch. Its branch is `cos/<workspace>-t<task id>-<slug of title>`, for example `cos/lisbon-t7-add-login-page`, and its folder is `<dir>/<workspace>-<workspace id>/t7-add-login-page`. If the branch or folder exists, `-2`, `-3`, … is added. It can't be `cos/lisbon/t7-…`, because git can't hold a branch `cos/lisbon` and branches under `cos/lisbon/` at once. Uncommitted changes in the workspace aren't copied into the task worktree.
+
+**Scope.** A task's changes are its commits, `git diff <base commit>...<task branch>`, which is what the merge brings in. The report fails if any of these is true:
+
+- A changed path isn't on the allowed list (`out_of_scope`). Deleted files count, and a rename counts as both its old and new path. A copy counts only its new path.
+- A changed path is protected (`protected`), even if the list allows it: anything inside `.git/`, `.claude/`, `.codex/` or `.cos/`, any file or folder starting with `.env`, and `.mcp.json`, at any depth and in any letter case. These give agents permissions or hold secrets, so only you change them. A protected path is listed only under `protected`.
+- The worker left uncommitted or untracked files (`uncommitted`). Workers must commit. Uncommitted work would never be merged, so cos rejects it instead of guessing. Gitignored files don't count, and they're deleted with the worktree.
+- The worktree isn't on the task branch any more (`wrong_branch`).
+
+Allowed-file globs are relative to the repo root and anchored there. `*` and `?` stay within one path segment, a `**` segment matches any number of folders, and everything else is literal, so `app/[id].tsx` means that file. A pattern that matches a folder covers everything inside it: `src/auth`, `src/auth/` and `src/auth/**` all mean the same. `*.md` matches only top-level files; use `**/*.md` for all of them. Patterns with `..` are refused.
+
+**Tests.** The command runs as `sh -c` in the task worktree, in its own process group, with stdin closed. The default timeout is 15 minutes. On a timeout the whole group gets SIGTERM, then SIGKILL 2 s later. Anything the command leaves running in its group when it exits, like a background server, is killed too. cos keeps the last 64 KiB of stdout and stderr together, interleaved as written. If the command can't start, that's an error; a failing command is an outcome.
+
+**Merge.** The task branch is merged into the workspace branch inside the workspace worktree, with `--no-ff` and the message `Merge task <id>: <title>`. Merges into one workspace must not run at the same time. Git hooks run as usual. A merge is refused if the workspace has uncommitted or untracked files, or isn't on its branch. On a conflict cos runs `git merge --abort`, so the workspace is exactly as before, and returns the conflicting paths so the task can be marked blocked. If the task branch is already in the workspace branch, the result is `AlreadyMerged` and nothing changes.
+
+**Cleanup.** `remove` deletes the task's folder, but refuses if there are uncommitted changes unless forced. It always keeps the branch. `delete_branch` deletes the branch only once the workspace branch contains it, so commits are never lost.
+
+**Limits.** `WorkerLimiter::default()` allows 3 workers per workspace and 6 in total. A worker takes a workspace slot first and then an overall one, so a worker queued behind its own workspace's cap never holds a slot another workspace could use.

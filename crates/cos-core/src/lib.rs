@@ -7,7 +7,12 @@ pub mod events;
 mod git;
 pub mod projects;
 mod store;
+pub mod taskgit;
 
 pub use events::{EventLog, LoggedEvent, Subscription};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};
 pub use store::{Store, StoreError};
+pub use taskgit::{
+    Change, ChangeStatus, DiffSummary, MergeOutcome, Scope, ScopeReport, TaskGitError, TaskWorktree,
+    TaskWorktrees, TestOptions, TestOutcome, TestStatus, WorkerLimiter, WorkerPermit,
+};
