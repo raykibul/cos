@@ -37,6 +37,30 @@ public final class DaemonMonitor {
     /// Why the last agent or approval refresh failed, if it did.
     public private(set) var agentsError: String?
 
+    // Runs (see DaemonMonitor+Runs.swift). Kept while the daemon is away.
+
+    /// Every run, newest first, with task counts.
+    public internal(set) var runs: [Run] = []
+    /// False when the daemon answers 404 for `/v1/runs`.
+    public internal(set) var runsSupported = true
+    public internal(set) var runsError: String?
+    /// Open questions from chiefs, oldest first.
+    public internal(set) var questions: [Question] = []
+    /// False when the daemon answers 404 for `/v1/questions`.
+    public internal(set) var questionsSupported = true
+    /// Boards of the runs a page is showing (`watchRun`), kept current.
+    public internal(set) var boards: [Int: Board] = [:]
+    public internal(set) var boardErrors: [Int: String] = [:]
+    /// Limits of watched runs. Missing while unknown.
+    public internal(set) var limits: [Int: RunLimits] = [:]
+    /// False when the daemon answers 404 for a run's limits.
+    public internal(set) var limitsSupported = true
+    /// Reports of watched runs, once a run is reporting or done.
+    public internal(set) var reports: [Int: RunReportState] = [:]
+    /// Every approval (any state), newest first, while a run page is
+    /// showing: a run's activity list is made from it.
+    public internal(set) var allApprovals: [Approval] = []
+
     public let client: CosClient
     /// How many events to keep in memory.
     public let keep: Int
@@ -44,10 +68,19 @@ public final class DaemonMonitor {
     private var projectsRefresh: CoalescedRefresh<[Project]>!
     private var agentsRefresh: CoalescedRefresh<[Agent]>!
     private var approvalsRefresh: CoalescedRefresh<[Approval]>!
+    var runsRefresh: CoalescedRefresh<[Run]>!
+    var questionsRefresh: CoalescedRefresh<[Question]>!
+    var allApprovalsRefresh: CoalescedRefresh<[Approval]>!
+    /// Watched runs: how many pages show each, and their refreshes.
+    var watches: [Int: RunWatch] = [:]
+    /// How long run refreshes wait, so a burst of events (approving a plan
+    /// logs one per task) costs one request.
+    let runsDebounce: Duration
 
-    public init(client: CosClient = CosClient(), keep: Int = 1000) {
+    public init(client: CosClient = CosClient(), keep: Int = 1000, runsDebounce: Duration = .milliseconds(120)) {
         self.client = client
         self.keep = keep
+        self.runsDebounce = runsDebounce
         projectsRefresh = CoalescedRefresh(fetch: { try await client.projects() }) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -66,6 +99,7 @@ public final class DaemonMonitor {
                 monitor.approvals = approvals.filter { $0.state == .pending }.sorted { $0.createdMs < $1.createdMs }
             }
         }
+        setUpRuns()
     }
 
     /// Applies an agents or approvals answer. A 404 means the daemon has no
@@ -108,10 +142,12 @@ public final class DaemonMonitor {
             connection = .running
             refreshProjects()
             refreshAgents()
+            refreshRuns()
         case .event(let event):
             if event.changesProjects { refreshProjects() }
             if event.changesAgents { agentsRefresh.request() }
             if event.changesApprovals { approvalsRefresh.request() }
+            applyRunEvent(event)
             events.append(event)
             if events.count > keep { events.removeFirst(events.count - keep) }
             // Events only ever append, so keep the counts current without
@@ -230,13 +266,24 @@ public final class DaemonMonitor {
 
     /// Agents that can't go on until you answer something: a permission
     /// request or the trust dialog.
+    /// An agent waiting on its run's chief isn't waiting on you.
     public var agentsWaitingOnYou: [Agent] {
-        agents.filter { $0.state == .needsTrust || pendingApproval(forAgent: $0.id) != nil || $0.state == .waitingApproval }
+        agents.filter { agent in
+            if agent.state == .needsTrust { return true }
+            if let approval = pendingApproval(forAgent: agent.id) { return approval.isForYou }
+            return agent.state == .waitingApproval
+        }
     }
 
-    /// Pending approvals plus agents stuck on the trust dialog.
+    /// Pending approvals that are yours to answer: not routed to a chief.
+    public var approvalsForYou: [Approval] {
+        approvals.filter(\.isForYou)
+    }
+
+    /// Everything blocked on you: approvals routed to you, agents stuck on
+    /// the trust dialog, chiefs' open questions, and plans to approve.
     public var waitingCount: Int {
-        approvals.count + agents.filter { $0.state == .needsTrust }.count
+        approvalsForYou.count + agents.filter { $0.state == .needsTrust }.count + questions.count + plansAwaitingApproval.count
     }
 
     @discardableResult
@@ -307,10 +354,13 @@ public final class DaemonMonitor {
 final class CoalescedRefresh<Value: Sendable> {
     private let fetch: @Sendable () async throws -> Value
     private let apply: @MainActor (Result<Value, Error>) -> Void
+    /// How long to wait before fetching, so requests in a burst fold into one.
+    private let delay: Duration
     private var running = false
     private var again = false
 
-    init(fetch: @escaping @Sendable () async throws -> Value, apply: @escaping @MainActor (Result<Value, Error>) -> Void) {
+    init(delay: Duration = .zero, fetch: @escaping @Sendable () async throws -> Value, apply: @escaping @MainActor (Result<Value, Error>) -> Void) {
+        self.delay = delay
         self.fetch = fetch
         self.apply = apply
     }
@@ -322,6 +372,7 @@ final class CoalescedRefresh<Value: Sendable> {
         }
         running = true
         Task {
+            if delay > .zero { try? await Task.sleep(for: delay) }
             repeat {
                 again = false
                 let result: Result<Value, Error>

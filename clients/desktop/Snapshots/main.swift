@@ -17,15 +17,26 @@ enum Snapshots {
 
         let monitor = DaemonMonitor(client: CosClient(socketPath: server.socketPath))
         monitor.start()
-        try await waitFor { monitor.agents.count == 5 && monitor.projects.count == 2 && monitor.approvals.count == 1 }
+        try await waitFor {
+            monitor.agents.count == 14 && monitor.projects.count == 2 && monitor.approvals.count == 3
+                && monitor.runs.count == RunFixtures.runs.count && monitor.questions.count == 2
+        }
 
         let scenes: [(String, SidebarItem, CGSize)] = [
             ("agent-approval", .agent(8), CGSize(width: 1180, height: 760)),
             ("agent-working", .agent(7), CGSize(width: 1180, height: 760)),
             ("agent-trust", .agent(9), CGSize(width: 1180, height: 560)),
             ("agent-exited", .agent(5), CGSize(width: 1180, height: 560)),
-            ("workspace", .workspace(3), CGSize(width: 1180, height: 900)),
-            ("waiting", .waiting, CGSize(width: 1000, height: 560)),
+            ("agent-chief-routed", .agent(23), CGSize(width: 1180, height: 640)),
+            ("workspace", .workspace(3), CGSize(width: 1180, height: 1250)),
+            ("waiting", .waiting, CGSize(width: 1000, height: 900)),
+            ("run-running", .run(10), CGSize(width: 1180, height: 2300)),
+            ("run-plan", .run(11), CGSize(width: 1180, height: 1250)),
+            ("run-planning", .run(12), CGSize(width: 1180, height: 760)),
+            ("run-reporting", .run(13), CGSize(width: 1180, height: 1000)),
+            ("run-done", .run(7), CGSize(width: 1180, height: 1500)),
+            ("run-failed", .run(6), CGSize(width: 1180, height: 760)),
+            ("run-cancelled", .run(5), CGSize(width: 1180, height: 600)),
         ]
         for (name, selection, size) in scenes {
             for appearance in [NSAppearance.Name.darkAqua, .aqua] {
@@ -38,9 +49,13 @@ enum Snapshots {
         let lisbon = monitor.workspace(id: 3)!
         for appearance in [NSAppearance.Name.darkAqua, .aqua] {
             try await render(NewAgentSheet(workspace: lisbon, monitor: monitor) { _ in }, size: CGSize(width: 480, height: 470), appearance: appearance, to: output, name: "new-agent", settle: .milliseconds(300))
+            try await render(NewRunSheet(workspace: lisbon, monitor: monitor) { _ in }, size: CGSize(width: 500, height: 560), appearance: appearance, to: output, name: "new-run", settle: .milliseconds(300))
+            let board = monitor.boards[10]!
+            try await render(TaskActionSheet(action: TaskAction(task: board.task(id: 103)!, kind: .fail), monitor: monitor), size: CGSize(width: 440, height: 260), appearance: appearance, to: output, name: "task-fail", settle: .milliseconds(300))
+            try await render(LimitsSheet(run: board.run, limits: monitor.limits[10]!, monitor: monitor), size: CGSize(width: 460, height: 380), appearance: appearance, to: output, name: "limits", settle: .milliseconds(300))
             try await render(
                 MenuBarContent(monitor: monitor, window: WindowState()),
-                size: CGSize(width: 360, height: 520), appearance: appearance, to: output, name: "menu-bar", settle: .milliseconds(300)
+                size: CGSize(width: 360, height: 760), appearance: appearance, to: output, name: "menu-bar", settle: .milliseconds(300)
             )
         }
 
@@ -122,6 +137,20 @@ enum Snapshots {
         case ("GET", "/v1/projects"): return .json(200, Fixtures.projects)
         case ("GET", "/v1/agents"): return .json(200, Fixtures.agents)
         case ("GET", "/v1/approvals?state=pending"): return .json(200, Fixtures.approvals)
+        case ("GET", "/v1/approvals"): return .json(200, Fixtures.allApprovals)
+        case ("GET", "/v1/runs"): return .json(200, RunFixtures.list)
+        case ("GET", "/v1/questions?state=open"): return .json(200, RunFixtures.questions)
+        case ("GET", _) where path.hasPrefix("/v1/runs/"):
+            // /v1/runs/{id}, …/limits, …/report
+            let parts = path.split(separator: "/")
+            let id = Int(parts[2]) ?? 0
+            let found: String? = switch parts.count {
+            case 3: RunFixtures.board(id)
+            case 4 where parts[3] == "limits": RunFixtures.limits(id)
+            case 4 where parts[3] == "report": RunFixtures.report(id)
+            default: nil
+            }
+            return found.map { .json(200, $0) } ?? .json(404, #"{"error":"run \#(id) has no report yet"}"#)
         case ("GET", _) where path.hasSuffix("/terminal"):
             let id = Int(path.split(separator: "/")[2]) ?? 0
             return terminal(agent: id)
@@ -140,6 +169,8 @@ enum Snapshots {
         switch id {
         case 8:
             return .stream(snapshot(ClaudeScreen.screen(cwd: lisbon, prompt: "use left-pad in the formatter", dialog: true)))
+        case 23:
+            return .stream(snapshot(ClaudeScreen.screen(cwd: "/Users/me/.cos/tasks/10-103", prompt: "Task: Rate-limit the API routes", dialog: true)))
         case 7, 6:
             return .stream(snapshot(ClaudeScreen.screen(cwd: lisbon, prompt: "fix the login bug: sessions expire after 5 minutes", dialog: false)))
         case 9:

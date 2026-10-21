@@ -26,6 +26,39 @@ struct MenuBarContent: View {
                 }
             }
 
+            if !monitor.activeRuns.isEmpty {
+                Divider()
+                Text("Runs")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(monitor.activeRuns.prefix(4)) { run in
+                    Button {
+                        window.selection = .run(run.id)
+                        openMainWindow()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(run.goal).fontWeight(.medium).lineLimit(1)
+                                Spacer()
+                                Text(run.state.title)
+                                    .foregroundStyle(run.state.needsYou ? Color.orange : Color.secondary)
+                            }
+                            if let counts = run.counts, counts.total > 0, run.state != .awaitingPlanApproval {
+                                ProgressView(value: counts.progress)
+                                    .controlSize(.small)
+                                    .tint(counts.blocked > 0 ? .orange : run.state.color)
+                                Text(counts.summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.callout)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             Divider()
 
             Text("Recent events")
