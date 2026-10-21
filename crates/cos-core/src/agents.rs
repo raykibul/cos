@@ -97,10 +97,59 @@ pub struct Approval {
     pub summary: String,
     pub state: ApprovalState,
     pub decided_by: Option<DecidedBy>,
-    /// The message sent with a denial.
+    /// The message sent with a denial, or the chief's reason.
     pub message: Option<String>,
     pub created_ms: i64,
     pub decided_ms: Option<i64>,
+    /// How the approvals policy classified the request. `None` on approvals
+    /// recorded before the policy was wired in.
+    #[serde(default)]
+    pub tier: Option<ApprovalTier>,
+    /// Who was asked to answer it.
+    #[serde(default)]
+    pub route: Option<ApprovalRoute>,
+    /// The policy's one-line reason, plus why it didn't go to the chief when
+    /// the tier would have let it.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// The approvals policy's tier for a request: `cos_policy::Tier` without
+/// what a chief-tier request needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalTier {
+    /// Rust rules allow it.
+    Allowed,
+    /// The chief may approve it, within the run's limits.
+    Chief,
+    /// Only you, because cos can't tell confidently what it does.
+    AskUser,
+    /// Only you, whatever the limits.
+    NeverDelegated,
+}
+
+impl From<cos_policy::Tier> for ApprovalTier {
+    fn from(tier: cos_policy::Tier) -> Self {
+        match tier {
+            cos_policy::Tier::Allowed => Self::Allowed,
+            cos_policy::Tier::Chief { .. } => Self::Chief,
+            cos_policy::Tier::AskUser => Self::AskUser,
+            cos_policy::Tier::NeverDelegated => Self::NeverDelegated,
+        }
+    }
+}
+
+/// Who answers an approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalRoute {
+    /// Rust rules answered it straight away; nobody was asked.
+    Auto,
+    /// The run's chief, through `approval_decide`.
+    Chief,
+    /// You.
+    User,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +192,7 @@ pub struct NewAgent {
 }
 
 /// What [`Agents::add_approval`] needs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewApproval {
     pub agent_id: i64,
     pub workspace_id: i64,
@@ -151,6 +200,9 @@ pub struct NewApproval {
     pub tool_input: Value,
     pub tool_use_id: Option<String>,
     pub summary: String,
+    pub tier: Option<ApprovalTier>,
+    pub route: Option<ApprovalRoute>,
+    pub reason: Option<String>,
 }
 
 /// The agents and approvals tables, with every change logged.
@@ -386,33 +438,133 @@ impl Agents {
 
     // ---- Approvals ----
 
-    /// Records a pending approval. Logs `approval.requested`.
+    /// Records a pending approval. Logs `approval.requested`, and
+    /// `approval.routed` when it goes to the chief.
     pub fn add_approval(&self, new: NewApproval) -> Result<Approval, StoreError> {
-        let id = {
-            let conn = self.store.lock();
-            conn.execute(
-                "INSERT INTO approvals (agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary,
-                     state, created_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
-                params![
-                    new.agent_id,
-                    new.workspace_id,
-                    new.tool_name,
-                    new.tool_input.to_string(),
-                    new.tool_use_id,
-                    new.summary,
-                    now_ms(),
-                ],
-            )?;
-            conn.last_insert_rowid()
-        };
+        let id = self.insert_approval(&new, None)?;
         let approval = self.require_approval(id)?;
         self.log.append(
             kind::APPROVAL_REQUESTED,
             None,
-            json!({ "approval_id": id, "agent_id": new.agent_id, "summary": approval.summary }),
+            json!({
+                "approval_id": id,
+                "agent_id": new.agent_id,
+                "summary": approval.summary,
+                "tier": approval.tier,
+                "route": approval.route,
+            }),
         )?;
+        if approval.route == Some(ApprovalRoute::Chief) {
+            self.log_routed(&approval)?;
+        }
         Ok(approval)
+    }
+
+    /// Records an approval that Rust rules allowed straight away: `allowed`
+    /// by `rule`, route `auto`. Nobody is asked, so it logs only
+    /// `approval.decided`, never `approval.requested`.
+    pub fn add_ruled_approval(&self, new: NewApproval) -> Result<Approval, StoreError> {
+        let new = NewApproval {
+            route: Some(ApprovalRoute::Auto),
+            ..new
+        };
+        let id = self.insert_approval(&new, Some(DecidedBy::Rule))?;
+        self.log.append(
+            kind::APPROVAL_DECIDED,
+            None,
+            json!({
+                "approval_id": id,
+                "state": ApprovalState::Allowed,
+                "decided_by": DecidedBy::Rule,
+                "route": ApprovalRoute::Auto,
+            }),
+        )?;
+        self.require_approval(id)
+    }
+
+    /// Sends a pending approval to someone else, such as to you once the
+    /// limits refused the chief's answer. `reason` replaces the stored one
+    /// if given. `None` if it was no longer pending. Logs `approval.routed`.
+    pub fn route_approval(
+        &self,
+        id: i64,
+        route: ApprovalRoute,
+        reason: Option<&str>,
+    ) -> Result<Option<Approval>, StoreError> {
+        let changed = self.store.lock().execute(
+            "UPDATE approvals SET route = ?2, reason = COALESCE(?3, reason)
+             WHERE id = ?1 AND state = 'pending'",
+            params![id, as_text(&route), reason],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        let approval = self.require_approval(id)?;
+        self.log_routed(&approval)?;
+        Ok(Some(approval))
+    }
+
+    /// The run an agent belongs to, if any.
+    pub fn run_of(&self, agent_id: i64) -> Result<Option<i64>, StoreError> {
+        Ok(self
+            .store
+            .lock()
+            .query_row("SELECT run_id FROM agents WHERE id = ?1", [agent_id], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .flatten())
+    }
+
+    /// Inserts an approval: pending, or already allowed by `decided_by`.
+    fn insert_approval(&self, new: &NewApproval, decided_by: Option<DecidedBy>) -> Result<i64, StoreError> {
+        let conn = self.store.lock();
+        let now = now_ms();
+        let (state, decided_ms) = match decided_by {
+            Some(_) => (ApprovalState::Allowed, Some(now)),
+            None => (ApprovalState::Pending, None),
+        };
+        conn.execute(
+            "INSERT INTO approvals (agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary,
+                 state, decided_by, created_ms, decided_ms, tier, route, reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                new.agent_id,
+                new.workspace_id,
+                new.tool_name,
+                new.tool_input.to_string(),
+                new.tool_use_id,
+                new.summary,
+                as_text(&state),
+                decided_by.map(|by| as_text(&by)),
+                now,
+                decided_ms,
+                new.tier.map(|tier| as_text(&tier)),
+                new.route.map(|route| as_text(&route)),
+                new.reason,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Logs `approval.routed`, under the agent's run so the chief's inbox
+    /// can pick it up.
+    fn log_routed(&self, approval: &Approval) -> Result<(), StoreError> {
+        let run_id = self.run_of(approval.agent_id)?;
+        self.log.append(
+            kind::APPROVAL_ROUTED,
+            run_id.map(|id| id.to_string()).as_deref(),
+            json!({
+                "approval_id": approval.id,
+                "route": approval.route,
+                "tier": approval.tier,
+                "run_id": run_id,
+                "agent_id": approval.agent_id,
+                "summary": approval.summary,
+                "reason": approval.reason,
+            }),
+        )?;
+        Ok(())
     }
 
     /// Answers a pending approval. Returns `None` if it was no longer
@@ -506,7 +658,7 @@ const AGENT_SELECT: &str =
 
 const APPROVAL_COLUMNS: &str =
     "id, agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary, state,
-    decided_by, message, created_ms, decided_ms";
+    decided_by, message, created_ms, decided_ms, tier, route, reason";
 
 fn current_state(conn: &Connection, id: i64) -> rusqlite::Result<Option<AgentState>> {
     conn.query_row("SELECT state FROM agents WHERE id = ?1", [id], |row| {
@@ -558,7 +710,16 @@ fn read_approval(row: &Row<'_>) -> rusqlite::Result<Approval> {
         message: row.get(9)?,
         created_ms: row.get(10)?,
         decided_ms: row.get(11)?,
+        tier: optional_text(row, 12)?,
+        route: optional_text(row, 13)?,
+        reason: row.get(14)?,
     })
+}
+
+fn optional_text<T: for<'de> Deserialize<'de>>(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<T>> {
+    let text: Option<String> = row.get(index)?;
+    text.map(|text| parse_text(&text).map_err(|error| conversion_error(index, error)))
+        .transpose()
 }
 
 /// The serde name of a unit enum variant, as stored in the database.

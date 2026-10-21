@@ -5,6 +5,7 @@
 //! an agent or touches git. The contract is in `docs/daemon.md`.
 
 mod board;
+mod limits;
 mod plan;
 mod states;
 mod storage;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use board::{Board, TaskCounts, render_board};
+pub use limits::{LimitsChange, RunLimits};
 pub use plan::{MAX_TASKS, PlanProposal, ProposedTask};
 pub use states::{RunState, TaskMove, TaskState};
 

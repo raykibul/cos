@@ -230,6 +230,7 @@ dependencies = [
  "clap",
  "cos-core",
  "cos-harness",
+ "cos-policy",
  "crossterm",
  "http-body-util",
  "hyper",
@@ -249,6 +250,7 @@ dependencies = [
 name = "cos-core"
 version = "0.1.0"
 dependencies = [
+ "cos-policy",
  "jiff",
  "rusqlite",
  "rustix",

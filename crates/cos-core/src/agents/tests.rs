@@ -144,6 +144,7 @@ fn approvals_are_decided_once() {
             tool_input: json!({ "command": "touch x" }),
             tool_use_id: Some("toolu_1".into()),
             summary: "Bash touch x".into(),
+            ..NewApproval::default()
         })
         .unwrap();
     assert_eq!(approval.state, ApprovalState::Pending);
@@ -199,6 +200,7 @@ fn removing_an_agent_or_its_workspace_drops_its_approvals() {
         tool_input: json!({}),
         tool_use_id: None,
         summary: "Write".into(),
+        ..NewApproval::default()
     };
     agents.add_approval(approval(agent.id)).unwrap();
 
@@ -222,4 +224,73 @@ fn states_parse_from_their_names() {
     assert_eq!("waiting_approval".parse(), Ok(AgentState::WaitingApproval));
     assert!("busy".parse::<AgentState>().is_err());
     assert_eq!("settled".parse(), Ok(ApprovalState::Settled));
+}
+
+#[test]
+fn approvals_carry_their_tier_and_route() {
+    let (agents, log, _) = agents();
+    let agent = agents.create(new_agent(None)).unwrap();
+    let new = |route| NewApproval {
+        agent_id: agent.id,
+        workspace_id: 1,
+        tool_name: "Bash".into(),
+        summary: "Bash npm install".into(),
+        tier: Some(ApprovalTier::Chief),
+        route: Some(route),
+        reason: Some("installs packages".into()),
+        ..NewApproval::default()
+    };
+
+    let ruled = agents.add_ruled_approval(new(ApprovalRoute::User)).unwrap();
+    assert_eq!(
+        (ruled.state, ruled.decided_by, ruled.route),
+        (
+            ApprovalState::Allowed,
+            Some(DecidedBy::Rule),
+            Some(ApprovalRoute::Auto)
+        )
+    );
+    assert!(ruled.decided_ms.is_some());
+    assert_eq!(kinds(&log), [kind::APPROVAL_DECIDED], "nobody is asked");
+
+    let chief = agents.add_approval(new(ApprovalRoute::Chief)).unwrap();
+    assert_eq!(
+        (chief.tier, chief.route, chief.reason.as_deref()),
+        (
+            Some(ApprovalTier::Chief),
+            Some(ApprovalRoute::Chief),
+            Some("installs packages")
+        )
+    );
+    let rerouted = agents
+        .route_approval(chief.id, ApprovalRoute::User, Some("the chief may not"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(rerouted.route, Some(ApprovalRoute::User));
+    assert_eq!(rerouted.reason.as_deref(), Some("the chief may not"));
+    let events = log.after(0, 100).unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.kind.as_str()).collect::<Vec<_>>(),
+        [
+            kind::APPROVAL_DECIDED,
+            kind::APPROVAL_REQUESTED,
+            kind::APPROVAL_ROUTED,
+            kind::APPROVAL_ROUTED
+        ]
+    );
+    assert_eq!(events[2].data["route"], "chief");
+    assert_eq!(events[3].data["route"], "user");
+    assert_eq!(events[3].data["tier"], "chief");
+
+    agents
+        .decide_approval(chief.id, ApprovalState::Denied, Some(DecidedBy::User), None)
+        .unwrap();
+    assert!(
+        agents
+            .route_approval(chief.id, ApprovalRoute::Chief, None)
+            .unwrap()
+            .is_none()
+    );
+    let json = serde_json::to_value(agents.approval(chief.id).unwrap().unwrap()).unwrap();
+    assert_eq!((&json["tier"], &json["route"]), (&json!("chief"), &json!("user")));
 }

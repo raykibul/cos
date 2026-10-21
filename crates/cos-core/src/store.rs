@@ -153,6 +153,27 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     CREATE INDEX approvals_by_agent ON approvals (agent_id, state);
     CREATE INDEX approvals_by_state ON approvals (state, id);
 ",
+    "
+    -- How cos-policy judged each approval: its tier (allowed, chief, ask_user,
+    -- never_delegated), who it went to (auto, chief, user) and why. NULL on
+    -- approvals from before the policy was wired in.
+    ALTER TABLE approvals ADD COLUMN tier TEXT;
+    ALTER TABLE approvals ADD COLUMN route TEXT;
+    ALTER TABLE approvals ADD COLUMN reason TEXT;
+    -- How many requests the chief has approved in the run, against approval_cap.
+    ALTER TABLE runs ADD COLUMN chief_approvals INTEGER NOT NULL DEFAULT 0;
+    -- Every answer to a run agent's request that cos, the chief or you gave,
+    -- for the report. No foreign keys: it outlives the agents and approvals.
+    -- record is a cos_policy::AuditRecord as JSON.
+    CREATE TABLE approval_audit (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL,
+        approval_id INTEGER,
+        at_ms       INTEGER NOT NULL,
+        record      TEXT    NOT NULL
+    );
+    CREATE INDEX approval_audit_by_run ON approval_audit (run_id, id);
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
