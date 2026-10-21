@@ -153,3 +153,18 @@ When the chief is `idle` and its inbox isn't empty, the daemon types one wakeup 
 | `cos say [run] "text"` (a message to the chief) | chief |
 | `cos report [run]` | chief |
 | `cos limits [run] [--preset …] [--cap N]` | approvals |
+
+## Deviations and notes from the pieces
+
+### Approvals
+
+- **Migration:** one entry (`approvals.tier/route/reason`, `runs.chief_approvals`, `approval_audit`), index 5 on its branch.
+- **Which task an agent works on:** until the pipeline's `agents.task_id` lands, the approvals component asks a `TaskLookup` (`AgentManager::set_task_lookup`); after the merge, `Inner::task_of` in `daemon/agents/approvals.rs` should read `agent.task_id` instead. Without a known task, a worker is judged against its workspace with nothing in scope, so its edits go to the chief or you, never auto-allowed.
+- **Report section:** `cos_core::Runs::approvals_report_section(run_id) -> Result<String, RunError>`, on `Runs` rather than a free function, so `report_write` can call it through `AppState.runs`.
+- **`approval.routed`** carries more than the contract's `{approval_id, route, tier}`: also `run_id` (and the event's `run_id`), `agent_id`, `summary` and `reason`, so the chief's inbox can deliver it without another lookup. It's logged when an approval goes to the chief, and again when a refused chief answer moves it to you.
+- **Auto-allowed requests** log only `approval.decided` (with `route: "auto"`), never `approval.requested`, so apps aren't notified.
+- **Chief denies:** `POST /v1/approvals/{id}/chief` with `deny` works on any pending approval of a run's agent, including ones routed to you (denying is always within the limits); `allow` needs `route: chief` and a reason (400 without one, rather than a refusal sent to you). Agents you start: 403 either way.
+- **The audit** also records your own answers (through the API or CLI) to run agents' requests, so the report's "you answered N" count is right. Answers typed in a terminal aren't recorded.
+- **New event** `run.limits_changed` `{run_id, preset, approval_cap, chief_approvals}`.
+- **For the Mac app:** pending approvals now include ones routed to the chief; "waiting on you" should count only `route != "chief"` (null counts as yours).
+

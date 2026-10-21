@@ -334,6 +334,7 @@ The board is also rendered as markdown by `cos_core::render_board`. `cos board` 
 | `cos board [run] [--json]` | The board as markdown. |
 | `cos approve-plan [run]` | Approves the waiting plan. |
 | `cos cancel [run] [--reason …]` | Cancels the run and its unfinished tasks. |
+| `cos limits [run] [--preset strict\|normal\|trusted] [--cap N]` | Shows or changes how much the chief may approve for you in the run (see "Approvals policy"). |
 
 Without a run id, a command picks the unfinished run in the workspace you're in, or else the only unfinished run (for `approve-plan`, the only run waiting for approval). `cos board` falls back to the newest run.
 
@@ -349,6 +350,7 @@ All of them carry the run's id in `run_id`.
 | `plan.approved` | `{run_id, tasks}` |
 | `task.state_changed` | `{run_id, task_id, title, from, to, retries, reason?}` |
 | `task.worktree_assigned` | `{run_id, task_id, branch, worktree}` |
+| `run.limits_changed` | `{run_id, preset, approval_cap, chief_approvals}` |
 
 One change can log several events. Approving a plan logs `plan.approved`, then the run's move to `running`, then each task that became `ready`.
 
@@ -358,5 +360,22 @@ An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it ow
 
 - **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder. The hooks run `cos hook`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
 - **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The one thing read from the screen is Claude's trust dialog (`needs_trust`).
-- **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait.
+- **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait. Before any of that, the approvals policy decides who answers (see "Approvals policy" below).
 - **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` runs `claude --resume <session id>` as the same agent.
+
+## Approvals policy
+
+The `cos-policy` crate decides who answers each permission request; the rules are in [approvals.md](approvals.md). The daemon side is `crates/cos/src/daemon/agents/approvals.rs`, the routes are in `daemon/approvals_api.rs`, and the books (limits, the chief's count, the audit) are in `cos_core::runs` (`runs/limits.rs`).
+
+- **Classifying:** each `PermissionRequest` becomes a `cos_policy::ApprovalRequest`: the tool, its input, the hook's `cwd`, the agent's role, `$HOME`, and a worktree. A worker or reviewer with a known task is judged against the task's worktree, its `files` as the scope and its test command. The chief, and a worker without a known task, are judged against the workspace with nothing in scope. Your own agents are judged against the workspace with everything in scope, only to show the tier. `classify_with(…, &Filesystem)` follows symlinks.
+- **Routing:** `Limits::route` with the run's preset, cap and `chief_approvals`:
+  - `allow` → the hook is answered at once and the approval recorded as `allowed` by `rule`, `route: auto`, with no `approval.requested` (nobody is notified);
+  - `chief` → pending, `route: chief`, and `approval.routed`, which the chief's inbox picks up;
+  - `user` → pending, `route: user`, as before the policy.
+
+  `role: user` agents always route to you. A request from an agent outside any run that the chief could take goes to you, since there's no chief.
+- **Chief answers:** `POST /v1/approvals/{id}/chief` `{decision, reason}`. A deny is accepted for any pending approval of a run's agent (not yours). An allow needs a reason and `route: chief`, and passes `Limits::apply_chief_decision` against the run's limits as they are at that moment, inside one transaction that also counts it in `runs.chief_approvals`. Refused → 403 with why, and the approval moves to `route: user` (`approval.routed`, its reason saying the chief's approval was refused). Claude sees a chief denial as "The chief denied this: <reason>".
+- **Limits:** `GET /v1/runs/{id}/limits` → `{preset, approval_cap, chief_approvals}`; `PUT` with `{preset?, approval_cap?}` changes them while the run isn't finished (400 over 1000, 404 unknown run, 409 finished). Nothing is re-checked retroactively: pending chief-routed approvals keep their route, and the new limits apply when the chief answers them.
+- **Expiry:** approvals of non-`user` agents are denied after `cos_policy::timeout::UNANSWERED_AFTER` (5 minutes) with `UNANSWERED_MESSAGE`, state `expired`, whoever they were routed to.
+- **Audit:** the `approval_audit` table holds a `cos_policy::AuditRecord` (as JSON) for every answer to a run agent's request given through cos: by rule, by the chief (allowed or denied), by timeout, and by you through the API or CLI. Answers typed in the terminal aren't recorded, since their outcome isn't known. `Runs::approvals_report_section(run_id)` renders "Approved on your behalf (N)" from it for the report.
+
