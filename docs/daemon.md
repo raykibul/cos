@@ -1,12 +1,12 @@
 # The cos daemon
 
-`cos daemon` is the long-running process that will own runs, workers and approvals. As of milestone 3 it owns the database and the event log, and serves an HTTP API on a Unix socket. It also keeps the books for runs and their tasks (see "Runs, tasks and the board" below); the workers and the chief that drive them arrive in milestones 4 and 5.
+`cos daemon` is the long-running process that will own runs, workers and approvals. As of milestone 3 it owns the database and the event log, and serves an HTTP API on a Unix socket. It also keeps the books for runs and their tasks (see "Runs, tasks and the board" below); the workers and the chief that drive them arrive in milestones 4 and 5. It runs agents (Claude Code in terminals it owns) and holds their permission requests as approvals (see "Agents" below).
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `cos daemon` | Run in the foreground. Ctrl-C or SIGTERM stops it cleanly. |
+| `cos daemon` | Run in the foreground. Ctrl-C or SIGTERM stops it cleanly, asking its agents to exit first. |
 | `cos daemon install` | Install a launchd agent (`local.cos.daemon`): starts now, at every login, and again about 10 s after a crash. |
 | `cos daemon uninstall` | Stop the agent and remove its plist. |
 | `cos status` | Whether the daemon is running, and its pid, uptime, event count and launchd state. Exits 1 when it isn't running. |
@@ -23,11 +23,12 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | Path | |
 |---|---|
 | `cos.sock` | The API socket (mode 0600). Removed on a clean stop, and replaced on start if a crash left it behind. |
+| `hooks.sock` | Where the agents' hooks (relayed by `cos hook`) reach the daemon (mode 0600). One socket for every agent; hooks are routed by session id. |
 | `cos.db` | SQLite in WAL mode. The schema version is in `PRAGMA user_version`; migrations are in `crates/cos-core/src/store.rs`. |
 | `daemon.lock` | Holds the running daemon's pid. Its lock means only one daemon runs per home. |
 | `logs/daemon.log` | The daemon's stderr when launchd runs it. |
 
-The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time. Run `cos daemon install` again after moving the binary or changing `PATH`.
+The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR` and `COS_CLAUDE_BIN` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
 
 ## Event log
 
@@ -78,7 +79,7 @@ A **project** is a registered git repo. A **workspace** is a git worktree of a p
 | `DELETE /v1/projects/{id}` | | 204. 409 if it still has workspaces. |
 | `POST /v1/projects/{id}/workspaces` | `{"base": "origin" or "head", "title": "optional"}` | 201 `Workspace` |
 | `PATCH /v1/workspaces/{id}` | `{"title": "..."}` | `Workspace` |
-| `DELETE /v1/workspaces/{id}` | | 204. 409 if the worktree has uncommitted changes. |
+| `DELETE /v1/workspaces/{id}` | | 204. 409 if the worktree has uncommitted changes or an agent is running in it. Its exited agents and their approvals are forgotten with it. |
 
 Errors are `{"error": "message"}`, and the message is written to be shown to the user as-is. Codes: 400 bad input, or git refused (not a repo, no `origin` remote, fetch failed); 404 unknown id; 409 conflict.
 
@@ -350,3 +351,13 @@ All of them carry the run's id in `run_id`.
 | `task.worktree_assigned` | `{run_id, task_id, branch, worktree}` |
 
 One change can log several events. Approving a plan logs `plan.approved`, then the run's move to `running`, then each task that became `ready`.
+
+## Agents
+
+An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it owns, in a workspace's folder. Apps show its terminal live and type into it; the daemon follows it through hooks, not by reading the screen. The routes, JSON, events and CLI are in [agents-api.md](agents-api.md); this section is how the daemon does it. The code is `crates/cos/src/daemon/agents.rs` (process side) and `cos_core::agents` (the `agents` and `approvals` tables).
+
+- **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder. The hooks run `cos hook`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
+- **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The one thing read from the screen is Claude's trust dialog (`needs_trust`).
+- **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait.
+- **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` runs `claude --resume <session id>` as the same agent.
+- **Other sessions:** every 2 s the daemon reads Claude's `sessions/<pid>.json` files and logs `session.changed` when the list of sessions it didn't start changes (`GET /v1/sessions`).
