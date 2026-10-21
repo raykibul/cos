@@ -4,6 +4,7 @@
 
 pub(crate) mod api;
 pub(crate) mod remote_api;
+pub(crate) mod runs_api;
 pub(crate) mod tailnet;
 #[cfg(test)]
 mod tests;
@@ -17,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use cos_core::events::kind;
-use cos_core::{Devices, EventLog, Projects, Store};
+use cos_core::{Devices, EventLog, Projects, Runs, Store};
 use jiff::Timestamp;
 use serde_json::json;
 use tokio::net::UnixListener;
@@ -58,7 +59,8 @@ pub(crate) async fn run_with(
     let log = EventLog::new(store.clone());
     let projects = Arc::new(Projects::new(store.clone(), log.clone(), home.worktrees()));
     let devices = Arc::new(Devices::new(store.clone(), log.clone()));
-    let tailnet = tailnet::Tailnet::load(store, log.clone());
+    let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());
+    let runs = Arc::new(Runs::new(store, log.clone()));
 
     let socket = home.socket();
     // We hold the lock, so any socket file left behind is from a dead daemon.
@@ -75,6 +77,7 @@ pub(crate) async fn run_with(
         projects,
         devices,
         tailnet,
+        runs,
         started_at: Timestamp::now(),
         home: home.root().to_path_buf(),
         stopping: stopping.clone(),

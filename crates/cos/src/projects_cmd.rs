@@ -177,7 +177,7 @@ fn find_project<'a>(projects: &'a [Project], key: &str) -> anyhow::Result<&'a Pr
 }
 
 /// A workspace by id, name or title.
-fn find_workspace<'a>(projects: &'a [Project], key: &str) -> anyhow::Result<&'a Workspace> {
+pub(crate) fn find_workspace<'a>(projects: &'a [Project], key: &str) -> anyhow::Result<&'a Workspace> {
     let matches: Vec<&Workspace> = projects
         .iter()
         .flat_map(|project| &project.workspaces)

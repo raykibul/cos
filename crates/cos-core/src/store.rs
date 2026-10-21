@@ -14,7 +14,7 @@ use crate::LoggedEvent;
 
 /// Schema changes, applied in order. `PRAGMA user_version` records how many
 /// have run. Never edit one that has shipped; add a new one.
-const MIGRATIONS: &[&str] = &[
+pub(crate) const MIGRATIONS: &[&str] = &[
     "
     -- AUTOINCREMENT so a sequence number is never reused, even after deletes.
     -- Clients resume streams by sequence number.
@@ -72,6 +72,42 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE settings (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
+    );
+",
+    "
+    -- One goal in one workspace. No foreign key on the workspace: a run's
+    -- history outlives the worktree it ran in.
+    CREATE TABLE runs (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id INTEGER NOT NULL,
+        goal         TEXT    NOT NULL,
+        state        TEXT    NOT NULL,
+        preset       TEXT    NOT NULL,
+        approval_cap INTEGER NOT NULL,
+        report_path  TEXT,
+        reason       TEXT,
+        created_ms   INTEGER NOT NULL,
+        updated_ms   INTEGER NOT NULL
+    );
+    CREATE INDEX runs_by_workspace ON runs (workspace_id, id);
+    -- One task of a run's plan. files and depends_on are JSON arrays.
+    CREATE TABLE tasks (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id       INTEGER NOT NULL REFERENCES runs (id),
+        position     INTEGER NOT NULL,
+        title        TEXT    NOT NULL,
+        instructions TEXT    NOT NULL,
+        files        TEXT    NOT NULL,
+        test_command TEXT,
+        depends_on   TEXT    NOT NULL,
+        state        TEXT    NOT NULL,
+        retries      INTEGER NOT NULL,
+        branch       TEXT,
+        worktree     TEXT,
+        last_failure TEXT,
+        created_ms   INTEGER NOT NULL,
+        updated_ms   INTEGER NOT NULL,
+        UNIQUE (run_id, position)
     );
 ",
 ];
@@ -351,7 +387,7 @@ mod tests {
             .lock()
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version as usize, MIGRATIONS.len());
         assert_eq!(store.event_stats().unwrap(), (1, 1));
         let tables: Vec<String> = store
             .lock()

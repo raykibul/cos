@@ -448,7 +448,7 @@ impl Store {
         Ok(())
     }
 
-    fn workspace(&self, id: i64) -> Result<Option<Workspace>, StoreError> {
+    pub(crate) fn workspace(&self, id: i64) -> Result<Option<Workspace>, StoreError> {
         Ok(self
             .lock()
             .prepare_cached(&format!(

@@ -9,6 +9,7 @@
 //! - Projects and workspaces: see "Projects and workspaces" in `docs/daemon.md`.
 //! - Devices and remote access: [`super::remote_api`], "Remote access" in
 //!   `docs/daemon.md`. The same routes are served on the tailnet listener.
+//! - Runs, plans and tasks: see [`super::runs_api`].
 //!
 //! Errors are `{"error": "..."}` with a message meant for the user.
 
@@ -23,7 +24,9 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch};
 use axum::{Json, Router};
-use cos_core::{Base, EventLog, LoggedEvent, Project, ProjectError, Projects, StoreError, Workspace};
+use cos_core::{
+    Base, EventLog, LoggedEvent, Project, ProjectError, Projects, RunError, Runs, StoreError, Workspace,
+};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
@@ -81,6 +84,7 @@ pub(crate) struct AppState {
     pub projects: Arc<Projects>,
     pub devices: Arc<cos_core::Devices>,
     pub tailnet: super::tailnet::Tailnet,
+    pub runs: Arc<Runs>,
     pub started_at: Timestamp,
     pub home: PathBuf,
     /// Flips to true when the daemon is stopping; open streams end then.
@@ -103,6 +107,7 @@ pub(crate) fn router(state: AppState) -> Router {
             patch(rename_workspace).delete(remove_workspace),
         )
         .merge(super::remote_api::routes())
+        .merge(super::runs_api::routes())
         .with_state(state)
 }
 
@@ -269,6 +274,21 @@ impl From<ProjectError> for ApiError {
             ProjectError::NotFound(_) => StatusCode::NOT_FOUND,
             ProjectError::Conflict(_) => StatusCode::CONFLICT,
             ProjectError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        Self {
+            status,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<RunError> for ApiError {
+    fn from(error: RunError) -> Self {
+        let status = match &error {
+            RunError::Invalid(_) => StatusCode::BAD_REQUEST,
+            RunError::NotFound(_) => StatusCode::NOT_FOUND,
+            RunError::Conflict(_) => StatusCode::CONFLICT,
+            RunError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,

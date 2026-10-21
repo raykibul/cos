@@ -26,6 +26,12 @@ pub mod kind {
     pub const DEVICE_DENIED: &str = "device.denied";
     pub const DEVICE_REMOVED: &str = "device.removed";
     pub const TAILNET_CHANGED: &str = "tailnet.changed";
+    pub const RUN_CREATED: &str = "run.created";
+    pub const RUN_STATE_CHANGED: &str = "run.state_changed";
+    pub const PLAN_PROPOSED: &str = "plan.proposed";
+    pub const PLAN_APPROVED: &str = "plan.approved";
+    pub const TASK_STATE_CHANGED: &str = "task.state_changed";
+    pub const TASK_WORKTREE_ASSIGNED: &str = "task.worktree_assigned";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

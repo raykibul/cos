@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cos_core::events::kind;
-use cos_core::{Base, DeviceState, Devices, EventLog, LoggedEvent, Projects, SeenDevice, Store};
+use cos_core::{
+    Base, DeviceState, Devices, EventLog, LoggedEvent, NewRun, PlanProposal, Projects, ProposedTask,
+    RunState, Runs, SeenDevice, Store, TaskState,
+};
 use jiff::Timestamp;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -49,12 +52,14 @@ impl TestServer {
         ));
         let devices = Arc::new(Devices::new(store.clone(), log.clone()));
         let tailnet = Tailnet::load(store.clone(), log.clone());
+        let runs = Arc::new(Runs::new(store.clone(), log.clone()));
         let (stop, stopping) = watch::channel(false);
         let state = api::AppState {
             log: log.clone(),
             projects,
             devices,
             tailnet,
+            runs,
             started_at: Timestamp::now(),
             home: dir.path().to_path_buf(),
             stopping: stopping.clone(),
@@ -803,4 +808,157 @@ async fn turning_remote_access_off_closes_the_port_and_on_survives_restarts() {
     let status = daemon.wait_for_state(ListenerState::Listening).await;
     assert_eq!(status.tailnet.unwrap().addresses, vec![addr]);
     daemon.stop().await;
+}
+
+fn proposed(title: &str, files: &[&str], depends_on: &[&str]) -> ProposedTask {
+    ProposedTask {
+        title: title.into(),
+        instructions: format!("do {title}"),
+        files: files.iter().map(|f| (*f).to_owned()).collect(),
+        test_command: None,
+        depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn runs_plans_and_tasks_over_the_socket() {
+    let server = TestServer::start();
+    let client = server.client();
+    let repos = tempfile::tempdir().unwrap();
+    let (project, _) = client.add_project(git_repo(repos.path())).await.unwrap();
+    let workspace = client
+        .create_workspace(project.id, Base::Head, None)
+        .await
+        .unwrap();
+    let new_run = NewRun {
+        workspace_id: workspace.id,
+        goal: "add rate limiting".into(),
+        preset: Default::default(),
+        approval_cap: None,
+    };
+
+    let run = client.create_run(&new_run).await.unwrap();
+    assert_eq!((run.state, run.approval_cap), (RunState::Planning, 20));
+    let (status, message) = daemon_error(client.create_run(&new_run).await.unwrap_err());
+    assert_eq!(status, 409);
+    assert!(message.contains("already has run"), "{message}");
+
+    // A plan with a cycle: 400, with the reason for the chief.
+    let cyclic = PlanProposal {
+        tasks: vec![proposed("a", &["a"], &["b"]), proposed("b", &["b"], &["a"])],
+    };
+    let (status, message) = daemon_error(client.propose_plan(run.id, &cyclic).await.unwrap_err());
+    assert_eq!(status, 400);
+    assert!(message.contains("circle"), "{message}");
+
+    let plan = PlanProposal {
+        tasks: vec![
+            proposed("api", &["src/api.rs"], &[]),
+            proposed("ui", &["src/ui/**"], &["api"]),
+        ],
+    };
+    let board = client.propose_plan(run.id, &plan).await.unwrap();
+    assert_eq!(board.run.state, RunState::AwaitingPlanApproval);
+    assert_eq!(board.workspace.as_ref().map(|w| w.id), Some(workspace.id));
+    let (api, ui) = (board.tasks[0].id, board.tasks[1].id);
+
+    let board = client.approve_plan(run.id).await.unwrap();
+    assert_eq!((board.counts.ready, board.counts.proposed), (1, 1));
+    let (status, _) = daemon_error(client.approve_plan(run.id).await.unwrap_err());
+    assert_eq!(status, 409);
+
+    // Illegal move, missing reason, gated dependency, unknown task.
+    let (status, _) = daemon_error(
+        client
+            .update_task(api, TaskState::Merged, None)
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(status, 409);
+    let (status, _) = daemon_error(
+        client
+            .update_task(api, TaskState::Blocked, None)
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(status, 400);
+    let (status, _) = daemon_error(client.update_task(ui, TaskState::Ready, None).await.unwrap_err());
+    assert_eq!(status, 409);
+    let (status, _) = daemon_error(client.update_task(999, TaskState::Ready, None).await.unwrap_err());
+    assert_eq!(status, 404);
+
+    for state in [
+        TaskState::Running,
+        TaskState::Checking,
+        TaskState::Review,
+        TaskState::Merged,
+    ] {
+        client.update_task(api, state, None).await.unwrap();
+    }
+    let board = client.board(run.id).await.unwrap();
+    assert_eq!(board.tasks[1].state, TaskState::Ready);
+    let runs = client.runs().await.unwrap();
+    assert_eq!((runs[0].run.id, runs[0].tasks.merged), (run.id, 1));
+
+    // Cancel without a body, as `curl -X POST` sends it.
+    let response = raw_request(
+        &server.socket,
+        &format!(
+            "POST /v1/runs/{}/cancel HTTP/1.1\r\nHost: cos\r\nConnection: close\r\n\r\n",
+            run.id
+        ),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let board = client.board(run.id).await.unwrap();
+    assert_eq!(board.run.state, RunState::Cancelled);
+    assert_eq!(board.counts.cancelled, 1);
+    let (status, _) = daemon_error(client.cancel_run(run.id, Some("again".into())).await.unwrap_err());
+    assert_eq!(status, 409);
+    let (status, _) = daemon_error(client.board(run.id + 1).await.unwrap_err());
+    assert_eq!(status, 404);
+
+    let run_events: Vec<LoggedEvent> = client
+        .events(0, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.run_id.is_some())
+        .collect();
+    assert!(
+        run_events
+            .iter()
+            .all(|event| event.run_id == Some(run.id.to_string()))
+    );
+    assert_eq!(
+        kinds(&run_events[..4]),
+        [
+            kind::RUN_CREATED,
+            kind::PLAN_PROPOSED,
+            kind::RUN_STATE_CHANGED,
+            kind::PLAN_APPROVED
+        ]
+    );
+    assert_eq!(kinds(&run_events).last(), Some(&kind::RUN_STATE_CHANGED));
+}
+
+#[tokio::test]
+async fn bad_run_and_task_ids_get_404() {
+    let server = TestServer::start();
+
+    let bad_run = raw_request(
+        &server.socket,
+        "GET /v1/runs/abc HTTP/1.1\r\nHost: cos\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let bad_task = raw_request(
+        &server.socket,
+        "PATCH /v1/tasks/abc HTTP/1.1\r\nHost: cos\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"state\":\"running\"}",
+    )
+    .await;
+
+    assert!(bad_run.starts_with("HTTP/1.1 404"), "{bad_run}");
+    assert!(bad_run.contains("there is no such run"), "{bad_run}");
+    assert!(bad_task.starts_with("HTTP/1.1 404"), "{bad_task}");
+    assert!(bad_task.contains("there is no such task"), "{bad_task}");
 }
