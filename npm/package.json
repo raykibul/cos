@@ -1,0 +1,31 @@
+{
+  "name": "cos-agent",
+  "version": "0.1.0",
+  "description": "Installs and runs cos, a chief of staff for coding agents, from its GitHub releases.",
+  "type": "module",
+  "bin": {
+    "cos-agent": "bin/cos-agent.js"
+  },
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raykibul/cos.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/raykibul/cos#readme",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agents",
+    "cli"
+  ]
+}
