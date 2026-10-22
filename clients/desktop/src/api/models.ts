@@ -189,6 +189,11 @@ export interface Agent {
   spawnedBy: number | null;
   /** Claude's JSONL transcript, once a hook has reported it. */
   transcriptPath: string | null;
+  /**
+   * The environment variables cos set for it at launch (names only), from
+   * its project's and the global list. It keeps them until it restarts.
+   */
+  envNames: string[];
 }
 
 export function decodeAgent(value: unknown): Agent {
@@ -218,6 +223,7 @@ export function decodeAgent(value: unknown): Agent {
     cwd: optStr(o.cwd),
     spawnedBy: optNum(o.spawned_by),
     transcriptPath: optStr(o.transcript_path),
+    envNames: strings(o.env_names),
   };
 }
 

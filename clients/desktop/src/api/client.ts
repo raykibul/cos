@@ -1,5 +1,6 @@
 import type { Bridge, HttpMethod } from "../bridge/types";
 import { DecodeError, isObject, page } from "./decode";
+import { type EnvVars, type ProjectEnv, decodeGlobalEnv, decodeProjectEnv } from "./env";
 import { CosError } from "./errors";
 import {
   type Agent,
@@ -95,6 +96,11 @@ function query(params: Record<string, string | number | null | undefined>): stri
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
     .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`);
   return parts.length ? `?${parts.join("&")}` : "";
+}
+
+function envPath(projectId: number | null, name: string): string {
+  const scope = projectId === null ? "" : `/projects/${projectId}`;
+  return `/v1${scope}/env/${encodeURIComponent(name)}`;
 }
 
 /**
@@ -387,6 +393,27 @@ export class DaemonClient {
       `/v1/agents/${agentId}/transcript${query({ after: after || undefined })}`,
       decodeTranscript,
     );
+  }
+
+  // MARK: Environment variables for agents
+
+  /** The list every project's agents get. */
+  env(): Promise<EnvVars> {
+    return this.get("/v1/env", decodeGlobalEnv);
+  }
+
+  /** A project's own list, the global one, and the merge its agents get. */
+  projectEnv(projectId: number): Promise<ProjectEnv> {
+    return this.get(`/v1/projects/${projectId}/env`, decodeProjectEnv);
+  }
+
+  /** Sets a variable for all projects (`projectId` null) or one. It applies to agents launched or resumed after. */
+  async setEnv(projectId: number | null, name: string, value: string): Promise<void> {
+    await this.request("PUT", envPath(projectId, name), { value });
+  }
+
+  async removeEnv(projectId: number | null, name: string): Promise<void> {
+    await this.request("DELETE", envPath(projectId, name));
   }
 
   // MARK: Devices and the tailnet
