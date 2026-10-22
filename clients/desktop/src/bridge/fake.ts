@@ -17,6 +17,7 @@ import {
   tailscaleReason,
 } from "./fake/remote";
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
+import { FakeEnv, makeEnv } from "./fake/env";
 import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
 import type {
   Bridge,
@@ -129,6 +130,8 @@ export class FakeDaemon {
   readonly terminals = new Map<number, TerminalStream>();
   /** The Chiefs of Staff and transcripts (fake/staff.ts). */
   readonly staffDesk: FakeStaffDesk;
+  /** Environment variables for agents (fake/env.ts). */
+  readonly env: FakeEnv;
 
   constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
@@ -154,6 +157,7 @@ export class FakeDaemon {
     this.agents.push(staff.agent);
     this.fixtures.screens[staff.agent.id] = staff.screen;
     this.staffDesk = new FakeStaffDesk(this, staff);
+    this.env = new FakeEnv(this, makeEnv());
     for (const item of this.fixtures.history) {
       this.events.push({
         seq: this.events.length + 1,
@@ -283,6 +287,8 @@ export class FakeDaemon {
     }
     const staff = this.staffDesk.route(method, path, q, b);
     if (staff) return staff;
+    const env = this.env.route(method, path, b);
+    if (env) return env;
 
     // Projects and workspaces.
     if (method === "GET" && path === "/v1/projects") {
@@ -318,12 +324,13 @@ export class FakeDaemon {
       const state = q.get("state");
       if (ws) list = list.filter((a) => a.workspace_id === Number(ws));
       if (state) list = list.filter((a) => a.state === state);
+      for (const agent of list) this.env.stamp(agent);
       return ok({ agents: list });
     }
     if ((p = m(/^\/v1\/agents\/(\d+)(?:\/([a-z]+))?$/))) {
       const agent = this.find(this.agents, Number(p[1]), "agent") as FakeAgent;
       const action = p[2];
-      if (!action && method === "GET") return ok(agent);
+      if (!action && method === "GET") return ok(this.env.stamp(agent));
       if (!action && method === "DELETE") {
         if (this.alive(agent))
           throw new HttpError(409, "the agent is still running; stop it first");
@@ -664,6 +671,7 @@ export class FakeDaemon {
       last_message: null,
       pending_approval_id: null,
     };
+    this.env.stamp(agent);
     this.agents.push(agent);
     this.fixtures.screens[id] = {
       prompt,
@@ -734,6 +742,8 @@ export class FakeDaemon {
         agent.exited_ms = null;
         agent.exit_code = null;
         agent.state = "starting";
+        // A resume launches it again, with the environment as it is now.
+        this.env.stamp(agent, true);
         this.fixtures.screens[agent.id] = {
           prompt: "",
           transcript: "blank",
