@@ -16,6 +16,7 @@ import { Button, Card, EmptyState, SectionTitle, StateBadge, Spinner, inputClass
 import { PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { DeviceRow } from "./Devices";
 import { HostAvatar } from "./Hosts";
+import { TailnetDevices } from "./TailnetPeers";
 
 export function SettingsPage() {
   return (
@@ -144,6 +145,7 @@ function RemoteAccessSection() {
       <>
         <ListenerCard tailnet={tailnet} />
         <DevicesCard />
+        <TailnetDevices />
       </>
     );
   }

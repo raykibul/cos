@@ -62,7 +62,26 @@ const shots = [
     "page=waiting",
     (page) => page.getByRole("button", { name: "Mac: This Mac" }).click(),
   ],
+  [
+    "host-picker-tailnet",
+    "page=waiting",
+    async (page) => {
+      await page.getByRole("button", { name: "Mac: This Mac" }).click();
+      await page.getByText("On your tailnet").waitFor();
+    },
+  ],
   ["sheet-add-host", "page=waiting&dialog=addHost"],
+  [
+    "sheet-add-host-picked",
+    "page=waiting&dialog=addHost",
+    async (page) => {
+      const tailnet = page.getByRole("region", { name: "On your tailnet" });
+      await tailnet.getByRole("button", { name: /Show 1 other device/ }).click();
+      await tailnet.getByRole("button", { name: /build-box/ }).click();
+    },
+  ],
+  ["sheet-add-host-tailscale-off", "page=waiting&dialog=addHost&tailscale=off"],
+  ["sheet-add-host-daemon-off", "daemon=off&dialog=addHost"],
   ["host-device-pending", "host=h1"],
   ["host-unreachable", "host=h2"],
   ["remote-access", "page=settings"],

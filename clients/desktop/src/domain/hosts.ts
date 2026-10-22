@@ -2,8 +2,89 @@
 // tailnet listener and devices read. The daemon's side is "Remote access" in
 // docs/daemon.md.
 
-import type { Device, TailnetStatus } from "../api/models";
+import type { Device, TailnetPeer, TailnetStatus } from "../api/models";
+import type { Host } from "../bridge/types";
 import type { StateLabel } from "./labels";
+
+// MARK: Devices on this Mac's tailnet
+
+/** A phone or tablet, by Tailscale's OS name; anything else is a computer. */
+export function isPhoneOs(os: string): boolean {
+  return /ios|ipados|android/i.test(os);
+}
+
+/** The first IPv4 address, else the first address, else "". */
+export function firstIpv4(ips: string[]): string {
+  return ips.find((ip) => !ip.includes(":")) ?? ips[0] ?? "";
+}
+
+/** `macOS · 100.101.102.110`. */
+export function peerDetail(peer: TailnetPeer): string {
+  return [peer.os, firstIpv4(peer.ips)].filter(Boolean).join(" · ");
+}
+
+/** The host part of a saved address: `studio:7700` → `studio`, `[fd7a::5]:7700` → `fd7a::5`. */
+function addressHost(address: string): string {
+  const bracketed = address.match(/^\[(.*)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1]!;
+  return (address.match(/:/g) ?? []).length > 1 ? address : address.replace(/:\d+$/, "");
+}
+
+/**
+ * The saved host that is this peer, if any: same address, one of its IPs,
+ * or one of its names (the saved host's name or the name in its address).
+ */
+export function savedHostFor(peer: TailnetPeer, hosts: Host[]): Host | null {
+  const ips = peer.ips.map((ip) => ip.toLowerCase());
+  const names = [peer.name, peer.hostname, peer.dnsName, peer.dnsName.split(".")[0] ?? ""]
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  for (const host of hosts) {
+    if (!host.address) continue;
+    if (peer.address && host.address === peer.address) return host;
+    const where = addressHost(host.address).toLowerCase();
+    if (ips.includes(where) || names.includes(where)) return host;
+    if (names.includes(host.name.trim().toLowerCase())) return host;
+  }
+  return null;
+}
+
+/** "5m ago", "3h ago", "2d ago". */
+export function shortAgo(ms: number, now: number): string {
+  const minutes = Math.max(0, Math.round((now - ms) / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+export type PeerChip = "added" | "running" | "online" | "offline";
+
+/**
+ * Which chip a peer gets: Added wins, then whether cos answers, then online.
+ * A device with no tailnet address can't be reached, so it reads as offline.
+ */
+export function peerChip(peer: TailnetPeer, added: boolean): PeerChip {
+  if (added) return "added";
+  if (!peer.address) return "offline";
+  if (peer.cos === "running") return "running";
+  return peer.online ? "online" : "offline";
+}
+
+/** The chip's words: "cos running", "Online", "Offline · seen 3h ago", "Added". */
+export function peerChipText(peer: TailnetPeer, chip: PeerChip, now: number): string {
+  switch (chip) {
+    case "added":
+      return "Added";
+    case "running":
+      return "cos running";
+    case "online":
+      return "Online";
+    default:
+      return peer.lastSeenMs ? `Offline · seen ${shortAgo(peer.lastSeenMs, now)}` : "Offline";
+  }
+}
 
 /** The avatar letter of a host. */
 export function hostInitial(name: string): string {

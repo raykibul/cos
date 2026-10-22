@@ -22,6 +22,8 @@ export type MenuItem =
       danger?: boolean;
       checked?: boolean;
     }
+  /** A small title over the items after it. */
+  | { heading: string }
   | "separator";
 
 export interface TriggerProps {
@@ -42,11 +44,14 @@ export function Menu({
   items,
   align = "start",
   width = 220,
+  onOpen,
 }: {
   trigger: (props: TriggerProps) => ReactNode;
   items: MenuItem[];
   align?: "start" | "end";
   width?: number;
+  /** Called each time the menu opens, to fetch what it shows. */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
@@ -117,10 +122,14 @@ export function Menu({
     <>
       {trigger({
         ref: setButton,
-        onClick: () => setOpen((value) => !value),
+        onClick: () => {
+          if (!open) onOpen?.();
+          setOpen(!open);
+        },
         onKeyDown: (event) => {
           if (event.key === "ArrowDown" && !open) {
             event.preventDefault();
+            onOpen?.();
             setOpen(true);
           }
         },
@@ -141,6 +150,14 @@ export function Menu({
               {items.map((item, index) =>
                 item === "separator" ? (
                   <div key={`sep-${index}`} className="mx-2 my-1 h-px bg-line" role="separator" />
+                ) : "heading" in item ? (
+                  <div
+                    key={`heading-${index}`}
+                    role="presentation"
+                    className="px-2.5 pt-1.5 pb-1 text-[11.5px] font-medium text-ink-3"
+                  >
+                    {item.heading}
+                  </div>
                 ) : (
                   <button
                     key={item.label}

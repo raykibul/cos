@@ -33,11 +33,14 @@ describe("host picker", () => {
     const picker = sidebar().getByRole("button", { name: "Mac: This Mac" });
     expect(picker).toHaveTextContent("T");
     await user.click(picker);
+    // A Mac on the tailnet running cos joins once This Mac's daemon answers.
+    await waitFor(() => expect(screen.getByText("On your tailnet")).toBeInTheDocument());
     const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
     expect(items).toEqual([
       expect.stringMatching(/^This Mac/),
       expect.stringMatching(/^Studio.*studio:7700/),
       expect.stringMatching(/^Travel laptop.*100\.101\.102\.105:7700/),
+      expect.stringMatching(/^mac-mini/),
       "Add a Mac…",
       expect.stringMatching(/^Settings/),
     ]);
