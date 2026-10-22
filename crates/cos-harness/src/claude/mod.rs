@@ -63,6 +63,31 @@ pub(crate) const SESSION_MARKERS: [&str; 12] = [
     "CLAUDE_CODE_TMPDIR",
 ];
 
+/// What cos sets in every terminal it starts Claude in.
+pub(crate) const TERMINAL_ENV: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
+
+/// Names starting with this are cos's own (`COS_HOME`, `COS_HOOK_SOCKET`,
+/// `COS_CLAUDE_BIN`, …), now or later.
+pub const RESERVED_ENV_PREFIX: &str = "COS_";
+
+/// The variables cos sets or removes itself when it starts an agent: the
+/// terminal's, the hook socket, and Claude's session markers. With
+/// [`RESERVED_ENV_PREFIX`] these are the names a user's environment settings
+/// can't hold (see [`is_reserved_env`]), so an agent always reaches cos and
+/// draws its terminal right.
+pub fn reserved_env_names() -> impl Iterator<Item = &'static str> {
+    TERMINAL_ENV
+        .iter()
+        .map(|(name, _)| *name)
+        .chain([hooks::SOCKET_ENV])
+        .chain(SESSION_MARKERS)
+}
+
+/// Whether cos keeps `name` for itself: see [`reserved_env_names`].
+pub fn is_reserved_env(name: &str) -> bool {
+    name.starts_with(RESERVED_ENV_PREFIX) || reserved_env_names().any(|reserved| reserved == name)
+}
+
 /// Claude's `--permission-mode`. Whatever the mode doesn't settle on its own
 /// becomes a permission request to cos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -538,5 +563,39 @@ mod tests {
             assert_eq!(mode.as_str().parse::<PermissionMode>(), Ok(mode));
         }
         assert!("bypassPermissions".parse::<PermissionMode>().is_err());
+    }
+
+    #[test]
+    fn what_cos_sets_for_an_agent_is_reserved() {
+        for name in [
+            "TERM",
+            "COLORTERM",
+            hooks::SOCKET_ENV,
+            "COS_HOME",
+            "COS_CLAUDE_BIN",
+            "COS_ANYTHING_LATER",
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+        ] {
+            assert!(is_reserved_env(name), "{name}");
+        }
+        for (name, _) in TERMINAL_ENV {
+            assert!(is_reserved_env(name), "{name}");
+        }
+        for name in SESSION_MARKERS {
+            assert!(is_reserved_env(name), "{name}");
+        }
+        // What people set to pick an account or a provider.
+        for name in [
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "PATH",
+            "HOME",
+            "COS",
+            "XCOS_HOME",
+        ] {
+            assert!(!is_reserved_env(name), "{name}");
+        }
     }
 }

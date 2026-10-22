@@ -34,6 +34,15 @@
 //! `COS_FAKE_CLAUDE_TRUST_DELAY_MS` drops keys typed that soon after the dialog
 //! appears, as the real CLI does while it's still starting.
 //!
+//! **Environment:** with `COS_FAKE_CLAUDE_ENV` naming a folder, it writes
+//! its whole environment there as `<session id>.json` (a JSON object) when
+//! it starts, replacing the file on every launch, so tests can see what an
+//! agent was started with, a resume included.
+//!
+//! **Logged out:** with `COS_FAKE_CLAUDE_LOGGED_OUT` set it first shows
+//! Claude's "Select login method" screen, before any trust dialog or hook,
+//! until a line `login` is typed.
+//!
 //! **Scripted turns**, for pipeline tests: with `COS_FAKE_CLAUDE_SCRIPT`
 //! naming a JSON file, a session whose prompt holds a marker `[fake:<name>]`
 //! plays the script's turns for that name instead (see [`script`]). The
@@ -74,6 +83,10 @@ pub(crate) fn run(args: &[String]) {
     } else {
         "worker"
     };
+    dump_env(&id);
+    if std::env::var_os("COS_FAKE_CLAUDE_LOGGED_OUT").is_some() && !login() {
+        std::process::exit(1);
+    }
     if std::env::var_os("COS_FAKE_CLAUDE_UNTRUSTED").is_some() && !trust() {
         std::process::exit(1);
     }
@@ -458,6 +471,46 @@ fn trust() -> bool {
     let trusted = confirmed && yes;
     show(if trusted { "trusted" } else { "not trusted" });
     trusted
+}
+
+/// Writes the environment to `$COS_FAKE_CLAUDE_ENV/<id>.json`, whole, so a
+/// reader never sees half a file.
+fn dump_env(id: &str) {
+    let Some(dir) = std::env::var_os("COS_FAKE_CLAUDE_ENV").map(PathBuf::from) else {
+        return;
+    };
+    let env: serde_json::Map<String, Value> = std::env::vars_os()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().into_owned(),
+                Value::String(value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    let _ = std::fs::create_dir_all(&dir);
+    let partial = dir.join(format!("{id}.json.partial"));
+    if std::fs::write(&partial, Value::Object(env).to_string()).is_ok() {
+        let _ = std::fs::rename(&partial, dir.join(format!("{id}.json")));
+    }
+}
+
+/// Claude's login screen, until a line `login` is typed. False if the
+/// terminal closed first.
+fn login() -> bool {
+    show(
+        "\x1b[2J\x1b[HSelect login method:\r\n\r\n \u{276f} 1. Claude account with subscription\r\n   2. Anthropic Console account",
+    );
+    let mut stdin = std::io::stdin().lock();
+    loop {
+        let mut line = String::new();
+        match stdin.read_line(&mut line) {
+            Ok(0) | Err(_) => return false,
+            Ok(_) if line.trim() == "login" => break,
+            Ok(_) => {}
+        }
+    }
+    show("\x1b[2J\x1b[HLogin successful.");
+    true
 }
 
 fn read_lines() -> Receiver<String> {
