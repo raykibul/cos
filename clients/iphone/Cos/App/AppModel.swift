@@ -5,13 +5,15 @@ import Observation
 /// What the app was launched with. `-fakeData` runs against an in-memory
 /// daemon with invented data (screenshots, previews), like the desktop's
 /// fake bridge; `-screen <name>` opens a screen; `-fakeRefusal <code>` and
-/// `-fakeUnreachable` show those states.
+/// `-fakeUnreachable` show those states; `-fakeOldDaemon` makes the fake
+/// studio an older cos that keeps its tailnet list to itself.
 struct Launch: Equatable, Sendable {
     var fakeData = false
     var screen: String?
     var fakeRefusal: String?
     var fakeUnreachable = false
     var noHosts = false
+    var fakeOldDaemon = false
 
     static func from(_ arguments: [String]) -> Launch {
         func value(after flag: String) -> String? {
@@ -24,7 +26,8 @@ struct Launch: Equatable, Sendable {
             screen: value(after: "-screen"),
             fakeRefusal: value(after: "-fakeRefusal"),
             fakeUnreachable: arguments.contains("-fakeUnreachable"),
-            noHosts: arguments.contains("-noHosts")
+            noHosts: arguments.contains("-noHosts"),
+            fakeOldDaemon: arguments.contains("-fakeOldDaemon")
         )
     }
 }
@@ -37,6 +40,8 @@ final class AppModel {
     let hosts: HostStore
     private(set) var session: HostSession?
     let launch: Launch
+    /// The machines on the tailnet, as the saved hosts list them.
+    let tailnet: TailnetFinder
 
     @ObservationIgnored private let makeService: @MainActor (Host) -> any CosService
     @ObservationIgnored private let notifications: any Notifications
@@ -50,6 +55,7 @@ final class AppModel {
         self.launch = launch
         self.notifications = notifications
         self.makeService = makeService
+        tailnet = TailnetFinder(makeService: makeService)
         sync()
     }
 
@@ -69,8 +75,11 @@ final class AppModel {
             _ = try? store.add(name: "build-box", address: "100.101.102.110")
             _ = try? store.add(name: "studio", address: "studio.tail0000.ts.net")
         }
-        return AppModel(hosts: store, launch: launch) { _ in
-            FakeCos(refusal: launch.fakeRefusal.map(RefusalCode.init(rawValue:)), unreachable: launch.fakeUnreachable)
+        return AppModel(hosts: store, launch: launch) { host in
+            FakeCos(
+                refusal: launch.fakeRefusal.map(RefusalCode.init(rawValue:)), unreachable: launch.fakeUnreachable,
+                hostName: host.name, peersHostOnly: launch.fakeOldDaemon && host.name == "studio"
+            )
         }
     }
 
@@ -81,6 +90,23 @@ final class AppModel {
         let host = try hosts.add(name: name, address: address)
         sync()
         return host
+    }
+
+    /// Saves a machine found on the tailnet, by its tailnet address and
+    /// under its Tailscale name, and switches to it. One already saved is
+    /// switched to.
+    @discardableResult
+    func connect(to peer: TailnetPeer) throws -> Host {
+        if let saved = TailnetListing.savedHost(for: peer, in: hosts.hosts) {
+            selectHost(saved.id)
+            return saved
+        }
+        return try addHost(name: peer.name, address: peer.address)
+    }
+
+    /// Asks every saved host for the tailnet again.
+    func refreshTailnet() async {
+        await tailnet.refresh(hosts: hosts.hosts)
     }
 
     func renameHost(_ id: UUID, to name: String) {

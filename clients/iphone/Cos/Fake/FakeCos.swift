@@ -13,6 +13,9 @@ import Foundation
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - runs: 3 running (tasks in several states, with a question), 4 with a
 ///   plan waiting, 2 done with a report, 1 cancelled
+/// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
+///   saved, mini runs no cos, the iPhone itself, an offline iPad, and a
+///   tagged CI server
 ///
 /// Actions change the data and log events, as the daemon would, so the
 /// app's live updates work against it too.
@@ -21,6 +24,13 @@ actor FakeCos: CosService {
     private var refusal: RefusalCode?
     private let unreachable: Bool
     private let replyDelay: Duration?
+    /// The saved host this fake plays, which its tailnet list leaves out.
+    private let hostName: String?
+    /// Answers the peer list as an older daemon does over the tailnet.
+    private let peersHostOnly: Bool
+    /// How long the peer list takes, for timeout tests.
+    private let peersDelay: Duration?
+    private let data: FakeData
 
     private var projectList: [Project] = []
     private var agentList: [Agent] = []
@@ -39,12 +49,19 @@ actor FakeCos: CosService {
     /// Requests in order, as `METHOD path`, for tests.
     private(set) var calls: [String] = []
 
-    init(now: Date = Date(), refusal: RefusalCode? = nil, unreachable: Bool = false, replyDelay: Duration? = .milliseconds(1500)) {
+    init(
+        now: Date = Date(), refusal: RefusalCode? = nil, unreachable: Bool = false, replyDelay: Duration? = .milliseconds(1500),
+        hostName: String? = nil, peersHostOnly: Bool = false, peersDelay: Duration? = nil
+    ) {
         self.now = Int64(now.timeIntervalSince1970 * 1000)
         self.refusal = refusal
         self.unreachable = unreachable
         self.replyDelay = replyDelay
+        self.hostName = hostName
+        self.peersHostOnly = peersHostOnly
+        self.peersDelay = peersDelay
         let data = FakeData(now: self.now)
+        self.data = data
         projectList = data.projects
         agentList = data.agents
         approvalList = data.approvals
@@ -429,5 +446,19 @@ actor FakeCos: CosService {
         try check("GET /v1/projects/\(projectId)/env")
         let own: EnvVars = projectId == 2 ? ["CLAUDE_CONFIG_DIR": "~/.claude-work"] : [:]
         return ProjectEnv(variables: own, global: ["CLAUDE_CONFIG_DIR": "~/.claude"])
+    }
+
+    // MARK: The tailnet
+
+    func tailnetPeers(port: Int?) async throws -> TailnetPeers {
+        try check("GET /v1/tailnet/peers")
+        if let peersDelay { try await Task.sleep(for: peersDelay) }
+        if peersHostOnly {
+            throw CosError.refused(Refusal(
+                status: 403, code: .hostOnly,
+                message: "devices and remote access can only be managed on the host (`cos devices`, `cos remote`)"
+            ))
+        }
+        return data.peers(answering: hostName)
     }
 }

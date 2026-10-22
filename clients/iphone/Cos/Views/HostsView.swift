@@ -4,7 +4,7 @@ import SwiftUI
 /// The Macs and servers this iPhone knows: pick one, rename, remove, add.
 struct HostsView: View {
     @Environment(AppModel.self) private var app
-    @State private var adding = false
+    @Environment(Navigator.self) private var navigator
     @State private var renaming: Host?
 
     var body: some View {
@@ -29,13 +29,15 @@ struct HostsView: View {
                 }
                 .onMove { app.hosts.move(from: $0, to: $1) }
                 Button {
-                    adding = true
+                    navigator.addingHost = true
                 } label: {
                     Label("Add a Mac or server", systemImage: "plus")
                 }
             } footer: {
                 Text("Tap a host to switch to it. Swipe to rename or remove it.")
             }
+
+            FoundOnTailnetSection()
 
             if let session = app.session {
                 Section("Connected to \(app.hosts.current?.name ?? session.host.name)") {
@@ -67,7 +69,9 @@ struct HostsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
         }
-        .sheet(isPresented: $adding) { AddHostSheet() }
+        .refreshable { await app.refreshTailnet() }
+        .task { await app.refreshTailnet() }
+        .sheet(isPresented: Bindable(navigator).addingHost) { AddHostSheet() }
         .sheet(item: $renaming) { host in RenameHostSheet(host: host) }
     }
 
@@ -133,8 +137,21 @@ struct AddHostSheet: View {
     @State private var error: String?
 
     var body: some View {
+        let firstRun = app.hosts.hosts.isEmpty
         NavigationStack {
             Form {
+                if firstRun {
+                    Section {
+                        Text(inlineMarkdown(
+                            "Add your first machine by its Tailscale name (for example `my-mac`) or `100.x` address. After that, cos lists the rest of your tailnet here.",
+                            base: .subheadline
+                        ))
+                        .font(.subheadline)
+                        .foregroundStyle(Palette.ink2)
+                    }
+                } else {
+                    TailnetSection { dismiss() }
+                }
                 Section {
                     TextField("my-mac or 100.101.102.103", text: $address)
                         .textInputAutocapitalization(.never)
@@ -143,7 +160,7 @@ struct AddHostSheet: View {
                         .font(.body.monospaced())
                         .onSubmit(add)
                 } header: {
-                    Text("Address")
+                    Text(firstRun ? "Address" : "Or by name or address")
                 } footer: {
                     if let error {
                         Text(error).foregroundStyle(Palette.red)
@@ -156,6 +173,9 @@ struct AddHostSheet: View {
                         .onSubmit(add)
                 }
             }
+            .pageBackground()
+            .refreshable { if !firstRun { await app.refreshTailnet() } }
+            .task { if !firstRun { await app.refreshTailnet() } }
             .navigationTitle("Add a host")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -165,7 +185,7 @@ struct AddHostSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents(firstRun ? [.medium, .large] : [.large])
     }
 
     private var placeholderName: String {
@@ -238,7 +258,7 @@ struct CosMark: View {
 
 /// The first screen, before any host is saved.
 struct WelcomeView: View {
-    @State private var adding = false
+    @Environment(Navigator.self) private var navigator
 
     var body: some View {
         VStack(spacing: 20) {
@@ -254,7 +274,7 @@ struct WelcomeView: View {
                 .padding(.horizontal, 32)
             Spacer()
             Button {
-                adding = true
+                navigator.addingHost = true
             } label: {
                 Label("Add a Mac or server", systemImage: "plus")
             }
@@ -269,6 +289,6 @@ struct WelcomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.page)
-        .sheet(isPresented: $adding) { AddHostSheet() }
+        .sheet(isPresented: Bindable(navigator).addingHost) { AddHostSheet() }
     }
 }

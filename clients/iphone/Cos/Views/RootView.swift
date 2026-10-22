@@ -19,6 +19,8 @@ enum AppTab: Hashable {
 @Observable
 final class Navigator {
     var tab: AppTab = .waiting
+    /// The add-host sheet is up (hosts tab, or the welcome screen).
+    var addingHost = false
     var waiting: [Route] = []
     var projects: [Route] = []
     var runs: [Route] = []
@@ -52,6 +54,7 @@ final class Navigator {
         case "plan": tab = .runs; runs = [.run(id: 4)]
         case "report": tab = .runs; runs = [.run(id: 2)]
         case "hosts": tab = .hosts
+        case "add-host": tab = .hosts; addingHost = true
         default: tab = .waiting
         }
     }

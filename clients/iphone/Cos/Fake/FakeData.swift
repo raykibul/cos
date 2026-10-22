@@ -235,3 +235,39 @@ struct FakeData {
         return AgentScreen(rows: lines.count, cols: 48, text: lines.joined(separator: "\n"), cursor: [lines.count - 1, 2])
     }
 }
+
+// MARK: The tailnet
+
+extension FakeData {
+    /// The machines on the invented tailnet, as `answering` lists them: the
+    /// two saved hosts (build-box and studio, both running cos), a Linux
+    /// server running cos that isn't saved yet (gpu-box), a Mac without cos
+    /// (mini), this iPhone, an iPad that went offline 3 hours ago, and a
+    /// tagged CI server. The answering host is never in its own list.
+    func peers(answering: String?) -> TailnetPeers {
+        func peer(
+            _ name: String, _ os: String, _ ip: String, cos: PeerCos = .notRunning, online: Bool = true, hostname: String? = nil,
+            lastSeen: Int64? = nil, mine: Bool = true, tagged: Bool = false, isYou: Bool = false
+        ) -> TailnetPeer {
+            let last = ip.split(separator: ".").last.map(String.init) ?? "1"
+            return TailnetPeer(
+                id: "n" + name.replacingOccurrences(of: "-", with: "") + "CNTRL", name: name, hostname: hostname ?? name,
+                dnsName: name + ".tail0000.ts.net", os: os, ips: [ip, "fd7a:115c:a1e0::" + last],
+                online: online, lastSeen: lastSeen.map(date), mine: mine, tagged: tagged, cos: online && mine ? cos : .unknown,
+                address: ip + ":7700", isYou: isYou
+            )
+        }
+        let all = [
+            peer("build-box", "linux", "100.101.102.110", cos: .running),
+            peer("studio", "macOS", "100.101.102.111", cos: .running),
+            peer("gpu-box", "linux", "100.101.102.120", cos: .running),
+            peer("mini", "macOS", "100.101.102.121"),
+            peer("iphone", "iOS", "100.101.102.130", hostname: "My iPhone", isYou: true),
+            peer("ipad", "iOS", "100.101.102.131", online: false, hostname: "My iPad", lastSeen: 3 * 3600 + 600),
+            peer("ci-runner", "linux", "100.101.102.140", mine: false, tagged: true),
+        ]
+        let me = all.first { $0.name == answering }
+        let host = me.map { TailnetHost(name: $0.name, dnsName: $0.dnsName, os: $0.os, address: $0.address) }
+        return TailnetPeers(peers: all.filter { $0.name != answering }, selfName: answering, host: host)
+    }
+}
