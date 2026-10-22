@@ -65,6 +65,35 @@ linux-smoke:
 		done; \
 	done
 
+# install.sh against a fake release made from dist/ (run `make linux` first),
+# on the same distro images and both arches.
+FAKE_RELEASE := target/fake-release
+
+.PHONY: install-test npm-test shellcheck actionlint
+
+install-test: linux-image
+	docker run --rm -v "$(CURDIR)":/work -w /work $(LINUX_IMAGE) \
+		sh scripts/fake-release.sh $(VERSION) $(FAKE_RELEASE) $(LINUX_TARGETS) >/dev/null
+	@for platform in linux/arm64 linux/amd64; do \
+		for image in $(SMOKE_IMAGES); do \
+			echo "==> install.sh on $$image ($$platform)"; \
+			docker run --rm --platform $$platform \
+				-v "$(CURDIR)":/src:ro -v "$(CURDIR)/$(FAKE_RELEASE)":/release:ro \
+				$$image sh /src/scripts/test-install.sh $(VERSION) || exit 1; \
+		done; \
+	done
+
+# The npm installer's tests (npm/), in Node's image.
+npm-test:
+	docker run --rm -v "$(CURDIR)/npm":/pkg:ro -w /pkg node:22 node --test
+
+shellcheck:
+	docker run --rm -v "$(CURDIR)":/mnt:ro -w /mnt koalaman/shellcheck:v0.10.0 \
+		install.sh scripts/*.sh docker/*.sh
+
+actionlint:
+	docker run --rm -v "$(CURDIR)":/repo:ro -w /repo rhysd/actionlint:1.7.12 -color
+
 # The desktop UI (clients/desktop). Every Node command runs in Docker:
 # node_modules lives in a volume (one per checkout) mounted over
 # clients/desktop/node_modules, so Linux binaries never land on the Mac.

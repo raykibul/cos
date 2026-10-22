@@ -24,6 +24,7 @@ cp "$binary" /tmp/bin/cos
 export PATH="/tmp/bin:$PATH" COS_HOME=/tmp/h HOME=/tmp/home
 mkdir -p "$HOME"
 
+# shellcheck source=/dev/null
 say "$(. /etc/os-release && echo "$PRETTY_NAME")"
 say "$(cos --version)"
 
