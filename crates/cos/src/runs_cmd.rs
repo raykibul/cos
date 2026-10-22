@@ -159,7 +159,7 @@ pub(crate) async fn approve_plan(home: &CosHome, args: RunRef) -> anyhow::Result
     };
     let board = client.approve_plan(id).await?;
     println!("Approved the plan for run {}: {}.", id, board.counts.summary());
-    println!("  Workers aren't wired up yet, so the ready tasks wait for now.");
+    println!("  Workers start on the ready tasks now. Watch with `cos board {id}`.");
     Ok(ExitCode::SUCCESS)
 }
 
