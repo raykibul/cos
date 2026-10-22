@@ -80,7 +80,7 @@ export function HostPicker() {
     {
       label: "Settings",
       icon: Settings,
-      detail: "Your Macs, and remote access to this one",
+      detail: "Macs and remote access",
       onSelect: () => ui.navigate({ kind: "settings" }),
     },
   ];
