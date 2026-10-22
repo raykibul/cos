@@ -117,7 +117,7 @@ describe("Settings: Judgment (jev)", () => {
     });
     const key = within(section().getByRole("group", { name: "jev key" }));
     expect(key.getByText("No key")).toBeInTheDocument();
-    expect(key.getByText(/no TYPESAFEAI_API_KEY found/)).toBeInTheDocument();
+    expect(key.getByText(/no TYPESAFE_API_KEY found/)).toBeInTheDocument();
     expect(key.getByText(/readable by other users/)).toBeInTheDocument();
     expect(section().getByText("On, waiting for a key")).toBeInTheDocument();
 

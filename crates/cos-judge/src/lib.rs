@@ -11,7 +11,7 @@
 //!   a chief. Each has a `would_have` that turns answers into an action. On
 //!   an error, a timeout or confidence below 0.5 jev has no opinion, and
 //!   things go on exactly as without it.
-//! - [`key`] finds `TYPESAFEAI_API_KEY`.
+//! - [`key`] finds `TYPESAFE_API_KEY`.
 //!
 //! cos runs jev in shadow mode: it logs what jev would have done and changes
 //! nothing. The design is "jev: a fast judgment layer" in

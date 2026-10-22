@@ -6,7 +6,7 @@ The code: the `cos-judge` crate (client, questions, would-haves, key lookup), `c
 
 ## The client (`cos-judge`)
 
-- **Endpoint:** `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, `Authorization: Bearer $TYPESAFEAI_API_KEY`. The body is `{model, state, questions}`; answers come back under the same keys.
+- **Endpoint:** `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, `Authorization: Bearer $TYPESAFE_API_KEY`. The body is `{model, state, questions}`; answers come back under the same keys.
 - **One call per decision point**, with all of that point's questions in it: they're evaluated in parallel and in isolation, so batching is about 12x cheaper than one call per question, with the same answers.
 - **Typed answers:** a yes/no probability (`noul`, no confidence field), a choice (the picked option, every option's probability and a confidence) and a score (value, probabilities, confidence). Choices decode straight into Rust enums (`ActionKind`, `Wake`, declared with `choice_options!`); an option jev returns that the enum doesn't have is an error, never a fallback.
 - **Failing safe:** a 1 s timeout. On an error, a timeout or a choice confidence below 0.5, jev has **no opinion**, and things go on exactly as without it.
@@ -66,13 +66,13 @@ jev is **off by default** for every project, because what it judges (commands, p
 
 ## The API key
 
-`TYPESAFEAI_API_KEY`. You keep it in `~/.zshrc` or `~/.bashrc`, but the daemon usually runs under launchd or systemd, which never read those, so it looks in order and logs which source won, never the value:
+`TYPESAFE_API_KEY`. You keep it in `~/.zshrc` or `~/.bashrc`, but the daemon usually runs under launchd or systemd, which never read those, so it looks in order and logs which source won, never the value:
 
 1. **the daemon's environment**;
 2. **`daemon.env` in the cos home** (`~/.cos/daemon.env`): `NAME=value` lines, read by the daemon itself at startup on macOS and Linux (systemd also loads it into the environment, so a value found in both counts as `daemon_env`). A file other users can read or write is **refused**, with a warning saying `chmod 600`;
 3. **your login shell, once:** `$SHELL -lic` printing the variable between two markers, with no stdin, stderr discarded and a 3 s timeout (the markers let it ignore whatever the rc files print). It runs in the background at startup; the result is kept for the daemon's lifetime. `cos judge status --reload` (`POST /v1/judge/reload`) looks again, `daemon.env` included.
 
-`cos daemon install` copies `TYPESAFEAI_API_KEY` from the shell you run it in into `daemon.env` (mode 0600, other lines kept), never into the plist or the unit. Without a key jev is off, and `cos judge status` says why. Every lookup and switch change logs `judge.changed`.
+`cos daemon install` copies `TYPESAFE_API_KEY` from the shell you run it in into `daemon.env` (mode 0600, other lines kept), never into the plist or the unit. Without a key jev is off, and `cos judge status` says why. Every lookup and switch change logs `judge.changed`.
 
 ## Storage
 
