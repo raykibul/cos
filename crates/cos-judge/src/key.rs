@@ -1,4 +1,4 @@
-//! Finding the API key, `TYPESAFEAI_API_KEY`. The daemon often runs under
+//! Finding the API key, `TYPESAFE_API_KEY`. The daemon often runs under
 //! launchd or systemd, which never read your shell's rc files, so it looks
 //! in order:
 //!
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 /// The variable that holds the key.
-pub const KEY_ENV: &str = "TYPESAFEAI_API_KEY";
+pub const KEY_ENV: &str = "TYPESAFE_API_KEY";
 /// How long the login shell gets to print it.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Around the value in the probe's output, so whatever the rc files print

@@ -383,12 +383,12 @@ mod tests {
         let on = render_status(&overview).join("\n");
         overview.active = false;
         overview.key.source = KeySource::Missing;
-        overview.off_reason = Some("no TYPESAFEAI_API_KEY anywhere".into());
+        overview.off_reason = Some("no TYPESAFE_API_KEY anywhere".into());
         let off = render_status(&overview).join("\n");
 
         assert!(on.contains("jev: on, in shadow mode (key found in your login shell)"));
         assert!(on.contains("  1  cos  on"));
         assert!(on.contains("Decisions: permission requests 45, chief wakeups 3"));
-        assert!(off.contains("jev: off (no TYPESAFEAI_API_KEY anywhere)"));
+        assert!(off.contains("jev: off (no TYPESAFE_API_KEY anywhere)"));
     }
 }

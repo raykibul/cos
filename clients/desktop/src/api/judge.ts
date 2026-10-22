@@ -18,7 +18,7 @@ import {
   time,
 } from "./decode";
 
-/** Where the daemon found `TYPESAFEAI_API_KEY`; `missing` when it didn't. */
+/** Where the daemon found `TYPESAFE_API_KEY`; `missing` when it didn't. */
 export type KeySource = "environment" | "daemon_env" | "shell" | "missing" | (string & {});
 
 export interface JudgeKey {

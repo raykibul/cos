@@ -1,5 +1,5 @@
 //! `daemon.env` in the cos home: `NAME=value` lines for secrets the daemon
-//! needs, such as `TYPESAFEAI_API_KEY` for jev. `cos daemon install` never
+//! needs, such as `TYPESAFE_API_KEY` for jev. `cos daemon install` never
 //! puts secrets in the launchd plist or the systemd unit.
 //!
 //! - On Linux the systemd unit loads it into the daemon's environment
@@ -7,7 +7,7 @@
 //! - On both macOS and Linux the daemon reads it itself at startup
 //!   ([`load`]), for its own lookups (the jev key). It refuses a file other
 //!   users can read or write.
-//! - `cos daemon install` copies `TYPESAFEAI_API_KEY` from your shell into
+//! - `cos daemon install` copies `TYPESAFE_API_KEY` from your shell into
 //!   it ([`store`]), mode 0600.
 
 use std::fs::{self, OpenOptions};
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(file.get("ANTHROPIC_API_KEY"), Some("sk-ant"));
         assert_eq!(
             fs::read_to_string(path(&home)).unwrap(),
-            "ANTHROPIC_API_KEY=sk-ant\nTYPESAFEAI_API_KEY=sk-two\n"
+            "ANTHROPIC_API_KEY=sk-ant\nTYPESAFE_API_KEY=sk-two\n"
         );
     }
 

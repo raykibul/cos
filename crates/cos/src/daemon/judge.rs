@@ -47,7 +47,7 @@ const YOURS: &[&str] = &["message", "answer"];
 pub(crate) struct JudgeConfig {
     pub endpoint: String,
     pub timeout: Duration,
-    /// The daemon's own value of `TYPESAFEAI_API_KEY`.
+    /// The daemon's own value of `TYPESAFE_API_KEY`.
     pub env_key: Option<String>,
     /// `daemon.env`.
     pub env_file: PathBuf,
@@ -207,7 +207,7 @@ impl Judge {
             (key.status.clone(), key.client.is_some())
         };
         let off_reason = (!active).then(|| match (status.source, status.probing) {
-            (_, true) => "looking for TYPESAFEAI_API_KEY in your login shell".to_owned(),
+            (_, true) => "looking for TYPESAFE_API_KEY in your login shell".to_owned(),
             _ => format!(
                 "no {KEY_ENV} in the daemon's environment, {} or your login shell",
                 inner.config.env_file.display()

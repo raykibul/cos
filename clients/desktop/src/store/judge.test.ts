@@ -197,7 +197,7 @@ describe("jev in the store", () => {
     cos.refreshJudge();
     await settle();
     expect(cos.get().judge!.active).toBe(false);
-    expect(cos.get().judge!.offReason).toMatch(/no TYPESAFEAI_API_KEY found/);
+    expect(cos.get().judge!.offReason).toMatch(/no TYPESAFE_API_KEY found/);
     const judge = await cos.reloadJudge();
     expect(judge.key.source).toBe("shell");
     expect(cos.get().judge!.active).toBe(true);

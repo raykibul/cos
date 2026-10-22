@@ -340,7 +340,7 @@ cos/
   - **Permission sorting:** every request cos-policy sends to you is judged (`action_kind`, `serves_task`, plus `leaves_worktree` as a cross-check); jev would approve only worktree-local `read_only`, `build_or_test` or `edit_in_worktree` above 0.9 confidence with `serves_task` above 0.8. Your answer is stored next to it, for agreement stats and labelled examples.
   - **Waking a chief:** every run chief and Chief of Staff inbox item except your own words gets `wake` (now/batch/none) and `is_question_for_chief`. Wakeups are unchanged.
   - **Storage, switch, API:** migration 11 (`judge_projects`, `judge_decisions`); off per project by default; `GET /v1/judge`, `POST /v1/judge/reload`, `PUT /v1/projects/{id}/judge`, `judge.decided` (no inputs), `judge.changed`; `cos judge status|stats|on|off|test`.
-  - **Key:** `TYPESAFEAI_API_KEY` from the daemon's environment, then `daemon.env` (now read by the daemon itself on macOS too, refused if others can read it), then one login-shell probe; `cos daemon install` copies it into `daemon.env` (0600).
+  - **Key:** `TYPESAFE_API_KEY` from the daemon's environment, then `daemon.env` (now read by the daemon itself on macOS too, refused if others can read it), then one login-shell probe; `cos daemon install` copies it into `daemon.env` (0600).
   - **Desktop:** a "Judgment (jev)" section in Settings with the key's source, per-project switches and "would have auto-approved 41 of 45, disagreed on 4" with the disagreements.
-  - **Tested** against a fake jev server and `cos-fake-claude`, and against a sandbox daemon. No live call yet: the key isn't in this Mac's login shell under `TYPESAFEAI_API_KEY`.
+  - **Tested** against a fake jev server and `cos-fake-claude`, and against a sandbox daemon. No live call yet: the key isn't in this Mac's login shell under `TYPESAFE_API_KEY`.
 - **Next:** daily use on real repos.

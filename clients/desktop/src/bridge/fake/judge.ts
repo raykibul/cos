@@ -20,7 +20,7 @@ export interface FakeJudgeKey {
 }
 
 const OFF_REASON =
-  "no TYPESAFEAI_API_KEY found in the daemon's environment, ~/.cos/daemon.env or your login shell";
+  "no TYPESAFE_API_KEY found in the daemon's environment, ~/.cos/daemon.env or your login shell";
 
 class JudgeError {
   constructor(

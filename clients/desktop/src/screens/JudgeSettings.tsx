@@ -114,7 +114,7 @@ function KeyCard({ judge }: { judge: JudgeOverview }) {
           </p>
           {!found || !judge.active ? (
             <p className="mt-0.5 text-[12.5px] leading-snug text-ink-3 select-text">
-              {judge.offReason ?? "jev is off until TYPESAFEAI_API_KEY is set."}
+              {judge.offReason ?? "jev is off until TYPESAFE_API_KEY is set."}
             </p>
           ) : service ? (
             <p className="mt-0.5 font-mono text-[12px] text-ink-3">{service}</p>
