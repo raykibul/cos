@@ -14,6 +14,8 @@
 //! - Runs, plans and tasks: see [`super::runs_api`].
 //! - Chief answers to approvals and per-run limits: [`super::approvals_api`],
 //!   "Approvals policy" in `docs/daemon.md`.
+//! - The Chief of Staff: [`super::staff_api`], contract in
+//!   `docs/chief-of-staff.md`.
 //!
 //! Errors are `{"error": "..."}` with a message meant for the user.
 
@@ -93,6 +95,7 @@ pub(crate) struct AppState {
     pub runs: Arc<Runs>,
     pub agents: super::agents::AgentManager,
     pub chief: super::chief::Chief,
+    pub staff: super::staff::Staff,
     pub started_at: Timestamp,
     pub home: PathBuf,
     /// Flips to true when the daemon is stopping; open streams end then.
@@ -119,6 +122,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::agents_api::routes())
         .merge(super::approvals_api::routes())
         .merge(super::chief_api::routes())
+        .merge(super::staff_api::routes())
         .with_state(state)
 }
 
@@ -217,7 +221,8 @@ async fn remove_project(
     id: Result<Path<i64>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::not_found("there is no such project"))?;
-    state.projects.remove(id).await?;
+    // Its Chief of Staff and worktree go with it.
+    state.staff.remove_project(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -1,9 +1,11 @@
-//! `cos mcp --agent <id>`: the chief's MCP server, `cos`. Claude starts it
-//! over stdio (from the chief's `--mcp-config`), and it forwards every tool
-//! call to the daemon on the socket as that agent, so the daemon knows which
-//! chief and run is calling. The daemon does the work and the checks; this
-//! side only holds the tool list, whose descriptions and schemas are what
-//! the chief sees. See "Chief tools" in `docs/orchestration.md`.
+//! `cos mcp --agent <id>`: the MCP server `cos` of a run's chief or of a
+//! project's Chief of Staff. Claude starts it over stdio (from the agent's
+//! `--mcp-config`), and it forwards every tool call to the daemon on the
+//! socket as that agent, so the daemon knows who is calling. The daemon does
+//! the work and the checks; this side only holds the tool lists, whose
+//! descriptions and schemas are what the agent sees, and picks one by the
+//! agent's role when it starts. See "Chief tools" in `docs/orchestration.md`
+//! and "Staff MCP tools" in `docs/chief-of-staff.md`.
 //!
 //! Built on the official `rmcp` crate. Logging goes to stderr only, since
 //! stdout carries the protocol.
@@ -20,23 +22,36 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Map, Value, json};
 
+use cos_core::Role;
+
 use crate::client::Client;
 use crate::home::CosHome;
 
 #[derive(clap::Args)]
 pub(crate) struct McpArgs {
-    /// The chief agent this server speaks for.
+    /// The chief or Chief of Staff agent this server speaks for.
     #[arg(long)]
     agent: i64,
 }
 
 const INSTRUCTIONS: &str = "Tools for the chief of a cos run. cos runs the workers, checks, reviews and merges; \
 you plan, decide and report through these tools. Every call acts for this chief's own run.";
+const STAFF_INSTRUCTIONS: &str = "Tools for a project's Chief of Staff in cos: list and create workspaces, start agents \
+in them, talk to them, read what they said, stop them, start runs, and keep your brief. Every call acts on your own \
+project only.";
 
 pub(crate) async fn run(home: &CosHome, args: McpArgs) -> anyhow::Result<ExitCode> {
+    let client = Arc::new(Client::new(home.socket()));
+    let staff = client
+        .agent(args.agent)
+        .await
+        .with_context(|| format!("could not look up agent {}", args.agent))?
+        .role
+        == Role::Staff;
     let bridge = Bridge {
-        client: Arc::new(Client::new(home.socket())),
+        client,
         agent: args.agent,
+        staff,
     };
     let service = bridge
         .serve(rmcp::transport::stdio())
@@ -51,13 +66,15 @@ pub(crate) async fn run(home: &CosHome, args: McpArgs) -> anyhow::Result<ExitCod
 pub(crate) struct Bridge {
     pub client: Arc<Client>,
     pub agent: i64,
+    /// It speaks for a Chief of Staff, so it offers [`staff_tools`].
+    pub staff: bool,
 }
 
 impl Bridge {
     /// Runs one tool and returns the text for the chief, or an error the
     /// chief should read.
     pub(crate) async fn call(&self, name: &str, arguments: Value) -> anyhow::Result<String> {
-        if name == "approval_decide" {
+        if name == "approval_decide" && !self.staff {
             return self.approval_decide(&arguments).await;
         }
         self.client.chief_tool(self.agent, name, &arguments).await
@@ -98,11 +115,21 @@ impl Bridge {
     }
 }
 
+impl Bridge {
+    fn tools(&self) -> Vec<Tool> {
+        if self.staff { staff_tools() } else { tools() }
+    }
+}
+
 impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("cos", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(if self.staff {
+                STAFF_INSTRUCTIONS
+            } else {
+                INSTRUCTIONS
+            })
     }
 
     async fn list_tools(
@@ -110,7 +137,7 @@ impl ServerHandler for Bridge {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools()))
+        Ok(ListToolsResult::with_all_items(self.tools()))
     }
 
     async fn call_tool(
@@ -119,7 +146,7 @@ impl ServerHandler for Bridge {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.as_ref();
-        if !tools().iter().any(|tool| tool.name == name) {
+        if !self.tools().iter().any(|tool| tool.name == name) {
             return Err(ErrorData::invalid_params(
                 format!("there is no tool {name}"),
                 None,
@@ -244,6 +271,118 @@ pub(crate) fn tools() -> Vec<Tool> {
                 "type": "object",
                 "properties": {"markdown": {"type": "string"}},
                 "required": ["markdown"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+    ]
+}
+
+/// The Chief of Staff's tools. The descriptions are its manual.
+pub(crate) fn staff_tools() -> Vec<Tool> {
+    let base = json!({"type": "string", "enum": ["origin", "head"], "description": "What it starts from: \"origin\" (the freshly fetched base branch) or \"head\" (the main checkout's HEAD, with unpushed commits). Defaults to origin when the project has one."});
+    let new_workspace = json!({
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "What to call it. Optional: it is named after a city either way."},
+            "from": base
+        },
+        "additionalProperties": false
+    });
+    vec![
+        tool(
+            "workspaces_list",
+            "List this project's workspaces (id, title, city, branch, path) and the agents in each: id, title, state, \
+             model, spawned_by (your agent id if you started it) and the start of its last message.",
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            true,
+        ),
+        tool(
+            "workspace_create",
+            "Create a workspace: a new git worktree of the project on its own branch. Returns it, with its id. You \
+             can also create one while starting an agent (agent_spawn with new_workspace).",
+            new_workspace.clone(),
+            false,
+        ),
+        tool(
+            "agent_spawn",
+            "Start a Claude agent on a job. Give exactly one of workspace_id (an existing workspace) or new_workspace. \
+             The prompt is all it knows, so make it complete: what to do, where, and how to know it's done. It reports \
+             to you when it finishes a turn. Returns {agent_id, workspace_id}.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The job, complete enough to do without asking."},
+                    "workspace_id": {"type": "integer"},
+                    "new_workspace": new_workspace,
+                    "title": {"type": "string", "description": "A short name for the agent; defaults to the start of the prompt."},
+                    "model": {"type": "string", "description": "A Claude model such as \"sonnet\"; defaults to Claude's default."},
+                    "permission_mode": {"type": "string", "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]}
+                },
+                "required": ["prompt"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+        tool(
+            "agent_send",
+            "Type a message into an agent, e.g. a follow-up job, an answer or a correction. A stopped agent is resumed \
+             first.",
+            json!({
+                "type": "object",
+                "properties": {"agent_id": {"type": "integer"}, "message": {"type": "string"}},
+                "required": ["agent_id", "message"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+        tool(
+            "agent_read",
+            "Read an agent's state and its full last message, and its terminal screen if you ask for it.",
+            json!({
+                "type": "object",
+                "properties": {"agent_id": {"type": "integer"}, "screen": {"type": "boolean", "description": "Also return the terminal's text."}},
+                "required": ["agent_id"],
+                "additionalProperties": false
+            }),
+            true,
+        ),
+        tool(
+            "agent_stop",
+            "Stop an agent. Its workspace and branch stay; agent_send resumes it later.",
+            json!({
+                "type": "object",
+                "properties": {"agent_id": {"type": "integer"}},
+                "required": ["agent_id"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+        tool(
+            "run_start",
+            "Start a cos run in a workspace: a run chief plans the goal as small tasks, the user approves the plan, and \
+             cos runs a worker per task, checks, reviews and merges them. Use it for a goal too big for one agent. \
+             Returns the run; you hear when its state changes.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "workspace_id": {"type": "integer"},
+                    "goal": {"type": "string"},
+                    "preset": {"type": "string", "enum": ["strict", "normal", "trusted"], "description": "How much the run chief may approve for the user. Defaults to normal."}
+                },
+                "required": ["workspace_id", "goal"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+        tool(
+            "brief_update",
+            "Save your brief, replacing the old one: what you're working on, for whom, and what's open. At most 4 KiB. \
+             It is appended to your instructions whenever you restart, so it is all you keep.",
+            json!({
+                "type": "object",
+                "properties": {"brief": {"type": "string"}},
+                "required": ["brief"],
                 "additionalProperties": false
             }),
             false,

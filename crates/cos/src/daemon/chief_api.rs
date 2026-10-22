@@ -1,8 +1,8 @@
 //! Routes for the chief, merged into [`super::api::router`]. The contract is
 //! `docs/orchestration.md`:
 //!
-//! - `POST /v1/agents/{id}/tools/{name}`: a chief's tool call, from
-//!   `cos mcp`. The body is the tool's arguments; the answer is
+//! - `POST /v1/agents/{id}/tools/{name}`: a chief's or a Chief of Staff's
+//!   tool call, from `cos mcp`. The body is the tool's arguments; the answer is
 //!   [`ToolResult`]. Unix socket only.
 //! - `GET /v1/questions?state=&run_id=` → [`QuestionsPage`], oldest first
 //! - `GET /v1/questions/{id}` → [`Question`]
@@ -15,7 +15,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use cos_core::{Question, QuestionState};
+use cos_core::{Question, QuestionState, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -78,7 +78,12 @@ async fn call_tool(
 ) -> Result<Json<ToolResult>, ApiError> {
     let Path((id, name)) = path.map_err(|_| ApiError::not_found("there is no such agent"))?;
     let arguments = body?.map_or(Value::Null, |Json(value)| value);
-    let text = state.chief.call_tool(id, &name, arguments).await?;
+    // A run's chief and a Chief of Staff share the route and the server name.
+    let text = if state.agents.get(id)?.role == Role::Staff {
+        state.staff.call_tool(id, &name, arguments).await?
+    } else {
+        state.chief.call_tool(id, &name, arguments).await?
+    };
     Ok(Json(ToolResult { text }))
 }
 

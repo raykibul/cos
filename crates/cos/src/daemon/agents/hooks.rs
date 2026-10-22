@@ -15,9 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cos_core::{
-    AgentState, Approval, ApprovalRoute, ApprovalState, DecidedBy, NewApproval, StoreError,
-};
+use cos_core::{AgentState, Approval, ApprovalRoute, ApprovalState, DecidedBy, NewApproval, StoreError};
 use cos_harness::Decision;
 use cos_harness::claude::hooks::{Hook, HookEvent};
 use cos_policy::{Decider, Outcome};

@@ -71,6 +71,16 @@ impl TestServer {
             ChiefConfig::for_tests(),
         )
         .unwrap();
+        let staff = crate::daemon::staff::Staff::start(
+            store.clone(),
+            log.clone(),
+            projects.clone(),
+            runs.clone(),
+            agents.clone(),
+            chief.clone(),
+            crate::daemon::staff::StaffConfig::for_tests(),
+        )
+        .unwrap();
         let (stop, stopping) = watch::channel(false);
         let state = api::AppState {
             log: log.clone(),
@@ -80,6 +90,7 @@ impl TestServer {
             runs,
             agents,
             chief,
+            staff,
             started_at: Timestamp::now(),
             home: dir.path().to_path_buf(),
             stopping: stopping.clone(),

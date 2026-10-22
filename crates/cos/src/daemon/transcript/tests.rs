@@ -11,7 +11,12 @@ fn texts(transcript: &Transcript) -> Vec<(Speaker, MessageKind, String)> {
         .map(|message| {
             let text = match (&message.text, &message.tool) {
                 (Some(text), _) => text.clone(),
-                (None, Some(tool)) => format!("{}: {}{}", tool.name, tool.summary, if tool.is_error { " (error)" } else { "" }),
+                (None, Some(tool)) => format!(
+                    "{}: {}{}",
+                    tool.name,
+                    tool.summary,
+                    if tool.is_error { " (error)" } else { "" }
+                ),
                 (None, None) => String::new(),
             };
             (message.role, message.kind, text)
@@ -57,7 +62,10 @@ fn a_chief_turn_hides_tool_search_unwraps_wakeups_and_marks_errors() {
     let transcript = parse(CHIEF.as_bytes());
     let rows = texts(&transcript);
     assert_eq!(rows.len(), 6, "{rows:#?}");
-    assert_eq!(rows[1].2, "mcp__cos__board_propose: {\"tasks\":[{\"files\":[\"calc.py\",\"tests/test_calc.py\"],\"instructions\":\"Add subtract(a, b) to calc.py and a test.\",\"title\":\"Add subtract\"}]}");
+    assert_eq!(
+        rows[1].2,
+        "mcp__cos__board_propose: {\"tasks\":[{\"files\":[\"calc.py\",\"tests/test_calc.py\"],\"instructions\":\"Add subtract(a, b) to calc.py and a test.\",\"title\":\"Add subtract\"}]}"
+    );
     assert_eq!(
         rows[3],
         (
@@ -66,7 +74,10 @@ fn a_chief_turn_hides_tool_search_unwraps_wakeups_and_marks_errors() {
             "[cos · 2 updates]\n### Agent 15 \"Add subtract\" finished a turn\nDone.".to_owned()
         )
     );
-    assert_eq!(rows[4].2, "mcp__cos__report_write: {\"report\":\"## Run 2\\n\\nDone.\"} (error)");
+    assert_eq!(
+        rows[4].2,
+        "mcp__cos__report_write: {\"report\":\"## Run 2\\n\\nDone.\"} (error)"
+    );
     assert_eq!(rows[5].2, "Run 2 is done.");
     assert_eq!(transcript.next, 6);
 }
@@ -78,10 +89,26 @@ fn noise_sidechains_and_bad_lines_are_skipped_and_a_partial_line_waits() {
         texts(&transcript),
         vec![
             (Speaker::User, MessageKind::Text, "List the files".to_owned()),
-            (Speaker::Assistant, MessageKind::Tool, "Bash: ls… (error)".to_owned()),
-            (Speaker::User, MessageKind::Text, "Try again, with ls -la".to_owned()),
-            (Speaker::Assistant, MessageKind::Text, "Running it again.".to_owned()),
-            (Speaker::Assistant, MessageKind::Tool, "Read: /repo/README.md".to_owned()),
+            (
+                Speaker::Assistant,
+                MessageKind::Tool,
+                "Bash: ls… (error)".to_owned()
+            ),
+            (
+                Speaker::User,
+                MessageKind::Text,
+                "Try again, with ls -la".to_owned()
+            ),
+            (
+                Speaker::Assistant,
+                MessageKind::Text,
+                "Running it again.".to_owned()
+            ),
+            (
+                Speaker::Assistant,
+                MessageKind::Tool,
+                "Read: /repo/README.md".to_owned()
+            ),
         ]
     );
     // The Read result is on the unfinished last line, so the call is still
@@ -92,7 +119,12 @@ fn noise_sidechains_and_bad_lines_are_skipped_and_a_partial_line_waits() {
     let finished = parse(finished.as_bytes());
     assert_eq!(finished.messages.len(), 5);
     assert_eq!(finished.next, 5);
-    assert!(finished.messages[4].tool.as_ref().is_some_and(|tool| !tool.is_error));
+    assert!(
+        finished.messages[4]
+            .tool
+            .as_ref()
+            .is_some_and(|tool| !tool.is_error)
+    );
 }
 
 #[test]
@@ -130,7 +162,10 @@ fn pastes_unwrap_and_keep_the_text_around_them() {
         "before \ninside\n after"
     );
     assert_eq!(unwrap_pastes("no tags <here>"), "no tags <here>");
-    assert_eq!(unwrap_pastes("broken <pasted_content id"), "broken <pasted_content id");
+    assert_eq!(
+        unwrap_pastes("broken <pasted_content id"),
+        "broken <pasted_content id"
+    );
 }
 
 #[test]
@@ -152,5 +187,10 @@ fn messages_serialize_in_the_contract_shape() {
             "ts_ms": 1_792_620_654_442_i64
         })
     );
-    assert_eq!(json["messages"][0]["text"].as_str().map(|text| text.starts_with("Task:")), Some(true));
+    assert_eq!(
+        json["messages"][0]["text"]
+            .as_str()
+            .map(|text| text.starts_with("Task:")),
+        Some(true)
+    );
 }

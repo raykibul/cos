@@ -12,6 +12,7 @@ use serde::Deserialize;
 use super::{Client, find, read_json, sse_data};
 use crate::daemon::agents::{Screen, StartAgent};
 use crate::daemon::agents_api::{AgentsPage, Answer, ApprovalsPage, Input, Keys, Resize, Verdict};
+#[cfg(test)]
 use crate::daemon::transcript::Transcript;
 
 impl Client {
@@ -78,6 +79,7 @@ impl Client {
     }
 
     /// The agent's chat from Claude's transcript, the messages after `after`.
+    #[cfg(test)]
     pub(crate) async fn transcript(&self, id: i64, after: usize) -> anyhow::Result<Transcript> {
         self.get_json(&format!("/v1/agents/{id}/transcript?after={after}"))
             .await

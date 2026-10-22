@@ -308,11 +308,9 @@ fn read_item(row: &Row<'_>) -> rusqlite::Result<StaffItem> {
     Ok(StaffItem {
         id: row.get(0)?,
         project_id: row.get(1)?,
-        kind: row
-            .get_ref(2)?
-            .as_str()?
-            .parse()
-            .map_err(|error: String| rusqlite::Error::FromSqlConversionFailure(2, Type::Text, error.into()))?,
+        kind: row.get_ref(2)?.as_str()?.parse().map_err(|error: String| {
+            rusqlite::Error::FromSqlConversionFailure(2, Type::Text, error.into())
+        })?,
         agent_id: row.get(3)?,
         run_id: row.get(4)?,
         text: row.get(5)?,
@@ -372,7 +370,9 @@ mod tests {
     fn a_brief_over_4_kib_is_refused() {
         let (books, _, project) = books();
 
-        let error = books.set_brief(project, &"x".repeat(MAX_BRIEF_BYTES + 1)).unwrap_err();
+        let error = books
+            .set_brief(project, &"x".repeat(MAX_BRIEF_BYTES + 1))
+            .unwrap_err();
 
         assert!(matches!(error, RunError::Invalid(_)), "{error}");
         assert!(books.set_brief(project, &"x".repeat(MAX_BRIEF_BYTES)).is_ok());
@@ -386,11 +386,23 @@ mod tests {
             .add(project, StaffItemKind::Message, None, None, &"long ".repeat(2000))
             .unwrap();
         let news = books
-            .add(project, StaffItemKind::Agent, Some(3), None, &"é".repeat(MAX_ITEM_BYTES))
+            .add(
+                project,
+                StaffItemKind::Agent,
+                Some(3),
+                None,
+                &"é".repeat(MAX_ITEM_BYTES),
+            )
             .unwrap();
-        books.add(project, StaffItemKind::Run, None, Some(2), "run 2 is done").unwrap();
+        books
+            .add(project, StaffItemKind::Run, None, Some(2), "run 2 is done")
+            .unwrap();
 
-        assert_eq!(message.text.len(), "long ".repeat(2000).trim().len(), "messages are kept whole");
+        assert_eq!(
+            message.text.len(),
+            "long ".repeat(2000).trim().len(),
+            "messages are kept whole"
+        );
         assert!(news.text.len() <= MAX_ITEM_BYTES && news.text.ends_with('…'));
         assert_eq!(books.projects_waiting().unwrap(), [project]);
         assert_eq!(books.waiting_count(project).unwrap(), 3);

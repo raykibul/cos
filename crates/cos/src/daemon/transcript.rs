@@ -159,7 +159,14 @@ pub(crate) fn parse(bytes: &[u8]) -> Transcript {
                         Some("text") => {
                             let text = block["text"].as_str().unwrap_or_default().trim();
                             if !text.is_empty() {
-                                push(&mut messages, Speaker::Assistant, MessageKind::Text, Some(text), None, ts_ms);
+                                push(
+                                    &mut messages,
+                                    Speaker::Assistant,
+                                    MessageKind::Text,
+                                    Some(text),
+                                    None,
+                                    ts_ms,
+                                );
                             }
                         }
                         Some("tool_use") => {
@@ -175,7 +182,14 @@ pub(crate) fn parse(bytes: &[u8]) -> Transcript {
                                 id: id.clone(),
                                 done: false,
                             };
-                            push(&mut messages, Speaker::Assistant, MessageKind::Tool, None, Some(call), ts_ms);
+                            push(
+                                &mut messages,
+                                Speaker::Assistant,
+                                MessageKind::Tool,
+                                None,
+                                Some(call),
+                                ts_ms,
+                            );
                             calls.insert(id, messages.len() - 1);
                         }
                         _ => {}

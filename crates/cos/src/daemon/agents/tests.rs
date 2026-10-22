@@ -107,7 +107,18 @@ impl Fixture {
             ChiefConfig::for_tests(),
         )
         .unwrap();
+        let staff = crate::daemon::staff::Staff::start(
+            self.store.clone(),
+            self.log.clone(),
+            self.projects.clone(),
+            runs.clone(),
+            self.manager.clone(),
+            chief.clone(),
+            crate::daemon::staff::StaffConfig::for_tests(),
+        )
+        .unwrap();
         let state = api::AppState {
+            staff,
             log: self.log.clone(),
             projects: self.projects.clone(),
             devices: Arc::new(Devices::new(self.store.clone(), self.log.clone())),
@@ -354,7 +365,10 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
     let client = &fixture.client;
     let agent = fixture.start_agent("hello").await;
     let agent = fixture.until_idle_with(agent.id, "echo: hello").await;
-    let path = agent.transcript_path.clone().expect("the hooks gave a transcript path");
+    let path = agent
+        .transcript_path
+        .clone()
+        .expect("the hooks gave a transcript path");
     assert!(path.starts_with(fixture.dir.path()), "{}", path.display());
 
     let transcript = client.transcript(agent.id, 0).await.unwrap();
@@ -373,14 +387,15 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
     assert_eq!(transcript.next, 2);
 
     // A multi-line message is pasted, and a tool call has its result folded in.
-    fixture.manager.send_message(agent.id, "first\nsecond").await.unwrap();
+    fixture
+        .manager
+        .send_message(agent.id, "first\nsecond")
+        .await
+        .unwrap();
     fixture.until_idle_with(agent.id, "echo: first\nsecond").await;
     client.say(agent.id, "ask:Bash ls".into()).await.unwrap();
     let approval = fixture.pending_approval(agent.id).await;
-    client
-        .answer_approval(approval.id, false, None)
-        .await
-        .unwrap();
+    client.answer_approval(approval.id, false, None).await.unwrap();
     until("the denied call's reply", || async {
         let transcript = client.transcript(agent.id, 2).await.ok()?;
         (transcript.next == 7).then_some(transcript)
@@ -391,7 +406,10 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
     assert_eq!(later.messages[0].text.as_deref(), Some("first\nsecond"));
     assert_eq!(later.messages[2].text.as_deref(), Some("ask:Bash ls"));
     let call = later.messages[3].tool.as_ref().expect("a tool row");
-    assert_eq!((call.name.as_str(), call.summary.as_str(), call.is_error), ("Bash", "ls", true));
+    assert_eq!(
+        (call.name.as_str(), call.summary.as_str(), call.is_error),
+        ("Bash", "ls", true)
+    );
 
     // Logged once a second at most, and only when the file grew.
     until("agent.transcript up to 7", || async {

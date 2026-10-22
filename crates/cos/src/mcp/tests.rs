@@ -147,6 +147,11 @@ impl McpClient {
 
 /// A bridge for agent 1 on a stub daemon, initialized.
 async fn connect() -> (McpClient, Arc<Seen>, tempfile::TempDir) {
+    connect_as(false).await
+}
+
+/// [`connect`], as a Chief of Staff's bridge if `staff`.
+async fn connect_as(staff: bool) -> (McpClient, Arc<Seen>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("cos.sock");
     let seen = Arc::new(Seen::default());
@@ -158,6 +163,7 @@ async fn connect() -> (McpClient, Arc<Seen>, tempfile::TempDir) {
     let bridge = Bridge {
         client: Arc::new(Client::new(socket)),
         agent: 1,
+        staff,
     };
     tokio::spawn(async move {
         let (read, write) = tokio::io::split(server);
@@ -237,6 +243,42 @@ async fn initialize_list_and_call_round_trip() {
 }
 
 #[tokio::test]
+async fn a_chief_of_staff_gets_its_own_tools() {
+    let (mut client, seen, _dir) = connect_as(true).await;
+    let list = client.request("tools/list", json!({})).await;
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "workspaces_list",
+            "workspace_create",
+            "agent_spawn",
+            "agent_send",
+            "agent_read",
+            "agent_stop",
+            "run_start",
+            "brief_update"
+        ]
+    );
+    let result = client.call("agent_read", json!({ "agent_id": 2 })).await;
+    assert_eq!(text(&result), "agent_read for agent 1 with {\"agent_id\":2}");
+    // A run chief's tools aren't there.
+    let reply = client
+        .request(
+            "tools/call",
+            json!({ "name": "approval_decide", "arguments": {} }),
+        )
+        .await;
+    assert!(reply["error"].is_object(), "{reply}");
+    assert!(seen.decisions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn approval_decide_goes_to_the_approvals_route_for_this_run_only() {
     let (mut client, seen, _dir) = connect().await;
 
@@ -293,7 +335,7 @@ async fn approval_decide_goes_to_the_approvals_route_for_this_run_only() {
 
 #[test]
 fn every_tool_has_a_description_and_an_object_schema() {
-    for tool in tools() {
+    for tool in tools().into_iter().chain(staff_tools()) {
         assert!(
             tool.description.as_deref().is_some_and(|text| text.len() > 40),
             "{}",

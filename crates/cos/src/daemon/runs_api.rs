@@ -59,14 +59,8 @@ async fn create_run(
     body: Result<Json<NewRun>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Run>), ApiError> {
     let Json(body) = body?;
-    let run = state.runs.create(body)?;
-    // Every run gets a chief. Without one nothing plans it, so the run fails.
-    let run = state.chief.start_for_run(&run).inspect_err(|error| {
-        let reason = format!("the chief could not start: {}", error.message);
-        if let Err(failure) = state.runs.fail(run.id, &reason) {
-            tracing::error!(error = %failure, run = run.id, "could not fail a run without a chief");
-        }
-    })?;
+    // Every run gets a chief.
+    let run = state.chief.create_run(body)?;
     Ok((StatusCode::CREATED, Json(run)))
 }
 

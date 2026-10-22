@@ -30,14 +30,14 @@ use axum::http::StatusCode;
 use cos_core::chief::{MAX_WAKEUPS_PER_HOUR, next_batch};
 use cos_core::events::kind;
 use cos_core::{
-    AgentState, EventLog, Inbox, InboxKind, Launch, LoggedEvent, Question, QuestionState, Questions, Role,
-    Run, Runs, Store, Subscription, render_board,
+    AgentState, EventLog, Inbox, InboxKind, Launch, LoggedEvent, NewRun, Question, QuestionState, Questions,
+    Role, Run, Runs, Store, Subscription, render_board,
 };
 use jiff::Timestamp;
 use serde_json::Value;
 use tokio::sync::Notify;
 
-pub(crate) use prompt::configure;
+pub(crate) use prompt::{configure, mcp_config};
 
 use super::agents::{AgentManager, StartAgent};
 use super::api::ApiError;
@@ -134,6 +134,19 @@ impl Chief {
         tokio::spawn(follow(Arc::downgrade(&inner), subscription));
         tokio::spawn(deliver_loop(Arc::downgrade(&inner), wake));
         Ok(Self { inner })
+    }
+
+    /// Creates a run and starts its chief. Without a chief nothing plans
+    /// the run, so the run fails if the chief can't start.
+    pub(crate) fn create_run(&self, new: NewRun) -> Result<Run, ApiError> {
+        let runs = &self.inner.runs;
+        let run = runs.create(new)?;
+        self.start_for_run(&run).inspect_err(|error| {
+            let reason = format!("the chief could not start: {}", error.message);
+            if let Err(failure) = runs.fail(run.id, &reason) {
+                tracing::error!(error = %failure, run = run.id, "could not fail a run without a chief");
+            }
+        })
     }
 
     /// Starts the chief of a new run and records it on the run.

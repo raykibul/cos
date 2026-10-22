@@ -1,0 +1,377 @@
+//! The Chief of Staff's tools, as the daemon runs them. `cos mcp` forwards
+//! each call here with the calling agent's id; the tool list and its schemas
+//! live in [`crate::mcp`]. Every tool works only on the chief's own project.
+
+use std::time::Duration;
+
+use axum::http::StatusCode;
+use cos_core::{Agent, AgentState, ApprovalPreset, Base, NewRun, Role, Workspace};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+
+use super::{Staff, error, prompt};
+use crate::daemon::agents::StartAgent;
+use crate::daemon::api::ApiError;
+
+/// `last_message` in `workspaces_list` is cut to this many characters.
+const LIST_MESSAGE_CHARS: usize = 500;
+const MAX_SEND_CHARS: usize = 100_000;
+/// How often `agent_send` checks whether a resumed agent is ready.
+const READY_POLL: Duration = Duration::from_millis(100);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceCreate {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    from: Option<Base>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSpawn {
+    prompt: String,
+    #[serde(default)]
+    workspace_id: Option<i64>,
+    #[serde(default)]
+    new_workspace: Option<WorkspaceCreate>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSend {
+    agent_id: i64,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentRead {
+    agent_id: i64,
+    #[serde(default)]
+    screen: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentStop {
+    agent_id: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunStart {
+    workspace_id: i64,
+    goal: String,
+    #[serde(default)]
+    preset: Option<ApprovalPreset>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BriefUpdate {
+    brief: String,
+}
+
+impl Staff {
+    /// Runs one tool for the Chief of Staff `agent_id` and returns the text
+    /// it reads. Errors are meant for it too.
+    pub(crate) async fn call_tool(
+        &self,
+        agent_id: i64,
+        name: &str,
+        arguments: Value,
+    ) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let agent = inner.agents.get(agent_id)?;
+        let project_id = match agent.role {
+            Role::Staff => inner.books.project_of(agent_id)?,
+            _ => None,
+        };
+        let Some(project_id) = project_id else {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                format!("agent {agent_id} is not a project's Chief of Staff"),
+            ));
+        };
+        match name {
+            "workspaces_list" => self.workspaces_list(project_id).await,
+            "workspace_create" => {
+                let workspace = self.workspace_create(project_id, parse(name, arguments)?).await?;
+                Ok(pretty(&workspace))
+            }
+            "agent_spawn" => {
+                self.agent_spawn(project_id, agent_id, parse(name, arguments)?)
+                    .await
+            }
+            "agent_send" => self.agent_send(project_id, parse(name, arguments)?).await,
+            "agent_read" => self.agent_read(project_id, parse(name, arguments)?).await,
+            "agent_stop" => self.agent_stop(project_id, parse(name, arguments)?),
+            "run_start" => self.run_start(project_id, agent_id, parse(name, arguments)?),
+            "brief_update" => {
+                self.brief_update(project_id, agent_id, parse(name, arguments)?)
+                    .await
+            }
+            _ => Err(ApiError::not_found(&format!("there is no tool {name}"))),
+        }
+    }
+
+    async fn workspaces_list(&self, project_id: i64) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let project = inner.projects.get(project_id).await?;
+        let mut workspaces = Vec::new();
+        for workspace in &project.workspaces {
+            let agents: Vec<Value> = inner
+                .agents
+                .list(Some(workspace.id), None)?
+                .iter()
+                .map(|agent| {
+                    json!({
+                        "id": agent.id,
+                        "title": agent.title,
+                        "state": agent.state,
+                        "model": agent.model,
+                        "spawned_by": agent.spawned_by,
+                        "last_message": agent.last_message.as_deref().map(|text| cut_chars(text, LIST_MESSAGE_CHARS)),
+                    })
+                })
+                .collect();
+            workspaces.push(json!({
+                "id": workspace.id,
+                "title": workspace.title,
+                "city": workspace.city,
+                "branch": workspace.branch,
+                "path": workspace.path,
+                "agents": agents,
+            }));
+        }
+        Ok(pretty(&json!({ "workspaces": workspaces })))
+    }
+
+    async fn workspace_create(
+        &self,
+        project_id: i64,
+        create: WorkspaceCreate,
+    ) -> Result<Workspace, ApiError> {
+        let projects = &self.inner.projects;
+        let base = match create.from {
+            Some(base) => base,
+            None if projects.get(project_id).await?.has_origin => Base::Origin,
+            None => Base::Head,
+        };
+        Ok(projects
+            .create_workspace(project_id, base, create.title.as_deref())
+            .await?)
+    }
+
+    async fn agent_spawn(
+        &self,
+        project_id: i64,
+        staff_id: i64,
+        spawn: AgentSpawn,
+    ) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let task = spawn.prompt.trim();
+        if task.is_empty() {
+            return Err(error(StatusCode::BAD_REQUEST, "the prompt is empty".into()));
+        }
+        let workspace = match (spawn.workspace_id, spawn.new_workspace) {
+            (Some(id), None) => self.own_workspace(project_id, id)?,
+            (None, Some(create)) => self.workspace_create(project_id, create).await?,
+            _ => {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "give exactly one of workspace_id or new_workspace".into(),
+                ));
+            }
+        };
+        let project = inner.projects.get(project_id).await?;
+        let request = StartAgent {
+            prompt: Some(format!("{task}\n\n{}", prompt::spawned_line(&project.name))),
+            // Named after the task, not the line cos adds.
+            title: spawn.title.or_else(|| Some(task.to_owned())),
+            model: spawn.model,
+            permission_mode: spawn.permission_mode,
+            ..StartAgent::default()
+        };
+        let launch = cos_core::Launch {
+            spawned_by: Some(staff_id),
+            ..cos_core::Launch::default()
+        };
+        let agent = inner
+            .agents
+            .start_agent_with(workspace.id, Role::User, None, &request, &launch)?;
+        Ok(pretty(
+            &json!({ "agent_id": agent.id, "workspace_id": workspace.id }),
+        ))
+    }
+
+    async fn agent_send(&self, project_id: i64, send: AgentSend) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let agent = self.own_agent(project_id, send.agent_id)?;
+        let message = send.message.trim();
+        if message.is_empty() || message.chars().count() > MAX_SEND_CHARS {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("the message must be 1 to {MAX_SEND_CHARS} characters"),
+            ));
+        }
+        let resumed = !agent.state.is_running();
+        if resumed {
+            inner.agents.resume(agent.id)?;
+        }
+        self.until_ready(agent.id).await?;
+        inner.agents.paste_message(agent.id, message).await?;
+        Ok(if resumed {
+            format!("Resumed agent {} and sent the message.", agent.id)
+        } else {
+            format!("Sent to agent {}.", agent.id)
+        })
+    }
+
+    /// Waits until a (re)starting agent can take a message.
+    async fn until_ready(&self, agent_id: i64) -> Result<(), ApiError> {
+        let deadline = tokio::time::Instant::now() + self.inner.config.ready_wait;
+        loop {
+            let agent = self.inner.agents.get(agent_id)?;
+            match agent.state {
+                AgentState::Starting if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(READY_POLL).await;
+                }
+                AgentState::Starting => {
+                    return Err(error(
+                        StatusCode::CONFLICT,
+                        format!("agent {agent_id} is still starting; try again shortly"),
+                    ));
+                }
+                AgentState::NeedsTrust => {
+                    return Err(error(
+                        StatusCode::CONFLICT,
+                        format!("agent {agent_id} waits for the user to trust its folder"),
+                    ));
+                }
+                AgentState::Exited | AgentState::Interrupted => {
+                    return Err(error(
+                        StatusCode::CONFLICT,
+                        format!("agent {agent_id} exited before it could take the message"),
+                    ));
+                }
+                AgentState::Idle | AgentState::Working | AgentState::WaitingApproval => return Ok(()),
+            }
+        }
+    }
+
+    async fn agent_read(&self, project_id: i64, read: AgentRead) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let agent = self.own_agent(project_id, read.agent_id)?;
+        let from_transcript = inner
+            .agents
+            .transcript(agent.id, 0)
+            .await
+            .ok()
+            .and_then(|transcript| transcript.last_reply().map(str::to_owned));
+        let mut result = json!({
+            "state": agent.state,
+            "last_message": from_transcript.or(agent.last_message),
+        });
+        if read.screen {
+            result["screen"] = json!(inner.agents.screen(agent.id)?.text);
+        }
+        Ok(pretty(&result))
+    }
+
+    fn agent_stop(&self, project_id: i64, stop: AgentStop) -> Result<String, ApiError> {
+        let agent = self.own_agent(project_id, stop.agent_id)?;
+        self.inner.agents.stop(agent.id)?;
+        Ok(format!("Stopping agent {}.", agent.id))
+    }
+
+    fn run_start(&self, project_id: i64, staff_id: i64, start: RunStart) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let workspace = self.own_workspace(project_id, start.workspace_id)?;
+        let run = inner.chief.create_run(NewRun {
+            workspace_id: workspace.id,
+            goal: start.goal,
+            preset: start.preset.unwrap_or_default(),
+            approval_cap: None,
+        })?;
+        inner.runs.set_spawned_by(run.id, staff_id)?;
+        Ok(pretty(&run))
+    }
+
+    async fn brief_update(
+        &self,
+        project_id: i64,
+        staff_id: i64,
+        update: BriefUpdate,
+    ) -> Result<String, ApiError> {
+        let inner = &self.inner;
+        let brief = inner.books.set_brief(project_id, &update.brief)?;
+        // The next start appends the new brief.
+        let project = inner.projects.get(project_id).await?;
+        let record = inner.books.record(project_id)?;
+        let system_prompt = prompt::system_prompt(&project.name, &brief);
+        inner.agents.set_next_launch(
+            staff_id,
+            Some(&system_prompt),
+            inner.model(record.model.as_deref()).as_deref(),
+        )?;
+        Ok(format!("Brief saved ({} bytes).", brief.len()))
+    }
+
+    /// An agent in one of the project's workspaces, not the chief itself.
+    fn own_agent(&self, project_id: i64, agent_id: i64) -> Result<Agent, ApiError> {
+        let agent = self.inner.agents.get(agent_id)?;
+        let workspace = self.inner.projects.workspace(agent.workspace_id)?;
+        if workspace.project_id != project_id || workspace.staff {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                format!("agent {agent_id} is not in one of this project's workspaces"),
+            ));
+        }
+        Ok(agent)
+    }
+
+    /// One of the project's workspaces.
+    fn own_workspace(&self, project_id: i64, workspace_id: i64) -> Result<Workspace, ApiError> {
+        let workspace = self.inner.projects.listed_workspace(workspace_id)?;
+        if workspace.project_id != project_id {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                format!("workspace {workspace_id} belongs to another project"),
+            ));
+        }
+        Ok(workspace)
+    }
+}
+
+fn pretty(value: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_default()
+}
+
+fn cut_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(max).collect();
+    cut.push('…');
+    cut
+}
+
+fn parse<T: DeserializeOwned>(tool: &str, arguments: Value) -> Result<T, ApiError> {
+    let arguments = if arguments.is_null() { json!({}) } else { arguments };
+    serde_json::from_value(arguments).map_err(|failure| {
+        error(
+            StatusCode::BAD_REQUEST,
+            format!("bad arguments for {tool}: {failure}"),
+        )
+    })
+}

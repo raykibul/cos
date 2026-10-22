@@ -77,9 +77,20 @@ impl Fixture {
             ChiefConfig::for_tests(),
         )
         .unwrap();
+        let staff = crate::daemon::staff::Staff::start(
+            store.clone(),
+            log.clone(),
+            projects.clone(),
+            runs.clone(),
+            manager.clone(),
+            chief.clone(),
+            crate::daemon::staff::StaffConfig::for_tests(),
+        )
+        .unwrap();
         let socket = dir.path().join("cos.sock");
         let (stop, stopping) = watch::channel(false);
         let state = api::AppState {
+            staff,
             log: log.clone(),
             projects: projects.clone(),
             devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),

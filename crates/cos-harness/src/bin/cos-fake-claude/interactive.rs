@@ -41,8 +41,8 @@
 //! `--resume`. A bracketed paste arrives as one message, as in the real CLI.
 
 use std::io::{BufRead, Read, Write};
-use std::path::PathBuf;
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};

@@ -29,8 +29,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::agents::{AgentError, Screen, StartAgent, TerminalView};
-use super::transcript::Transcript;
 use super::api::{ApiError, AppState};
+use super::transcript::Transcript;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct AgentsPage {

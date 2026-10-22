@@ -257,6 +257,9 @@ struct Live {
 struct Running {
     terminal: Arc<ClaudeTerminal>,
     role: Role,
+    /// The daemon answers its trust dialog: an agent a run or a Chief of
+    /// Staff started, in a worktree cos made for a registered project.
+    auto_trust: bool,
     workspace_id: i64,
     /// A hook has arrived, so Claude is past any trust dialog.
     heard: bool,
@@ -388,6 +391,17 @@ impl AgentManager {
     /// Starts `claude --resume` for an exited or interrupted agent, as the
     /// same agent.
     pub(crate) fn resume(&self, id: i64) -> Result<Agent, AgentError> {
+        self.relaunch(id, false)
+    }
+
+    /// [`Self::resume`], except that a session Claude never saved (no
+    /// transcript yet, as when it was stopped before its first message)
+    /// starts afresh with the same session id, since `--resume` would fail.
+    pub(crate) fn restart(&self, id: i64) -> Result<Agent, AgentError> {
+        self.relaunch(id, true)
+    }
+
+    fn relaunch(&self, id: i64, fresh_if_unsaved: bool) -> Result<Agent, AgentError> {
         let inner = &self.inner;
         let agent = inner.agent(id)?;
         if agent.state.is_running() {
@@ -403,8 +417,10 @@ impl AgentManager {
                 cwd.display()
             )));
         }
+        let saved = agent.transcript_path.as_deref().is_some_and(Path::is_file);
+        let resume = saved || !fresh_if_unsaved;
         let agent = inner.agents.restart(id)?;
-        inner.launch(&agent, &cwd, None, true).inspect_err(|_| {
+        inner.launch(&agent, &cwd, None, resume).inspect_err(|_| {
             let _ = inner.agents.finish(id, AgentState::Exited, None);
         })
     }
@@ -424,6 +440,30 @@ impl AgentManager {
         } else {
             Ok(terminal.submit(text).await?)
         }
+    }
+
+    /// Sends a message as one bracketed paste, then Return, whatever its length.
+    pub(crate) async fn paste_message(&self, id: i64, text: &str) -> Result<(), AgentError> {
+        let terminal = self.inner.running_terminal(id)?.0;
+        Ok(terminal.submit_pasted(text).await?)
+    }
+
+    /// Replaces the system prompt and model the agent gets on its next
+    /// launch. A running agent keeps what it has until then.
+    pub(crate) fn set_next_launch(
+        &self,
+        id: i64,
+        system_prompt: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<(), AgentError> {
+        self.inner.agents.set_system_prompt(id, system_prompt)?;
+        self.inner.agents.set_model(id, model)?;
+        Ok(())
+    }
+
+    /// The agents a Chief of Staff started, oldest first.
+    pub(crate) fn spawned_by(&self, spawner: i64) -> Result<Vec<Agent>, AgentError> {
+        Ok(self.inner.agents.spawned_by(spawner)?)
     }
 
     /// Sends raw keystrokes.
@@ -510,8 +550,9 @@ impl AgentManager {
         let read = tokio::task::spawn_blocking(move || transcript::read(&path))
             .await
             .map_err(|error| AgentError::Failed(error.to_string()))?;
-        let transcript =
-            read.map_err(|error| AgentError::Failed(format!("could not read agent {id}'s transcript: {error}")))?;
+        let transcript = read.map_err(|error| {
+            AgentError::Failed(format!("could not read agent {id}'s transcript: {error}"))
+        })?;
         Ok(transcript.after(after))
     }
 
@@ -693,8 +734,14 @@ impl Inner {
         claude.env = self.config.env.clone();
         // The chief's MCP server names the agent, so it's added here, where
         // the id is known, on every launch and resume.
-        if agent.role == Role::Chief {
-            super::chief::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
+        match agent.role {
+            Role::Chief => {
+                super::chief::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
+            }
+            Role::Staff => {
+                super::staff::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
+            }
+            Role::User | Role::Worker | Role::Reviewer => {}
         }
         let mut options = TerminalOptions::new(claude);
         options.prompt = prompt;
@@ -723,6 +770,7 @@ impl Inner {
             Running {
                 terminal: terminal.clone(),
                 role: agent.role,
+                auto_trust: agent.role != Role::User || agent.spawned_by.is_some(),
                 workspace_id: agent.workspace_id,
                 heard: false,
                 trust_seen: false,
@@ -738,9 +786,10 @@ impl Inner {
     }
 
     /// Output arrived. Before the first hook, check for the trust dialog.
-    /// A run's agent works in a registered project, which counts as trusted,
-    /// so the daemon answers the dialog for it (the one exception to "cos
-    /// never answers the trust dialog by itself").
+    /// An agent a run or a Chief of Staff started works in a registered
+    /// project, which counts as trusted, so the daemon answers the dialog for
+    /// it (the one exception to "cos never answers the trust dialog by
+    /// itself").
     fn on_output(&self, id: i64) {
         let mut live = self.live();
         let Some(running) = live.terminals.get_mut(&id) else {
@@ -750,7 +799,7 @@ impl Inner {
             return;
         }
         running.trust_seen = true;
-        if running.role != Role::User {
+        if running.auto_trust {
             let terminal = running.terminal.clone();
             let agents = self.agents.clone();
             tracing::info!(agent = id, "answering the trust dialog for a run agent");

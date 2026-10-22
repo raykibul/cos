@@ -12,10 +12,12 @@ pub(crate) mod chief_api;
 pub(crate) mod pipeline;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
+pub(crate) mod staff;
+pub(crate) mod staff_api;
 pub(crate) mod tailnet;
-pub(crate) mod transcript;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transcript;
 
 use std::fs::{self, File, TryLockError};
 use std::future::Future;
@@ -77,12 +79,21 @@ pub(crate) async fn run_with(
     )?;
     let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());
     let chief = chief::Chief::start(
-        store,
+        store.clone(),
         log.clone(),
         runs.clone(),
         agents.clone(),
         home.root().to_path_buf(),
         chief::ChiefConfig::from_env(),
+    )?;
+    let staff = staff::Staff::start(
+        store,
+        log.clone(),
+        projects.clone(),
+        runs.clone(),
+        agents.clone(),
+        chief.clone(),
+        staff::StaffConfig::from_env(),
     )?;
     let pipeline = pipeline::Pipeline::start(
         runs.clone(),
@@ -110,6 +121,7 @@ pub(crate) async fn run_with(
         runs,
         agents: agents.clone(),
         chief,
+        staff,
         started_at: Timestamp::now(),
         home: home.root().to_path_buf(),
         stopping: stopping.clone(),
