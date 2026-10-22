@@ -69,6 +69,24 @@ grep -q "checksum mismatch" /tmp/out || { cat /tmp/out; fail "no checksum messag
 [ "$(sha256sum "$cos")" = "$before" ] || fail "a failed install replaced cos"
 say "tampered release: refused"
 
+# `cos upgrade` from the installed binary, with this repo's install.sh: it
+# is the latest release already, `--check` changes nothing, and a tampered
+# release is refused. (The Rust tests cover an actual upgrade.)
+export COS_INSTALL_SCRIPT=/src/install.sh
+"$cos" upgrade >/tmp/out 2>&1 || { cat /tmp/out; fail "cos upgrade when up to date"; }
+grep -q "cos $version is up to date" /tmp/out || { cat /tmp/out; fail "no up-to-date message"; }
+"$cos" upgrade --check >/tmp/out 2>&1 || { cat /tmp/out; fail "cos upgrade --check"; }
+grep -q "latest     cos $version" /tmp/out || { cat /tmp/out; fail "--check doesn't name the latest"; }
+if "$cos" upgrade --version v0.0.0-bad >/tmp/out 2>&1; then
+    fail "cos upgrade accepted a checksum mismatch"
+fi
+grep -q "checksum mismatch" /tmp/out || { cat /tmp/out; fail "no checksum message from cos upgrade"; }
+[ "$(sha256sum "$cos")" = "$before" ] || fail "a failed cos upgrade replaced cos"
+"$cos" upgrade --version "v$version" >/tmp/out 2>&1 || { cat /tmp/out; fail "cos upgrade --version v$version"; }
+grep -q "cos $version is up to date" /tmp/out || { cat /tmp/out; fail "pinned to the installed version"; }
+unset COS_INSTALL_SCRIPT
+say "cos upgrade: up to date, --check, tampered release refused"
+
 # The app is for macOS only, and says so before downloading anything.
 if sh /src/install.sh --app >/tmp/out 2>&1; then
     fail "--app installed on Linux"
