@@ -44,6 +44,25 @@ const shots = [
     (page) => page.getByRole("button", { name: "Chief of Staff actions" }).click(),
   ],
   ["sidebar-expanded", "page=workspace:3"],
+  [
+    "tabs",
+    "page=chief:1",
+    async (page) => {
+      await page.getByRole("treeitem", { name: /Fix login bug/ }).click();
+      await page.getByRole("button", { name: /^Chief of Staff, opal-app/ }).click();
+    },
+  ],
+  ["switcher", "page=chief:1", (page) => page.keyboard.press("Meta+k")],
+  [
+    "switcher-message",
+    "page=chief:1",
+    async (page) => {
+      await page.keyboard.press("Meta+k");
+      await page.keyboard.type("opal");
+      await page.keyboard.press("Tab");
+      await page.keyboard.type("Ship the onboarding copy and refresh the screenshots.");
+    },
+  ],
   ["waiting", "page=waiting"],
   [
     "waiting-login",

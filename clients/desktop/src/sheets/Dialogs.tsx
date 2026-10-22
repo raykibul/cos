@@ -130,7 +130,6 @@ function AddProject() {
       const project = await cos.addProject(trimmed);
       // A new project opens on its Chief of Staff, ready for a first message.
       ui.navigate({ kind: "chief", id: project.id });
-      ui.setExpanded(project.id, true);
     });
   };
   return (
@@ -182,6 +181,8 @@ function RemoveProject({ projectId }: { projectId: number }) {
         run(async () => {
           await cos.removeProject(projectId);
           ui.navigate({ kind: "waiting" });
+          for (const kind of ["chief", "project", "projectEnv"] as const)
+            ui.closeTab({ kind, id: projectId });
         })
       }
       footer={<Footer busy={busy} label="Remove" danger disabled={blocked} onCancel={close} />}
@@ -225,7 +226,6 @@ function NewWorkspace({ projectId }: { projectId: number }) {
         run(async () => {
           const workspace = await cos.createWorkspace(projectId, base, title);
           ui.navigate({ kind: "workspace", id: workspace.id });
-          ui.setExpanded(projectId, true);
         })
       }
       footer={<Footer busy={busy} label="Create workspace" onCancel={close} />}
@@ -361,6 +361,7 @@ function RemoveWorkspace({ workspaceId }: { workspaceId: number }) {
         run(async () => {
           await cos.removeWorkspace(workspace);
           ui.navigate({ kind: "project", id: workspace.projectId });
+          ui.closeTab({ kind: "workspace", id: workspace.id });
         })
       }
       footer={<Footer busy={busy} label="Remove" danger onCancel={close} />}
@@ -435,6 +436,7 @@ function RemoveAgent({ agentId }: { agentId: number }) {
               ? { kind: "workspace", id: agent.workspaceId }
               : { kind: "waiting" },
           );
+          ui.closeTab({ kind: "agent", id: agentId });
         })
       }
       footer={<Footer busy={busy} label="Remove" danger onCancel={close} />}

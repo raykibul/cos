@@ -271,7 +271,8 @@ describe("remote access page", () => {
     const { user, bridge } = await renderApp();
     bridge.approve("h1");
     await pickHost(user, /^Studio/);
-    await user.click(sidebar().getByRole("button", { name: "Settings" }));
+    const rail = within(screen.getByRole("navigation", { name: "Projects" }));
+    await user.click(rail.getByRole("button", { name: "Settings" }));
     expect(main().getByText("Managed on Studio")).toBeInTheDocument();
     expect(main().queryByRole("switch", { name: "Remote access" })).not.toBeInTheDocument();
     expect(bridge.daemons.get("h1")!.requests.some((r) => r.path === "/v1/tailnet")).toBe(false);

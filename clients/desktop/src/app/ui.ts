@@ -1,6 +1,6 @@
-// What the window shows and asks: the selected page, the open dialog and
-// toasts. Shared by the sidebar's menus and the pages, so both open the same
-// dialogs.
+// What the window shows and asks: the open tabs and the selected one, the
+// open dialog, the ⌘K switcher and toasts. Shared by the sidebar's menus and
+// the pages, so both open the same dialogs.
 
 import { createStore } from "zustand/vanilla";
 import { messageOf } from "../api/errors";
@@ -53,15 +53,23 @@ export interface Toast {
   message: string;
 }
 
+/** The most tabs kept open; opening another drops the oldest one you aren't on. */
+export const MAX_TABS = 12;
+
 export interface UiState {
+  /** The selected tab's page. */
   page: Page;
+  /** The open tabs, left to right. Always holds `page`. */
+  tabs: Page[];
+  /**
+   * The project the sidebar shows: the one the page is in, else the last one
+   * you were in. Null until you open one; the sidebar then shows the first.
+   */
+  project: number | null;
+  /** Whether the ⌘K switcher is open. */
+  switcher: boolean;
   dialog: DialogState | null;
   toasts: Toast[];
-  /**
-   * Sidebar projects unfolded (true) or folded (false) by hand, by project
-   * id. Unset, a project is unfolded while the page is inside it.
-   */
-  expanded: Record<number, boolean>;
   /** Whether the chief page shows its agent's terminal in a split. */
   chiefTerminal: boolean;
 }
@@ -72,29 +80,77 @@ export function samePage(a: Page, b: Page): boolean {
 
 let toastId = 0;
 
+/**
+ * The tabs after opening `page`: the tab already showing it, else a new one
+ * right of `from`. Past MAX_TABS the leftmost tab other than the new one goes.
+ */
+export function openTab(tabs: Page[], from: Page, page: Page): Page[] {
+  if (tabs.some((t) => samePage(t, page))) return tabs;
+  const at = tabs.findIndex((t) => samePage(t, from));
+  const next = [...tabs];
+  next.splice(at < 0 ? next.length : at + 1, 0, page);
+  while (next.length > MAX_TABS) {
+    const drop = next.findIndex((t) => !samePage(t, page));
+    next.splice(drop, 1);
+  }
+  return next;
+}
+
+/** The tabs without `page`, and the tab to select: its right neighbour, else its left one. */
+export function closeTab(tabs: Page[], current: Page, page: Page): { tabs: Page[]; page: Page } {
+  const at = tabs.findIndex((t) => samePage(t, page));
+  if (at < 0) return { tabs, page: current };
+  const rest = tabs.filter((_, i) => i !== at);
+  // Closing the last tab leaves Waiting on you, the app's home.
+  if (rest.length === 0) return { tabs: [home], page: home };
+  if (!samePage(current, page)) return { tabs: rest, page: current };
+  return { tabs: rest, page: rest[Math.min(at, rest.length - 1)]! };
+}
+
+const home: Page = { kind: "waiting" };
+
 export function createUiStore(initial: Partial<UiState> = {}) {
+  const page = initial.page ?? home;
   const store = createStore<UiState>()(() => ({
-    page: { kind: "waiting" },
     dialog: null,
     toasts: [],
-    expanded: {},
     chiefTerminal: false,
+    project: null,
+    switcher: false,
     ...initial,
+    page,
+    tabs: initial.tabs && initial.tabs.some((t) => samePage(t, page)) ? initial.tabs : [page],
   }));
 
   const actions = {
+    /** Shows a page: selects the tab that has it, or opens a new tab. */
     navigate(page: Page) {
-      store.setState({ page });
+      store.setState((s) => ({ page, tabs: openTab(s.tabs, s.page, page) }));
+    },
+    /** Closes a tab; the selected one when none is given. */
+    closeTab(page?: Page) {
+      store.setState((s) => closeTab(s.tabs, s.page, page ?? s.page));
+    },
+    /** Selects the tab `step` places right (or left, when negative), wrapping around. */
+    cycleTab(step: number) {
+      store.setState((s) => {
+        const at = s.tabs.findIndex((t) => samePage(t, s.page));
+        const next = s.tabs[(at + step + s.tabs.length * 2) % s.tabs.length];
+        return next ? { page: next } : {};
+      });
+    },
+    /** Remembers the project the sidebar shows. */
+    showProject(projectId: number) {
+      if (store.getState().project !== projectId) store.setState({ project: projectId });
+    },
+    openSwitcher(open = true) {
+      store.setState({ switcher: open });
     },
     open(dialog: DialogState) {
       store.setState({ dialog });
     },
     close() {
       store.setState({ dialog: null });
-    },
-    /** Unfolds or folds a project in the sidebar. */
-    setExpanded(projectId: number, expanded: boolean) {
-      store.setState((s) => ({ expanded: { ...s.expanded, [projectId]: expanded } }));
     },
     toggleChiefTerminal(open?: boolean) {
       store.setState((s) => ({ chiefTerminal: open ?? !s.chiefTerminal }));

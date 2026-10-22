@@ -33,38 +33,63 @@ async function renderApp(page: Page = { kind: "waiting" }, options: FakeOptions 
   return { ...harness, ui, user: userEvent.setup() };
 }
 
-const sidebar = () => within(screen.getByRole("tree", { name: "Projects" }));
+const sidebar = () => within(screen.getByRole("complementary", { name: "Sidebar" }));
+const rail = () => within(screen.getByRole("navigation", { name: "Projects" }));
 const main = () => within(screen.getByRole("main"));
 
-describe("sidebar", () => {
-  it("shows a Chief of Staff row per project, with its workspace count, folded", async () => {
+/** The workspace rows of the sidebar's tree, without the agents under them. */
+function workspaceNames(): string[] {
+  const tree = sidebar().getByRole("tree", { name: "Workspaces" });
+  return [...tree.querySelectorAll(":scope > li > [role=treeitem]")].map((row) => row.textContent);
+}
+
+describe("project rail", () => {
+  it("has a tile per project with its shortcut and what waits on you there", async () => {
     await renderApp();
-    const cos = sidebar().getByRole("treeitem", { name: "Chief of Staff, cos" });
-    expect(cos).toHaveAttribute("aria-expanded", "false");
-    expect(within(cos).getByRole("button", { name: "Show workspaces in cos" })).toHaveTextContent(
-      "4",
+    const cos = rail().getByRole("button", { name: /^Chief of Staff, cos/ });
+    expect(cos).toHaveTextContent("⌘1");
+    expect(cos.getAttribute("aria-label")).toMatch(/, \d+ waiting$/);
+    expect(rail().getByRole("button", { name: /^Chief of Staff, opal-app/ })).toHaveTextContent(
+      "⌘2",
     );
-    expect(sidebar().getByRole("treeitem", { name: "Chief of Staff, opal-app" })).toBeVisible();
-    // Agents and runs are on the workspace page now.
-    expect(sidebar().queryByText("Fix login bug")).not.toBeInTheDocument();
-    expect(sidebar().queryByText("Fix the login flow")).not.toBeInTheDocument();
   });
 
-  it("opens the chief and unfolds its workspaces, newest first; a second click folds them", async () => {
+  it("opens a project's chief and shows that project in the sidebar", async () => {
     const { user, ui } = await renderApp();
-    const row = sidebar().getByRole("treeitem", { name: "Chief of Staff, cos" });
-    await user.click(within(row).getByTitle(/Chief of Staff for cos/));
-    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
-    expect(row).toHaveAttribute("aria-expanded", "true");
-    const group = within(row.parentElement!).getByRole("group");
-    const names = within(group)
-      .getAllByRole("treeitem")
-      .map((item) => item.textContent);
-    expect(names).toEqual(["React 19", "Dashboard speed", "porto", "Fix the login flow"]);
+    await user.click(rail().getByRole("button", { name: /^Chief of Staff, opal-app/ }));
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 2 });
+    expect(sidebar().getByRole("heading", { name: "opal-app" })).toBeInTheDocument();
+    expect(sidebar().getByRole("button", { name: "Chief of Staff, opal-app" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
 
-    await user.click(within(row).getByTitle(/Chief of Staff for cos/));
-    expect(row).toHaveAttribute("aria-expanded", "false");
-    expect(within(row.parentElement!).queryByRole("group")).not.toBeInTheDocument();
+  it("opens each chief with ⌘1 to ⌘9, even from a terminal", async () => {
+    const { user, ui } = await renderApp({ kind: "agent", id: 5 });
+    await user.keyboard("{Meta>}2{/Meta}");
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 2 });
+    await user.keyboard("{Meta>}1{/Meta}");
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
+    // A project that doesn't exist does nothing.
+    await user.keyboard("{Meta>}9{/Meta}");
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
+  });
+});
+
+describe("sidebar", () => {
+  it("shows the project's workspaces newest first, with your agents under them", async () => {
+    await renderApp({ kind: "chief", id: 1 });
+    expect(sidebar().getByRole("heading", { name: "cos" })).toBeInTheDocument();
+    expect(workspaceNames()).toEqual([
+      "React 19",
+      "Dashboard speed",
+      "porto",
+      "Fix the login flow",
+    ]);
+    // Your own agents, not a run's.
+    expect(sidebar().getByRole("treeitem", { name: /Fix login bug/ })).toBeInTheDocument();
+    expect(sidebar().queryByText("opal-app")).not.toBeInTheDocument();
   });
 
   it("shows a workspace's city without a title, with its branch and path in the tooltip", async () => {
@@ -76,22 +101,25 @@ describe("sidebar", () => {
     expect(main().getByRole("heading", { name: "porto", level: 1 })).toBeInTheDocument();
   });
 
-  it("unfolds the project of the page you're on", async () => {
-    await renderApp({ kind: "agent", id: 4 });
-    expect(sidebar().getByRole("treeitem", { name: "Chief of Staff, opal-app" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    expect(sidebar().getByRole("treeitem", { name: "Chief of Staff, cos" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+  it("shows the project of the page you're on, and keeps it on pages outside one", async () => {
+    const { ui } = await renderApp({ kind: "agent", id: 4 });
+    expect(sidebar().getByRole("heading", { name: "opal-app" })).toBeInTheDocument();
+    act(() => ui.navigate({ kind: "waiting" }));
+    expect(sidebar().getByRole("heading", { name: "opal-app" })).toBeInTheDocument();
+    act(() => ui.navigate({ kind: "chief", id: 1 }));
+    expect(sidebar().getByRole("heading", { name: "cos" })).toBeInTheDocument();
   });
 
   it("marks a workspace with an agent waiting on you", async () => {
     await renderApp({ kind: "chief", id: 1 });
     const lisbon = sidebar().getByRole("button", { name: /^Fix the login flow/ });
     expect(within(lisbon).getByRole("img", { name: "Waiting on you" })).toBeInTheDocument();
+  });
+
+  it("opens an agent from under its workspace", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.click(sidebar().getByRole("treeitem", { name: /Fix login bug/ }));
+    expect(ui.store.getState().page.kind).toBe("agent");
   });
 });
 
@@ -331,8 +359,7 @@ describe("workspace page", () => {
 
   it("creates a workspace without a title", async () => {
     const { user, daemon, ui } = await renderApp({ kind: "chief", id: 2 });
-    const row = sidebar().getByRole("treeitem", { name: "Chief of Staff, opal-app" });
-    await user.click(within(row).getByRole("button", { name: "More for opal-app" }));
+    await user.click(sidebar().getByRole("button", { name: "More for opal-app" }));
     await user.click(screen.getByRole("menuitem", { name: "New workspace…" }));
     const dialog = within(screen.getByRole("dialog"));
     expect(dialog.getByText(/opal-app\/<city>/)).toBeInTheDocument();
