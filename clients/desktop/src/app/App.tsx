@@ -6,6 +6,7 @@ import { AgentPage } from "../screens/AgentPage";
 import { EventLogPage } from "../screens/EventLogPage";
 import { HostRefused, HostUnreachable } from "../screens/HostUnavailable";
 import { NotRunning } from "../screens/NotRunning";
+import { ProjectEnvPage } from "../screens/ProjectEnvPage";
 import { ProjectPage } from "../screens/ProjectPage";
 import { RunPage } from "../screens/RunPage";
 import { SettingsPage } from "../screens/SettingsPage";
@@ -58,6 +59,8 @@ function Content() {
       return <ProjectPage key={page.id} projectId={page.id} />;
     case "chief":
       return <ChiefPage key={page.id} projectId={page.id} />;
+    case "projectEnv":
+      return <ProjectEnvPage key={page.id} projectId={page.id} />;
     case "workspace":
       return <WorkspacePage key={page.id} workspaceId={page.id} />;
     case "agent":

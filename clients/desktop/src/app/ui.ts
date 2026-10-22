@@ -15,7 +15,9 @@ export type Page =
   | { kind: "workspace"; id: number }
   | { kind: "agent"; id: number }
   | { kind: "run"; id: number }
-  /** Settings: your Macs, and remote access to this one. */
+  /** A project's environment variables for its agents; `id` is the project's. */
+  | { kind: "projectEnv"; id: number }
+  /** Settings: your Macs, environment variables for all projects, and remote access to this one. */
   | { kind: "settings" };
 
 export type DialogState =
@@ -30,6 +32,17 @@ export type DialogState =
   | { kind: "cancelRun"; runId: number }
   | { kind: "taskAction"; runId: number; taskId: number; action: TaskActionKind }
   | { kind: "limits"; runId: number }
+  /**
+   * Adds or changes an environment variable, for all projects (`projectId`
+   * null) or one. `edit` changes one the scope has; `override` gives a
+   * project its own value for a global one. Both fix the name.
+   */
+  | {
+      kind: "envVar";
+      projectId: number | null;
+      name?: string;
+      mode?: "add" | "edit" | "override";
+    }
   | { kind: "addHost" }
   | { kind: "removeHost"; hostId: string };
 

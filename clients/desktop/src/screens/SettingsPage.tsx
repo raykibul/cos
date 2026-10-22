@@ -1,6 +1,7 @@
-// Settings: the Macs this app talks to, and remote access to this one (the
-// tailnet listener and the devices that tried it). Remote access is managed
-// only on the Mac itself: its routes answer on the socket alone.
+// Settings: the Macs this app talks to, the environment variables every
+// project's agents get, and remote access to this one (the tailnet listener
+// and the devices that tried it). Remote access is managed only on the Mac
+// itself: its routes answer on the socket alone.
 
 import { Globe, Plus, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useState } from "react";
@@ -15,6 +16,8 @@ import { cx } from "../ui/cx";
 import { Button, Card, EmptyState, SectionTitle, StateBadge, Spinner, inputClass } from "../ui/kit";
 import { PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { DeviceRow } from "./Devices";
+import { EnvironmentList } from "./Environment";
+import { envNote } from "../domain/env";
 import { HostAvatar } from "./Hosts";
 import { TailnetDevices } from "./TailnetPeers";
 
@@ -25,10 +28,11 @@ export function SettingsPage() {
         <span className="text-ink-2">Settings</span>
       </PageHeader>
       <PageBody>
-        <PageTitle subtitle="The Macs this app talks to, and who may reach this one.">
+        <PageTitle subtitle="The Macs this app talks to, what agents get in their environment, and who may reach this Mac.">
           Settings
         </PageTitle>
         <MacsSection />
+        <EnvironmentSection />
         <RemoteAccessSection />
       </PageBody>
     </>
@@ -94,6 +98,30 @@ function MacsSection() {
         Another machine is reached over Tailscale. Install cos on it and run{" "}
         <code className="font-mono text-[12px] text-ink-2">cos daemon install</code>, then approve
         this Mac there the first time it connects.
+      </p>
+    </section>
+  );
+}
+
+/** The variables every project's agents get, on the host in use. */
+function EnvironmentSection() {
+  const host = useCos((s) => s.host);
+  return (
+    <section className="mb-10" aria-label="Environment">
+      <EnvironmentList
+        projectId={null}
+        heading={
+          <span className="flex items-center gap-2">
+            Environment
+            <span className="rounded-full bg-subtle px-2 py-0.5 text-[11.5px] font-medium text-ink-3">
+              All projects
+            </span>
+          </span>
+        }
+      />
+      <p className="mt-2 px-1 text-[12.5px] leading-snug text-ink-3">
+        {envNote(null)} A project's own values are under Environment in its ⋯ menu
+        {isThisMac(host) ? "" : `, and these belong to ${host?.name ?? "that Mac"}'s daemon`}.
       </p>
     </section>
   );

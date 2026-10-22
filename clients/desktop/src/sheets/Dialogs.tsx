@@ -19,6 +19,7 @@ import {
 import { cx } from "../ui/cx";
 import { Dialog, ErrorText } from "../ui/Dialog";
 import { Button, Field, inputClass } from "../ui/kit";
+import { EnvVarSheet } from "./EnvSheet";
 import { AddHostSheet, RemoveHostSheet } from "./HostSheets";
 
 export function Dialogs() {
@@ -51,6 +52,8 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
       return <TaskAction runId={dialog.runId} taskId={dialog.taskId} action={dialog.action} />;
     case "limits":
       return <LimitsSheet runId={dialog.runId} />;
+    case "envVar":
+      return <EnvVarSheet dialog={dialog} />;
     case "addHost":
       return <AddHostSheet />;
     case "removeHost":
