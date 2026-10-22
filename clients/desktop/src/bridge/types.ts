@@ -14,6 +14,8 @@ export interface DaemonResponse {
 export type RawStatus = Record<string, unknown>;
 /** One log event, as the daemon sends it. */
 export type RawEvent = Record<string, unknown>;
+/** `GET /v1/tailnet/peers`, as the daemon sends it: `{peers, self_name, reason}`. */
+export type RawTailnetPeers = unknown;
 
 export type EventMessage =
   | { type: "connected"; status: RawStatus }
@@ -41,6 +43,8 @@ export type BridgeErrorKind = "not_running" | "io" | "bad_request";
 export interface BridgeError {
   kind: BridgeErrorKind;
   message: string;
+  /** A daemon's refusal code (`host_only`, …), when it gave one. */
+  code?: string;
 }
 
 export function isBridgeError(value: unknown): value is BridgeError {
@@ -94,6 +98,12 @@ export interface Bridge {
   hostRemove(id: string): Promise<HostList>;
   /** Switches host. Every stream closes. */
   hostSelect(id: string): Promise<HostList>;
+  /**
+   * `GET /v1/tailnet/peers` on **This Mac's** daemon, whichever host is in
+   * use (the route answers on the socket only). Rejects with `not_running`
+   * when that daemon is down, and with `io` for a non-2xx answer.
+   */
+  tailnetPeers(port?: number): Promise<RawTailnetPeers>;
   setWaitingCount(count: number): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   revealPath(path: string): Promise<void>;

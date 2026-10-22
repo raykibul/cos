@@ -13,6 +13,7 @@
     "allow-host-add",
     "allow-host-remove",
     "allow-host-select",
+    "allow-tailnet-peers",
     "allow-set-waiting-count",
     "allow-notify",
     "allow-reveal-path",

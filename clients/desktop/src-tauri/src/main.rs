@@ -30,6 +30,7 @@ fn main() {
             commands::host_add,
             commands::host_remove,
             commands::host_select,
+            commands::tailnet_peers,
             commands::set_waiting_count,
             commands::notify,
             commands::reveal_path,

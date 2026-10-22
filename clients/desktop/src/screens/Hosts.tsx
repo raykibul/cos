@@ -2,11 +2,14 @@
 // "Add a Mac…"), and the footer line saying which host the app talks to.
 // Self-contained, so the sidebar only mounts them.
 
-import { ChevronDown, Globe, Laptop, Plus, Settings } from "lucide-react";
+import { ChevronDown, Globe, Laptop, Plus, Settings, Smartphone } from "lucide-react";
+import { useState } from "react";
+import type { TailnetPeer } from "../api/models";
 import { useApp, useCos, useNow } from "../app/context";
 import { useSwitchHost } from "../app/hosts";
+import { useConnectPeer } from "../app/peers";
 import { type Host, THIS_MAC } from "../bridge/types";
-import { hostInitial } from "../domain/hosts";
+import { firstIpv4, hostInitial, isPhoneOs, savedHostFor } from "../domain/hosts";
 import { type Connection, isThisMac } from "../store/store";
 import { cx } from "../ui/cx";
 import { duration } from "../ui/format";
@@ -60,12 +63,29 @@ export function HostAvatar({
 
 /** The host in use, as a menu of every host plus "Add a Mac…". */
 export function HostPicker() {
-  const { ui } = useApp();
+  const { cos, ui } = useApp();
   const host = useCos((s) => s.host) ?? thisMac;
   const saved = useCos((s) => s.hosts);
   const connection = useCos((s) => s.connection);
   const switchHost = useSwitchHost();
+  const connect = useConnectPeer();
   const hosts = saved.length > 0 ? saved : [thisMac];
+  // Asked of This Mac's daemon each time the menu opens; the last answer
+  // stays until the next one, and a failure just hides the section.
+  const [peers, setPeers] = useState<TailnetPeer[]>([]);
+  const fetchPeers = () => {
+    cos.tailnetPeers().then(
+      (answer) => setPeers(answer.peers),
+      () => setPeers([]),
+    );
+  };
+  const addable = peers.filter(
+    (peer) =>
+      peer.mine &&
+      peer.cos === "running" &&
+      peer.address !== "" &&
+      savedHostFor(peer, hosts) === null,
+  );
 
   const items: MenuItem[] = [
     ...hosts.map((h): MenuItem => ({
@@ -75,6 +95,19 @@ export function HostPicker() {
       checked: h.id === host.id,
       onSelect: () => switchHost(h.id),
     })),
+    ...(addable.length > 0
+      ? [
+          "separator" as const,
+          { heading: "On your tailnet" },
+          ...addable.map((peer): MenuItem => ({
+            label: peer.name,
+            detail: `cos running · ${firstIpv4(peer.ips) || peer.address}`,
+            icon: isPhoneOs(peer.os) ? Smartphone : Laptop,
+            onSelect: () =>
+              void ui.perform(`Couldn't connect to ${peer.name}`, () => connect(peer)),
+          })),
+        ]
+      : []),
     "separator",
     { label: "Add a Mac…", icon: Plus, onSelect: () => ui.open({ kind: "addHost" }) },
     {
@@ -90,6 +123,7 @@ export function HostPicker() {
       <Menu
         items={items}
         width={240}
+        onOpen={fetchPeers}
         trigger={(props) => (
           <button
             type="button"

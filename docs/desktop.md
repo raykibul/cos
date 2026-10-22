@@ -48,6 +48,7 @@ The UI never talks to the socket. It calls these commands with `invoke` from `@t
 | `host_add` | `{name: string, address: string}` | `Host`. It saves the host but doesn't switch to it. The address is `name`, `name:port`, `100.x.y.z:port` or an IPv6 address, read as `cos --host` reads it; the port defaults to 7700. A malformed address, a name over 64 characters or an address already saved is `bad_request`. |
 | `host_remove` | `{id: string}` | `HostList`. Removing the host in use switches to This Mac, as `host_select` does. This Mac can't be removed. |
 | `host_select` | `{id: string}` | `HostList`. It closes every stream and points every later command at that host. The UI then reloads its state and follows the new host's events. |
+| `tailnet_peers` | `{port?: number}` | The body of `GET /v1/tailnet/peers[?port=N]` (`{peers, self_name, reason}`, see "Remote access" in [daemon.md](daemon.md)), unchanged. It always asks **This Mac's** socket, whichever host is in use, because the route answers on the socket only. `not_running` when This Mac's daemon is down; a non-2xx answer is `io` with the daemon's message (and its `code`), and a 404 says the daemon is too old. |
 
 **Errors:** a rejected `invoke` carries `{kind: "not_running" | "io" | "bad_request", message: string, code?: string}`. `not_running` means the socket is missing or refuses connections or, for another Mac, that nothing answers at its address (the connect fails or takes over 5 s); the message names the address.
 

@@ -11,8 +11,10 @@ import {
   firewallReason,
   makeDevices,
   makeHosts,
+  makePeers,
   refusalOf,
   tailnetStatus,
+  tailscaleReason,
 } from "./fake/remote";
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
 import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
@@ -25,6 +27,7 @@ import type {
   Host,
   HostList,
   HttpMethod,
+  RawTailnetPeers,
   TerminalMessage,
 } from "./types";
 
@@ -40,6 +43,8 @@ export interface FakeOptions {
   host?: string;
   /** This Mac's tailnet listener reports the macOS firewall blocking it. */
   firewall?: boolean;
+  /** Tailscale is off on this Mac: the tailnet's devices can't be listed. */
+  tailscaleOff?: boolean;
   /** How long a refused or unreachable stream waits before trying again. */
   retryMs?: number;
   /**
@@ -106,6 +111,10 @@ export class FakeDaemon {
   /** Devices that tried this daemon's tailnet listener. */
   readonly devices: Raw[];
   tailnet: Raw;
+  /** The other devices on the tailnet, for `GET /v1/tailnet/peers` (port 7700). */
+  peers: Raw[];
+  /** Why Tailscale can't be asked for them; the peers are then empty. */
+  peersReason: string | null;
   /** Reached over the tailnet: device and listener routes answer `host_only`. */
   readonly remote: boolean;
   readonly events: Raw[] = [];
@@ -126,6 +135,8 @@ export class FakeDaemon {
     this.remote = remote;
     this.devices = remote ? [] : makeDevices(this.fixtures.now);
     this.tailnet = tailnetStatus(!remote, 7700, options.firewall ? firewallReason : null);
+    this.peersReason = options.tailscaleOff ? tailscaleReason : null;
+    this.peers = options.tailscaleOff ? [] : makePeers(this.fixtures.now);
     const f = copy({ ...this.fixtures, screens: undefined });
     this.projects = f.projects;
     this.workspaces = f.workspaces;
@@ -409,14 +420,19 @@ export class FakeDaemon {
     }
 
     // Devices and the tailnet: on the socket only.
-    if (path === "/v1/tailnet" || path.startsWith("/v1/devices")) {
-      return this.remoteAccess(method, path, b);
+    if (path.startsWith("/v1/tailnet") || path.startsWith("/v1/devices")) {
+      return this.remoteAccess(method, path, q, b);
     }
 
     throw new HttpError(404, `no route for ${method} ${path}`);
   }
 
-  private remoteAccess(method: string, path: string, b: Raw): DaemonResponse | undefined {
+  private remoteAccess(
+    method: string,
+    path: string,
+    q: URLSearchParams,
+    b: Raw,
+  ): DaemonResponse | undefined {
     if (this.remote) {
       return {
         status: 403,
@@ -425,6 +441,21 @@ export class FakeDaemon {
     }
     const ok = (body: unknown): DaemonResponse => ({ status: 200, body: copy(body) });
     if (method === "GET" && path === "/v1/tailnet") return ok(this.tailnet);
+    if (method === "GET" && path === "/v1/tailnet/peers") {
+      const port = Number(q.get("port") ?? 7700);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new HttpError(400, `port must be between 1 and 65535, not ${q.get("port")}`);
+      }
+      const peers = this.peers.map((peer) => ({
+        ...peer,
+        address: String(peer.address).replace(/:\d+$/, `:${port}`),
+      }));
+      return ok({
+        peers,
+        self_name: this.peersReason ? null : "my-mac",
+        reason: this.peersReason,
+      });
+    }
     if (method === "PUT" && path === "/v1/tailnet") {
       const port = b.port === undefined ? (this.tailnet.port as number) : Number(b.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -1469,6 +1500,30 @@ export class FakeBridge implements Bridge {
     this.closeAll();
     this.current = id;
     return this.hostsList();
+  }
+
+  /** Always This Mac's daemon, as the shell does, whichever host is in use. */
+  async tailnetPeers(port?: number): Promise<RawTailnetPeers> {
+    await this.wait();
+    const daemon = this.daemon;
+    if (!daemon.running) {
+      throw {
+        kind: "not_running",
+        message:
+          "This Mac's cos daemon isn't running (no answer on /Users/me/.cos/cos.sock), so it can't list your tailnet",
+      } satisfies BridgeError;
+    }
+    const path = port === undefined ? "/v1/tailnet/peers" : `/v1/tailnet/peers?port=${port}`;
+    const response = daemon.handle("GET", path, null);
+    if (response.status < 200 || response.status >= 300) {
+      const body = (response.body ?? {}) as { error?: string; code?: string };
+      throw {
+        kind: "io",
+        message: body.error ?? `the cos daemon answered ${response.status}`,
+        ...(body.code ? { code: body.code } : {}),
+      } satisfies BridgeError;
+    }
+    return response.body;
   }
 
   async setWaitingCount(count: number): Promise<void> {

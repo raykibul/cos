@@ -59,7 +59,10 @@ export class CosError extends Error {
   /** A rejected bridge command, or anything else thrown along the way. */
   static from(error: unknown): CosError {
     if (error instanceof CosError) return error;
-    if (isBridgeError(error)) return new CosError(error.kind, error.message);
+    if (isBridgeError(error)) {
+      const code = typeof error.code === "string" ? error.code : null;
+      return new CosError(error.kind, error.message, null, code);
+    }
     if (error instanceof Error) return new CosError("io", error.message);
     if (typeof error === "string") return new CosError("io", error);
     return new CosError("io", "Something went wrong talking to cos.");

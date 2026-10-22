@@ -5,6 +5,7 @@ import { useState } from "react";
 import { messageOf } from "../api/errors";
 import { useApp, useCos } from "../app/context";
 import { nameFromAddress } from "../domain/hosts";
+import { TailnetPicker } from "../screens/TailnetPeers";
 import { cx } from "../ui/cx";
 import { Dialog, ErrorText } from "../ui/Dialog";
 import { Button, Field, inputClass } from "../ui/kit";
@@ -66,35 +67,51 @@ export function AddHostSheet() {
         </>
       }
     >
-      <Field
-        label="Address"
-        htmlFor="host-address"
-        hint="Its Tailscale name or IP address. The port is 7700 unless you chose another."
-      >
-        <input
-          id="host-address"
-          data-autofocus
-          className={cx(inputClass, "font-mono text-[13px]")}
-          placeholder="my-mac:7700 or 100.x.y.z"
-          value={address}
-          onChange={(event) => setAddress(event.target.value)}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-        />
-      </Field>
-      <Field label="Name" htmlFor="host-name" hint="How the app shows it. Optional.">
-        <input
-          id="host-name"
-          className={inputClass}
-          placeholder={fallbackName || "Studio"}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
+      <TailnetPicker
+        address={address}
+        onFill={(peer) => {
+          setName(peer.name);
+          setAddress(peer.address);
+        }}
+      />
+      <div className="flex items-center gap-3 text-[12px] text-ink-3" aria-hidden>
+        <span className="h-px flex-1 bg-line" />
+        or enter an address
+        <span className="h-px flex-1 bg-line" />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="grid grid-cols-[minmax(0,1fr)_150px] gap-3">
+          <Field label="Address" htmlFor="host-address">
+            <input
+              id="host-address"
+              data-autofocus
+              className={cx(inputClass, "font-mono text-[13px]")}
+              placeholder="my-mac:7700 or 100.x.y.z"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Name" htmlFor="host-name">
+            <input
+              id="host-name"
+              className={inputClass}
+              placeholder={fallbackName || "Studio"}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </Field>
+        </div>
+        <p className="text-[12px] leading-snug text-ink-3">
+          Its Tailscale name or IP address; the port is 7700 unless you chose another. The name is
+          how the app shows it, and optional.
+        </p>
+      </div>
       <div className="rounded-lg bg-subtle px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-2">
-        First, on that Mac, run <Code>cos remote on</Code>. The first time this Mac connects,
-        approve it there with <Code>cos devices approve</Code>, or in its cos app.
+        On that Mac, run <Code>cos remote on</Code> first. When this Mac first connects, approve it
+        there with <Code>cos devices approve</Code> or in its cos app.
       </div>
       <ErrorText>{error}</ErrorText>
     </Dialog>

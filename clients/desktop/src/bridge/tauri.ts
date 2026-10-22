@@ -7,6 +7,7 @@ import type {
   Host,
   HostList,
   HttpMethod,
+  RawTailnetPeers,
   TerminalMessage,
 } from "./types";
 
@@ -52,6 +53,10 @@ export class TauriBridge implements Bridge {
 
   hostSelect(id: string): Promise<HostList> {
     return invoke<HostList>("host_select", { id });
+  }
+
+  tailnetPeers(port?: number): Promise<RawTailnetPeers> {
+    return invoke<RawTailnetPeers>("tailnet_peers", { port: port ?? null });
   }
 
   setWaitingCount(count: number): Promise<void> {
