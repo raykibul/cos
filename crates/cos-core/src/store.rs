@@ -305,6 +305,14 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     -- launched with. Never the values.
     ALTER TABLE agents ADD COLUMN env_names TEXT;
 ",
+    "
+    -- A Chief of Staff's coordination is paused: news waits in its inbox
+    -- and only your messages go in.
+    ALTER TABLE staff ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;
+    -- You stopped it yourself, so a daemon restart leaves it stopped. Any
+    -- start clears it.
+    ALTER TABLE staff ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0;
+",
 ];
 
 #[derive(Debug, thiserror::Error)]

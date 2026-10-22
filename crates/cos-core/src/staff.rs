@@ -31,6 +31,12 @@ pub struct StaffRecord {
     pub model: Option<String>,
     /// What it keeps for its next start, with `brief_update`.
     pub brief: String,
+    /// Coordination is paused: news waits, your messages still go in.
+    #[serde(default)]
+    pub paused: bool,
+    /// You stopped it, so a daemon restart doesn't bring it back.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 /// What an inbox item is.
@@ -102,22 +108,36 @@ impl StaffBooks {
             .store
             .lock()
             .query_row(
-                "SELECT agent_id, model, brief FROM staff WHERE project_id = ?1",
+                &format!("SELECT {RECORD_COLUMNS} FROM staff WHERE project_id = ?1"),
                 [project_id],
-                |row| {
-                    Ok(StaffRecord {
-                        project_id,
-                        agent_id: row.get(0)?,
-                        model: row.get(1)?,
-                        brief: row.get(2)?,
-                    })
-                },
+                read_record,
             )
             .optional()?;
         Ok(record.unwrap_or(StaffRecord {
             project_id,
             ..StaffRecord::default()
         }))
+    }
+
+    /// Every project's record that has a chief, by project id.
+    pub fn records(&self) -> Result<Vec<StaffRecord>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {RECORD_COLUMNS} FROM staff WHERE agent_id IS NOT NULL ORDER BY project_id"
+            ))?
+            .query_map([], read_record)?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// Pauses or resumes its coordination.
+    pub fn set_paused(&self, project_id: i64, paused: bool) -> Result<(), StoreError> {
+        self.update(project_id, "paused", &paused)
+    }
+
+    /// Records whether you stopped it (true) or it was started (false).
+    pub fn set_stopped(&self, project_id: i64, stopped: bool) -> Result<(), StoreError> {
+        self.update(project_id, "stopped", &stopped)
     }
 
     pub fn set_agent(&self, project_id: i64, agent_id: i64) -> Result<(), StoreError> {
@@ -281,6 +301,18 @@ impl StaffBooks {
         self.log_count(item.project_id)
     }
 
+    /// How many items of news (not your messages) wait for the project's
+    /// chief.
+    pub fn news_waiting(&self, project_id: i64) -> Result<usize, StoreError> {
+        let count: i64 = self.store.lock().query_row(
+            "SELECT COUNT(*) FROM staff_inbox
+             WHERE project_id = ?1 AND delivered_ms IS NULL AND kind != 'message'",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     /// How many items wait for the project's chief.
     pub fn waiting_count(&self, project_id: i64) -> Result<usize, StoreError> {
         let count: i64 = self.store.lock().query_row(
@@ -300,6 +332,19 @@ impl StaffBooks {
         )?;
         Ok(())
     }
+}
+
+const RECORD_COLUMNS: &str = "project_id, agent_id, model, brief, paused, stopped";
+
+fn read_record(row: &Row<'_>) -> rusqlite::Result<StaffRecord> {
+    Ok(StaffRecord {
+        project_id: row.get(0)?,
+        agent_id: row.get(1)?,
+        model: row.get(2)?,
+        brief: row.get(3)?,
+        paused: row.get(4)?,
+        stopped: row.get(5)?,
+    })
 }
 
 const ITEM_COLUMNS: &str = "id, project_id, kind, agent_id, run_id, text, created_ms, delivered_ms";
@@ -364,6 +409,27 @@ mod tests {
         assert_eq!(books.project_of(8).unwrap(), None);
         books.set_model(project, None).unwrap();
         assert_eq!(books.record(project).unwrap().model, None);
+
+        assert!(!record.paused && !record.stopped);
+        books.set_paused(project, true).unwrap();
+        books.set_stopped(project, true).unwrap();
+        let record = books.record(project).unwrap();
+        assert!(record.paused && record.stopped);
+        assert_eq!(books.records().unwrap(), [record]);
+    }
+
+    #[test]
+    fn news_waiting_leaves_out_your_messages() {
+        let (books, _, project) = books();
+        assert!(books.records().unwrap().is_empty(), "no chief yet");
+        books
+            .add(project, StaffItemKind::Message, None, None, "hi")
+            .unwrap();
+        books
+            .add(project, StaffItemKind::Agent, Some(3), None, "done")
+            .unwrap();
+        assert_eq!(books.news_waiting(project).unwrap(), 1);
+        assert_eq!(books.waiting_count(project).unwrap(), 2);
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! `cos staff [project]`, `cos staff say [project] "text"` and
-//! `cos staff attach [project]`: a project's Chief of Staff. The project
-//! defaults to the one you're in, or the only one.
+//! `cos staff [project]`, `cos staff say [project] "text"`,
+//! `cos staff attach [project]` and `cos staff pause|resume [project]`: a
+//! project's Chief of Staff. The project defaults to the one you're in, or
+//! the only one.
 
 use std::process::ExitCode;
 
@@ -33,6 +34,16 @@ enum StaffCommand {
     },
     /// Open its terminal here, starting it if needed. Ctrl-] detaches.
     Attach {
+        /// Project id or name.
+        project: Option<String>,
+    },
+    /// Pause its coordination: news from agents waits; your messages still go in.
+    Pause {
+        /// Project id or name.
+        project: Option<String>,
+    },
+    /// Resume its coordination: what waited goes in once it's idle.
+    Resume {
         /// Project id or name.
         project: Option<String>,
     },
@@ -71,7 +82,28 @@ pub(crate) async fn staff(home: &CosHome, args: StaffArgs) -> anyhow::Result<Exi
             };
             crate::attach::run(&client, agent_id).await
         }
+        Some(StaffCommand::Pause { project: key }) => pause(&client, key.as_deref(), true).await,
+        Some(StaffCommand::Resume { project: key }) => pause(&client, key.as_deref(), false).await,
     }
+}
+
+/// `cos staff pause|resume [project]`.
+async fn pause(client: &Client, key: Option<&str>, paused: bool) -> anyhow::Result<ExitCode> {
+    let project = project(client, key).await?;
+    let staff = client.set_staff_paused(project.id, paused).await?;
+    let waiting = match staff.updates_waiting {
+        1 => "1 update waits".to_owned(),
+        n => format!("{n} updates wait"),
+    };
+    if paused {
+        println!(
+            "Paused the Chief of Staff of {}: news from agents waits ({waiting}); your messages still go in.",
+            project.name
+        );
+    } else {
+        println!("Resumed the Chief of Staff of {} ({waiting}).", project.name);
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn show(client: &Client, key: Option<&str>) -> anyhow::Result<ExitCode> {
@@ -84,6 +116,12 @@ async fn show(client: &Client, key: Option<&str>) -> anyhow::Result<ExitCode> {
             "  state:    not started; `cos staff say {} \"…\"` starts it",
             project.name
         ),
+    }
+    if staff.paused {
+        println!(
+            "  paused:   {} updates waiting; `cos staff resume {}` lets them in",
+            staff.updates_waiting, project.name
+        );
     }
     println!(
         "  model:    {}",

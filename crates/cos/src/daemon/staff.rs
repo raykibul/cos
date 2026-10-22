@@ -15,7 +15,11 @@
 //!   for you) and the runs it started (state changes) add items; so do the
 //!   messages you type. When it's idle, the delivery loop types your oldest
 //!   message on its own, else one `[cos · N updates]` wakeup under the run
-//!   chief's caps.
+//!   chief's caps. While coordination is paused, news waits and only your
+//!   messages go in.
+//! - **Restarts:** when the daemon starts, every chief that was running
+//!   (now `interrupted`) is resumed, one a second, unless you stopped it
+//!   yourself ([`Staff::resume_chiefs`]).
 
 mod prompt;
 #[cfg(test)]
@@ -35,7 +39,7 @@ use cos_core::{
     StaffItemKind, Store, Subscription,
 };
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, broadcast};
 
@@ -64,6 +68,8 @@ pub(crate) struct StaffConfig {
     pub settle: Duration,
     /// How long `agent_send` waits for a resumed agent to be ready.
     pub ready_wait: Duration,
+    /// Between chiefs resumed after a daemon restart.
+    pub stagger: Duration,
 }
 
 impl StaffConfig {
@@ -76,6 +82,7 @@ impl StaffConfig {
             poll: Duration::from_secs(30),
             settle: Duration::from_secs(20),
             ready_wait: Duration::from_secs(60),
+            stagger: Duration::from_secs(1),
         }
     }
 
@@ -86,6 +93,7 @@ impl StaffConfig {
             poll: Duration::from_millis(200),
             settle: Duration::from_secs(5),
             ready_wait: Duration::from_secs(10),
+            stagger: Duration::from_millis(100),
         }
     }
 }
@@ -107,14 +115,32 @@ pub(crate) struct StaffView {
     pub working_agents: usize,
     /// Agents it started that wait for an approval or a trust answer.
     pub waiting_on_you: usize,
+    /// Coordination is paused: news waits in the inbox, and only your
+    /// messages go in.
+    #[serde(default)]
+    pub paused: bool,
+    /// Items of news waiting to be delivered.
+    #[serde(default)]
+    pub updates_waiting: usize,
 }
 
-/// Body of `PUT /v1/projects/{id}/staff`. A null or empty model goes back
-/// to the default.
+/// Body of `PUT /v1/projects/{id}/staff`. A field left out stays as it is.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct StaffSettings {
-    #[serde(default)]
-    pub model: Option<String>,
+    /// A null or empty model goes back to the default.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub model: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+}
+
+/// A field that is there, even as null, is `Some`.
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(field: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(field).map(Some)
 }
 
 /// Body of `POST /v1/projects/{id}/staff/message`.
@@ -216,10 +242,13 @@ impl Staff {
                 AgentState::NeedsTrust,
                 AgentState::NeedsLogin,
             ]),
+            paused: record.paused,
+            updates_waiting: inner.books.news_waiting(project.id)?,
         })
     }
 
-    /// Sets the project's model, used from its next start.
+    /// Sets the project's model, used from its next start, and pauses or
+    /// resumes its coordination. Fields left out stay as they are.
     pub(crate) async fn configure(
         &self,
         project_id: i64,
@@ -227,19 +256,79 @@ impl Staff {
     ) -> Result<StaffView, ApiError> {
         let inner = &self.inner;
         let project = inner.projects.get(project_id).await?;
-        let model = settings
-            .model
-            .map(|model| model.trim().to_owned())
-            .filter(|model| !model.is_empty());
-        if model.as_ref().is_some_and(|model| model.chars().count() > 200) {
+        let model = settings.model.map(|model| {
+            model
+                .map(|model| model.trim().to_owned())
+                .filter(|model| !model.is_empty())
+        });
+        if model.iter().flatten().any(|model| model.chars().count() > 200) {
             return Err(error(
                 StatusCode::BAD_REQUEST,
                 "that model name is too long".into(),
             ));
         }
-        inner.books.set_model(project.id, model.as_deref())?;
-        inner.log_changed(project.id)?;
+        if let Some(model) = &model {
+            inner.books.set_model(project.id, model.as_deref())?;
+        }
+        if let Some(paused) = settings.paused {
+            inner.books.set_paused(project.id, paused)?;
+            if !paused {
+                // What waited goes in now.
+                inner.wake.notify_one();
+            }
+        }
+        if model.is_some() || settings.paused.is_some() {
+            inner.log_changed(project.id)?;
+        }
         self.view(project.id).await
+    }
+
+    /// Notes that you stopped this agent, if it is a Chief of Staff, so a
+    /// daemon restart leaves it stopped.
+    pub(crate) fn stopped_by_user(&self, agent_id: i64) {
+        self.inner.set_stopped(agent_id, true);
+    }
+
+    /// Notes that you resumed this agent, if it is a Chief of Staff.
+    pub(crate) fn resumed_by_user(&self, agent_id: i64) {
+        self.inner.set_stopped(agent_id, false);
+    }
+
+    /// After a daemon restart: resumes every Chief of Staff that was
+    /// running when the daemon stopped or crashed (it's `interrupted` now),
+    /// one every `stagger`, unless you stopped it yourself. Your agents and
+    /// the ones it started stay `interrupted`. Call it once the daemon
+    /// serves.
+    pub(crate) fn resume_chiefs(&self) -> tokio::task::JoinHandle<()> {
+        let inner = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            let chiefs = {
+                let Some(inner) = inner.upgrade() else { return };
+                match inner.chiefs_to_resume() {
+                    Ok(chiefs) => chiefs,
+                    Err(failure) => {
+                        tracing::error!(error = %failure.message, "could not read the Chiefs of Staff to resume");
+                        return;
+                    }
+                }
+            };
+            for (index, project_id) in chiefs.into_iter().enumerate() {
+                if index > 0 {
+                    let Some(stagger) = inner.upgrade().map(|inner| inner.config.stagger) else {
+                        return;
+                    };
+                    tokio::time::sleep(stagger).await;
+                }
+                let Some(inner) = inner.upgrade() else { return };
+                tracing::info!(
+                    project = project_id,
+                    "resuming the Chief of Staff after a restart"
+                );
+                if let Err(failure) = inner.ensure_running(project_id).await {
+                    tracing::warn!(error = %failure.message, project = project_id, "could not resume the Chief of Staff");
+                }
+            }
+        })
     }
 
     /// Starts or resumes the project's Chief of Staff; nothing if it runs.
@@ -312,6 +401,9 @@ impl Inner {
             return Ok(agent.clone());
         }
         let worktree = self.projects.staff_workspace(project.id).await?;
+        if record.stopped {
+            self.books.set_stopped(project.id, false)?;
+        }
         let system_prompt = prompt::system_prompt(&project.name, &record.brief);
         let model = self.model(record.model.as_deref());
         let agent = match existing {
@@ -347,6 +439,31 @@ impl Inner {
         Ok(agent)
     }
 
+    /// Projects whose chief the daemon stopped or lost (`interrupted`) and
+    /// you didn't stop.
+    fn chiefs_to_resume(&self) -> Result<Vec<i64>, ApiError> {
+        let mut chiefs = Vec::new();
+        for record in self.books.records()? {
+            let Some(agent) = record.agent_id.and_then(|id| self.agents.get(id).ok()) else {
+                continue;
+            };
+            if agent.state == AgentState::Interrupted && !record.stopped {
+                chiefs.push(record.project_id);
+            }
+        }
+        Ok(chiefs)
+    }
+
+    /// Records your intent for a chief: stopped, or wanted running.
+    fn set_stopped(&self, agent_id: i64, stopped: bool) {
+        let Ok(Some(project_id)) = self.books.project_of(agent_id) else {
+            return;
+        };
+        if let Err(failure) = self.books.set_stopped(project_id, stopped) {
+            tracing::error!(error = %failure, project = project_id, "could not record the Chief of Staff's stop");
+        }
+    }
+
     /// The project whose Chief of Staff started `agent`, with that chief.
     fn spawner(&self, agent: &Agent) -> Option<(i64, i64)> {
         let spawner = agent.spawned_by?;
@@ -378,7 +495,7 @@ impl Inner {
         }
     }
 
-    /// Logs `staff.changed`: its model or brief changed.
+    /// Logs `staff.changed`: its model, brief or pause changed.
     fn log_changed(&self, project_id: i64) -> Result<(), ApiError> {
         self.log
             .append(kind::STAFF_CHANGED, None, json!({ "project_id": project_id }))?;
@@ -519,11 +636,12 @@ impl Inner {
         }
     }
 
-    /// Types your oldest message, or else one wakeup of news, into the
-    /// project's chief if it is idle and not still picking up the last
+    /// Types your oldest message, or else one wakeup of news (unless
+    /// coordination is paused), into the project's chief if it is idle and not still picking up the last
     /// thing typed. Returns whether it typed anything.
     async fn deliver(&self, project_id: i64) -> Result<bool, ApiError> {
-        let Some(chief) = self.books.record(project_id)?.agent_id else {
+        let record = self.books.record(project_id)?;
+        let Some(chief) = record.agent_id else {
             return Ok(false);
         };
         if self.agents.get(chief)?.state != AgentState::Idle {
@@ -543,6 +661,9 @@ impl Inner {
             self.type_in(chief, &message.text).await?;
             self.books.delivered(message)?;
             return Ok(true);
+        }
+        if record.paused {
+            return Ok(false);
         }
         let hour_ago = Timestamp::now().as_millisecond() - HOUR_MS;
         if self.books.wakeups_since(project_id, hour_ago)? >= MAX_WAKEUPS_PER_HOUR {
