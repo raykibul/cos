@@ -14,7 +14,6 @@ import { firstIpv4, hostInitial, isPhoneOs, savedHostFor } from "../domain/hosts
 import { type Connection, isThisMac } from "../store/store";
 import { cx } from "../ui/cx";
 import { duration } from "../ui/format";
-import { IconButton } from "../ui/kit";
 import { type MenuItem, Menu } from "../ui/Menu";
 
 const thisMac: Host = { id: THIS_MAC, name: "This Mac", address: null };
@@ -169,7 +168,7 @@ function stateLine(
   }
 }
 
-/** The footer line: which host, how it's doing, and Settings. */
+/** The footer line: which host and how it's doing. It opens Settings. */
 export function HostStatus() {
   const { ui } = useApp();
   const connection = useCos((s) => s.connection);
@@ -187,10 +186,10 @@ export function HostStatus() {
   );
   const where = remote ? host.address : status?.home;
   return (
-    <div className="mt-0.5 flex items-center gap-1">
+    <div className="flex items-center gap-1">
       <button
         type="button"
-        onClick={() => ui.navigate({ kind: "events" })}
+        onClick={() => ui.navigate({ kind: "settings" })}
         className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-subtle"
         title={
           [where, status ? `pid ${status.pid}` : null].filter(Boolean).join(" · ") || undefined
@@ -205,11 +204,6 @@ export function HostStatus() {
           <span className="block truncate text-[11.5px] text-ink-3">{line}</span>
         </span>
       </button>
-      <IconButton
-        icon={Settings}
-        label="Settings"
-        onClick={() => ui.navigate({ kind: "settings" })}
-      />
     </div>
   );
 }

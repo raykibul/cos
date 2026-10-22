@@ -1,9 +1,9 @@
 // Settings: the machines this app talks to, the environment variables every
-// project's agents get, and remote access to this one (the tailnet listener
-// and the devices that tried it). Remote access is managed only on the Mac
+// project's agents get, remote access to this one (the tailnet listener and
+// the devices that tried it), and the daemon's event log. Remote access is managed only on the Mac
 // itself: its routes answer on the socket alone.
 
-import { Globe, Plus, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Globe, Plus, ScrollText, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import type { TailnetStatus } from "../api/models";
 import { useApp, useCos } from "../app/context";
@@ -36,6 +36,7 @@ export function SettingsPage() {
         <EnvironmentSection />
         <JudgeSettings />
         <RemoteAccessSection />
+        <EventLogSection />
       </PageBody>
     </>
   );
@@ -368,5 +369,26 @@ function DevicesCard() {
         )}
       </Card>
     </>
+  );
+}
+
+/** The daemon's event log lives here, out of the way; ⌘K finds it too. */
+function EventLogSection() {
+  const { ui } = useApp();
+  return (
+    <section className="mb-10" aria-label="Event log">
+      <SectionTitle>Event log</SectionTitle>
+      <Card>
+        <div className="flex items-center gap-3 px-4 py-3">
+          <ScrollText className="size-4 shrink-0 text-ink-3" strokeWidth={1.8} aria-hidden />
+          <p className="min-w-0 flex-1 text-[13px] text-ink-2">
+            Everything the daemon logged: agents, approvals, runs and the chiefs, live.
+          </p>
+          <Button size="sm" onClick={() => ui.navigate({ kind: "events" })}>
+            Open the event log
+          </Button>
+        </div>
+      </Card>
+    </section>
   );
 }

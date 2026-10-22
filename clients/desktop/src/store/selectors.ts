@@ -328,3 +328,48 @@ export function sidebarRuns(
   }
   return shown;
 }
+
+// MARK: The project rail
+
+/** Every agent of a project: its chief, its workspaces' agents and the ones its chief started. */
+export function projectAgents(s: DaemonState, project: Project): Agent[] {
+  const ids = new Set(project.workspaces.map((w) => w.id));
+  const chief = staffAgent(s, project.id);
+  return s.agents.filter(
+    (a) =>
+      (a.workspaceId !== null && ids.has(a.workspaceId)) ||
+      a.id === chief?.id ||
+      (chief !== undefined && a.spawnedBy === chief.id),
+  );
+}
+
+/**
+ * How many things in a project wait on you: its agents' approvals routed to
+ * you, trust dialogs and login screens, plans to approve and open questions.
+ */
+export function projectWaitingCount(s: DaemonState, project: Project): number {
+  const ids = new Set(project.workspaces.map((w) => w.id));
+  const runs = new Set(s.runs.filter((r) => ids.has(r.workspaceId)).map((r) => r.id));
+  const agents = projectAgents(s, project).filter((a) => agentNeedsYou(s, a)).length;
+  const plans = s.runs.filter((r) => runs.has(r.id) && r.state === "awaiting_plan_approval").length;
+  const questions = s.questions.filter((q) => q.runId !== null && runs.has(q.runId)).length;
+  return agents + plans + questions;
+}
+
+/**
+ * The project the sidebar shows: the page's, else the one you were last in
+ * (`remembered`), else the first.
+ */
+export function shownProject(
+  s: DaemonState,
+  page: Page,
+  remembered: number | null,
+): Project | undefined {
+  const id = projectOfPage(s, page) ?? remembered;
+  return (id !== null ? project(s, id) : undefined) ?? s.projects[0];
+}
+
+/** How many agents are working right now, chiefs included. */
+export function workingCount(s: DaemonState): number {
+  return s.agents.filter((a) => a.state === "working" || a.state === "starting").length;
+}

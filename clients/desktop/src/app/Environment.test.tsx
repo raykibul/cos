@@ -247,8 +247,8 @@ describe("a project's environment", () => {
   });
 
   it("opens from the project's menu in the sidebar and from the chief's menu", async () => {
-    const { user, ui } = await renderApp({ kind: "chief", id: 2 });
-    const sidebar = within(screen.getByRole("tree", { name: "Projects" }));
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    const sidebar = within(screen.getByRole("complementary", { name: "Sidebar" }));
     await user.click(sidebar.getByRole("button", { name: "More for cos" }));
     await user.click(screen.getByRole("menuitem", { name: /Environment…/ }));
     expect(ui.store.getState().page).toEqual({ kind: "projectEnv", id: 1 });
@@ -319,14 +319,14 @@ describe("environment hints", () => {
     expect(main().queryByText(/env:/)).not.toBeInTheDocument();
   });
 
-  it("puts the hint in the project row's tooltip", async () => {
+  it("puts the hint in the project tile's tooltip", async () => {
     await renderApp({ kind: "waiting" });
-    const sidebar = within(screen.getByRole("tree", { name: "Projects" }));
-    expect(sidebar.getByTitle(/Chief of Staff for cos/)).toHaveAttribute(
+    const rail = within(screen.getByRole("navigation", { name: "Projects" }));
+    expect(rail.getByTitle(/Chief of Staff for cos/)).toHaveAttribute(
       "title",
-      "Chief of Staff for cos\n/Users/me/personal/apps/cos\nenv: CLAUDE_CONFIG_DIR, +1",
+      "Chief of Staff for cos (⌘1)\n/Users/me/personal/apps/cos\nenv: CLAUDE_CONFIG_DIR, +1",
     );
-    expect(sidebar.getByTitle(/Chief of Staff for opal-app/).getAttribute("title")).not.toMatch(
+    expect(rail.getByTitle(/Chief of Staff for opal-app/).getAttribute("title")).not.toMatch(
       /env:/,
     );
   });
@@ -339,7 +339,8 @@ describe("environment hints", () => {
       "title",
       "Environment set at launch:\nCLAUDE_CONFIG_DIR\nANTHROPIC_BASE_URL\nDISABLE_TELEMETRY",
     );
-    expect(main().getAllByRole("tab")[0]?.getAttribute("title")).toMatch(
+    const agents = within(main().getByRole("tablist", { name: "Agents" }));
+    expect(agents.getAllByRole("tab")[0]?.getAttribute("title")).toMatch(
       /env: CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL, DISABLE_TELEMETRY/,
     );
   });

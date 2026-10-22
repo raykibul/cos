@@ -6,6 +6,7 @@
   color-scheme: light;
   --c-page: #faf9f5;
   --c-sidebar: #f1efe7;
+  --c-rail: #e9e6dc;
   --c-surface: #ffffff;
   --c-raised: #ffffff;
   --c-subtle: #eeece4;
@@ -36,6 +37,7 @@
     color-scheme: dark;
     --c-page: #262624;
     --c-sidebar: #1f1e1d;
+    --c-rail: #1a1918;
     --c-surface: #2e2e2b;
     --c-raised: #353532;
     --c-subtle: #33322f;
@@ -67,6 +69,7 @@
   color-scheme: dark;
   --c-page: #262624;
   --c-sidebar: #1f1e1d;
+  --c-rail: #1a1918;
   --c-surface: #2e2e2b;
   --c-raised: #353532;
   --c-subtle: #33322f;
@@ -99,6 +102,7 @@
 
   --color-page: var(--c-page);
   --color-sidebar: var(--c-sidebar);
+  --color-rail: var(--c-rail);
   --color-surface: var(--c-surface);
   --color-raised: var(--c-raised);
   --color-subtle: var(--c-subtle);
