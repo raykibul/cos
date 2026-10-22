@@ -7,6 +7,7 @@ pub mod agents;
 pub mod chief;
 mod cities;
 pub mod devices;
+pub mod env;
 pub mod events;
 mod git;
 pub mod projects;
@@ -21,6 +22,7 @@ pub use agents::{
 pub use agents::{ApprovalRoute, ApprovalTier};
 pub use chief::{Inbox, InboxItem, InboxKind, Question, QuestionState, Questions, Wakeup};
 pub use devices::{Device, DeviceError, DeviceState, Devices, SeenDevice};
+pub use env::{EnvError, Environment, GlobalEnv, ProjectEnv, Variables};
 pub use events::{EventLog, LoggedEvent, Subscription};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};
 pub use runs::{

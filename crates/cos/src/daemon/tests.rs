@@ -64,6 +64,7 @@ impl TestServer {
             Agents::new(store.clone(), log.clone()),
             projects.clone(),
             runs.clone(),
+            cos_core::Environment::new(store.clone(), log.clone()),
             AgentConfig::for_tests(dir.path()),
         )
         .unwrap();
@@ -1166,4 +1167,202 @@ async fn bad_run_and_task_ids_get_404() {
     assert!(bad_run.contains("there is no such run"), "{bad_run}");
     assert!(bad_task.starts_with("HTTP/1.1 404"), "{bad_task}");
     assert!(bad_task.contains("there is no such task"), "{bad_task}");
+}
+
+// ---- Environment ----
+
+/// A raw request with a JSON body.
+async fn raw_json(socket: &std::path::Path, method: &str, path: &str, body: &str) -> String {
+    raw_request(
+        socket,
+        &format!(
+            "{method} {path} HTTP/1.1\r\nHost: cos\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn env_routes_over_the_socket() {
+    let server = TestServer::start();
+    let client = server.client();
+    let repos = tempfile::tempdir().unwrap();
+    let (project, _) = client.add_project(git_repo(repos.path())).await.unwrap();
+    let id = project.id;
+
+    assert!(client.global_env().await.unwrap().variables.is_empty());
+    let global = client
+        .set_global_env("CLAUDE_CONFIG_DIR", "~/.claude".into())
+        .await
+        .unwrap();
+    assert_eq!(global.variables["CLAUDE_CONFIG_DIR"], "~/.claude");
+    client
+        .set_global_env("SHARED", "global-secret".into())
+        .await
+        .unwrap();
+
+    let env = client
+        .set_project_env(id, "CLAUDE_CONFIG_DIR", "~/.claude-personal".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&env).unwrap(),
+        json!({
+            "variables": {"CLAUDE_CONFIG_DIR": "~/.claude-personal"},
+            "global": {"CLAUDE_CONFIG_DIR": "~/.claude", "SHARED": "global-secret"},
+            "effective": {"CLAUDE_CONFIG_DIR": "~/.claude-personal", "SHARED": "global-secret"},
+        })
+    );
+    assert_eq!(client.project_env(id).await.unwrap(), env);
+    // PATH is allowed, and empty values too.
+    client
+        .set_project_env(id, "PATH", "/opt/bin:/usr/bin".into())
+        .await
+        .unwrap();
+    client.set_project_env(id, "EMPTY", String::new()).await.unwrap();
+
+    // Names cos sets itself, and bad names: 400, with a reason that never
+    // quotes the value.
+    for (name, reason) in [
+        ("TERM", "cos sets TERM itself"),
+        ("COLORTERM", "cos sets COLORTERM itself"),
+        ("CLAUDECODE", "cos sets CLAUDECODE itself"),
+        ("COS_HOOK_SOCKET", "names starting with COS_"),
+        ("COS_HOME", "names starting with COS_"),
+    ] {
+        let (status, message) = daemon_error(
+            client
+                .set_project_env(id, name, "sk-secret".into())
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(status, 400, "{name}");
+        assert!(message.contains(reason), "{name}: {message}");
+        assert!(!message.contains("sk-secret"), "{message}");
+    }
+    let response = raw_json(&server.socket, "PUT", "/v1/env/1BAD", "{\"value\":\"sk-secret\"}").await;
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(response.contains("letters, digits and underscores"), "{response}");
+    let long = format!(
+        "{{\"value\":\"{}\"}}",
+        "s".repeat(cos_core::env::MAX_VALUE_BYTES + 1)
+    );
+    let response = raw_json(&server.socket, "PUT", "/v1/env/BIG", &long).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(response.contains("the most is 32768"), "{response}");
+    let response = raw_json(
+        &server.socket,
+        "PUT",
+        "/v1/env/NUL",
+        "{\"value\":\"a\\u0000sk-secret\"}",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(!response.contains("sk-secret"), "{response}");
+    for body in [
+        "{\"value\": 5}",
+        "{}",
+        "{\"value\": \"sk-secret\"",
+        "not json sk-secret",
+    ] {
+        let response = raw_json(&server.socket, "PUT", "/v1/env/A", body).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "{body}: {response}");
+        assert!(response.contains("with a string value"), "{response}");
+        assert!(!response.contains("sk-secret"), "{response}");
+    }
+
+    // Unknown projects: 404 everywhere.
+    for (method, path) in [
+        ("GET", "/v1/projects/99/env"),
+        ("PUT", "/v1/projects/99/env/A"),
+        ("DELETE", "/v1/projects/99/env/A"),
+        ("GET", "/v1/projects/abc/env"),
+    ] {
+        let response = raw_json(&server.socket, method, path, "{\"value\":\"x\"}").await;
+        assert!(
+            response.starts_with("HTTP/1.1 404"),
+            "{method} {path}: {response}"
+        );
+    }
+
+    // Removing: 200 with the lists, whether or not it was there.
+    let env = client.unset_project_env(id, "CLAUDE_CONFIG_DIR").await.unwrap();
+    assert_eq!(env.effective["CLAUDE_CONFIG_DIR"], "~/.claude");
+    client.unset_project_env(id, "CLAUDE_CONFIG_DIR").await.unwrap();
+    let global = client.unset_global_env("SHARED").await.unwrap();
+    assert!(!global.variables.contains_key("SHARED"));
+    client.unset_global_env("NEVER_SET").await.unwrap();
+
+    // The events name variables, never their values.
+    let changes: Vec<_> = client
+        .events(0, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == kind::ENV_CHANGED)
+        .map(|event| event.data)
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            json!({"project_id": null, "name": "CLAUDE_CONFIG_DIR", "action": "set"}),
+            json!({"project_id": null, "name": "SHARED", "action": "set"}),
+            json!({"project_id": id, "name": "CLAUDE_CONFIG_DIR", "action": "set"}),
+            json!({"project_id": id, "name": "PATH", "action": "set"}),
+            json!({"project_id": id, "name": "EMPTY", "action": "set"}),
+            json!({"project_id": id, "name": "CLAUDE_CONFIG_DIR", "action": "removed"}),
+            json!({"project_id": null, "name": "SHARED", "action": "removed"}),
+        ]
+    );
+
+    // A project's variables go with it; the global ones stay.
+    client.remove_project(id).await.unwrap();
+    let (status, _) = daemon_error(client.project_env(id).await.unwrap_err());
+    assert_eq!(status, 404);
+    let (again, _) = client.add_project(repos.path().join("repo")).await.unwrap();
+    assert_ne!(again.id, id);
+    let env = client.project_env(again.id).await.unwrap();
+    assert!(env.variables.is_empty(), "{env:?}");
+    assert_eq!(env.global.keys().collect::<Vec<_>>(), ["CLAUDE_CONFIG_DIR"]);
+}
+
+#[tokio::test]
+async fn env_routes_work_over_the_tailnet() {
+    let daemon = RemoteDaemon::start(FakeTailscale::new(), fast(Duration::ZERO)).await;
+    let addr = daemon.listen().await;
+    tcp_request(addr, "GET", "/v1/status").await;
+    daemon.local().approve_device(1).await.unwrap();
+    let repo = git_repo(daemon.dir.path());
+    let (project, _) = daemon.local().add_project(repo).await.unwrap();
+
+    // An approved device is you, so it may see and change the values.
+    let remote = Client::tcp(addr.to_string());
+    remote
+        .set_global_env("ANTHROPIC_API_KEY", "sk-1".into())
+        .await
+        .unwrap();
+    let env = remote
+        .set_project_env(project.id, "CLAUDE_CONFIG_DIR", "~/.claude-work".into())
+        .await
+        .unwrap();
+    assert_eq!(env.effective.len(), 2);
+    assert_eq!(
+        remote.global_env().await.unwrap().variables["ANTHROPIC_API_KEY"],
+        "sk-1"
+    );
+    assert_eq!(remote.project_env(project.id).await.unwrap(), env);
+    let env = remote
+        .unset_project_env(project.id, "CLAUDE_CONFIG_DIR")
+        .await
+        .unwrap();
+    assert!(env.variables.is_empty());
+    remote.unset_global_env("ANTHROPIC_API_KEY").await.unwrap();
+    assert!(daemon.local().global_env().await.unwrap().variables.is_empty());
+
+    // A device that isn't approved can't read them.
+    daemon.local().deny_device(1).await.unwrap();
+    let (status, body) = tcp_request(addr, "GET", "/v1/env").await;
+    assert_eq!((status, body["code"].as_str()), (403, Some("device_denied")));
+    daemon.stop().await;
 }

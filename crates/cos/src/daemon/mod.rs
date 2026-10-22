@@ -9,6 +9,7 @@ pub(crate) mod api;
 pub(crate) mod approvals_api;
 pub(crate) mod chief;
 pub(crate) mod chief_api;
+pub(crate) mod env_api;
 pub(crate) mod peers;
 pub(crate) mod pipeline;
 pub(crate) mod remote_api;
@@ -29,7 +30,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use cos_core::events::kind;
-use cos_core::{Agents, Devices, EventLog, Projects, Runs, Store};
+use cos_core::{Agents, Devices, Environment, EventLog, Projects, Runs, Store};
 use jiff::Timestamp;
 use serde_json::json;
 use tokio::net::UnixListener;
@@ -76,6 +77,7 @@ pub(crate) async fn run_with(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
         runs.clone(),
+        Environment::new(store.clone(), log.clone()),
         AgentConfig::for_home(home)?,
     )?;
     let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());

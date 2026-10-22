@@ -196,6 +196,7 @@ fn start_manager(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
         runs.clone(),
+        cos_core::Environment::new(store.clone(), log.clone()),
         config,
     )
     .unwrap()
@@ -597,4 +598,39 @@ async fn a_task_retried_after_blocking_resumes_its_worker() {
     assert_eq!(fixture.manager.of_task(task.id).unwrap()[0].role, Role::Worker);
     let prompts = fixture.prompts();
     assert!(prompts[1].2.contains("use a.txt"), "{:?}", prompts[1]);
+}
+
+#[tokio::test]
+async fn workers_and_reviewers_get_the_project_env() {
+    use crate::daemon::agents::tests::{home, launched_env, var};
+
+    let fixture = Fixture::start().await;
+    let env = fixture.manager.env();
+    env.set(None, "SHARED", "global").unwrap();
+    env.set(
+        Some(fixture.workspace.project_id),
+        "CLAUDE_CONFIG_DIR",
+        "~/.claude-work",
+    )
+    .unwrap();
+    fixture.script(json!({
+        "a": { "worker": [commit("a.txt", "DONE")], "reviewer": [say("VERDICT: APPROVE")] },
+    }));
+    let (run, tasks) = fixture.run(vec![task("first", "a", &["a.txt"], &[], None)]);
+    fixture.until_run(run, RunState::Reporting).await;
+
+    let agents = fixture.manager.of_task(tasks[0].id).unwrap();
+    let roles: Vec<Role> = agents.iter().map(|agent| agent.role).collect();
+    assert_eq!(roles, [Role::Worker, Role::Reviewer]);
+    for agent in &agents {
+        let launched = launched_env(&fixture.root(), &agent.session_id);
+        assert_eq!(
+            var(&launched, "CLAUDE_CONFIG_DIR"),
+            Some(format!("{}/.claude-work", home()).as_str()),
+            "{:?}",
+            agent.role
+        );
+        assert_eq!(var(&launched, "SHARED"), Some("global"));
+        assert_eq!(agent.env_names, ["CLAUDE_CONFIG_DIR", "SHARED"]);
+    }
 }

@@ -65,6 +65,7 @@ impl Fixture {
             Agents::new(store.clone(), log.clone()),
             projects.clone(),
             runs.clone(),
+            cos_core::Environment::new(store.clone(), log.clone()),
             config,
         )
         .unwrap();
@@ -800,4 +801,31 @@ async fn approvals_routed_to_the_chief_wake_it_and_it_decides() {
     fixture.until_says(worker.id, "allowed by hook").await;
     let section = fixture.runs.approvals_report_section(run.id).unwrap();
     assert!(section.contains("## Approved on your behalf (1)"), "{section}");
+}
+
+#[tokio::test]
+async fn a_runs_chief_gets_the_project_env() {
+    use crate::daemon::agents::tests::{home, launched_env, var};
+
+    let fixture = Fixture::start().await;
+    let project = fixture
+        .projects
+        .workspace(fixture.workspace_id)
+        .unwrap()
+        .project_id;
+    fixture
+        .client
+        .set_project_env(project, "CLAUDE_CONFIG_DIR", "~/.claude-work".into())
+        .await
+        .unwrap();
+
+    let (_, chief) = fixture.run_with_idle_chief("use the work account").await;
+    let chief = fixture.client.agent(chief).await.unwrap();
+    assert_eq!(chief.role, Role::Chief);
+    let env = launched_env(fixture.dir.path(), &chief.session_id);
+    assert_eq!(
+        var(&env, "CLAUDE_CONFIG_DIR"),
+        Some(format!("{}/.claude-work", home()).as_str())
+    );
+    assert_eq!(chief.env_names, ["CLAUDE_CONFIG_DIR"]);
 }

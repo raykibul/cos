@@ -212,6 +212,7 @@ fn start_manager(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
         Arc::new(Runs::new(store.clone(), log.clone())),
+        cos_core::Environment::new(store.clone(), log.clone()),
         config,
     )
     .unwrap()
@@ -807,3 +808,170 @@ async fn reqwest_like_post(fixture: &Fixture, path: &str, body: &impl serde::Ser
 }
 
 mod approvals;
+
+// ---- Environment ----
+
+/// The environment the fake was last launched with for `session_id`: it
+/// writes it to `<dir>/env/<session id>.json` before its first hook.
+pub(crate) fn launched_env(dir: &Path, session_id: &str) -> serde_json::Map<String, serde_json::Value> {
+    let path = dir.join("env").join(format!("{session_id}.json"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    serde_json::from_str(&text).unwrap()
+}
+
+/// `name`'s value in a launched environment.
+pub(crate) fn var<'a>(env: &'a serde_json::Map<String, serde_json::Value>, name: &str) -> Option<&'a str> {
+    env.get(name).and_then(serde_json::Value::as_str)
+}
+
+/// The daemon user's home, as `~` expands to.
+pub(crate) fn home() -> String {
+    std::env::var("HOME").expect("HOME is set")
+}
+
+impl Fixture {
+    fn project_id(&self) -> i64 {
+        self.projects.workspace(self.workspace_id).unwrap().project_id
+    }
+}
+
+#[tokio::test]
+async fn an_agent_gets_the_project_env_over_the_global_one_and_never_over_cos() {
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+    let project = fixture.project_id();
+    client
+        .set_global_env("CLAUDE_CONFIG_DIR", "~/.claude".into())
+        .await
+        .unwrap();
+    client
+        .set_global_env("SHARED", "from-global".into())
+        .await
+        .unwrap();
+    client.set_global_env("ONLY_GLOBAL", "g".into()).await.unwrap();
+    client
+        .set_project_env(project, "CLAUDE_CONFIG_DIR", "~/.claude-personal".into())
+        .await
+        .unwrap();
+    client
+        .set_project_env(project, "SHARED", "sk-project-secret".into())
+        .await
+        .unwrap();
+    let path = format!("/opt/cos-test/bin:{}", std::env::var("PATH").unwrap());
+    client
+        .set_project_env(project, "PATH", path.clone())
+        .await
+        .unwrap();
+    // Names cos sets itself are refused by the API; if the database holds
+    // one anyway (written before they were refused), the launch skips it.
+    fixture.manager.env().set(Some(project), "TERM", "dumb").unwrap();
+    fixture
+        .manager
+        .env()
+        .set(None, "COS_HOOK_SOCKET", "/nowhere")
+        .unwrap();
+
+    let agent = fixture.start_agent("hello").await;
+    let agent = fixture.until_idle_with(agent.id, "echo: hello").await;
+    let env = launched_env(fixture.dir.path(), &agent.session_id);
+    let home = home();
+    assert_eq!(
+        var(&env, "CLAUDE_CONFIG_DIR"),
+        Some(format!("{home}/.claude-personal").as_str())
+    );
+    assert_eq!(var(&env, "SHARED"), Some("sk-project-secret"));
+    assert_eq!(var(&env, "ONLY_GLOBAL"), Some("g"));
+    assert_eq!(var(&env, "PATH"), Some(path.as_str()), "PATH is replaced");
+    assert_eq!(var(&env, "TERM"), Some("xterm-256color"));
+    assert_eq!(var(&env, "COLORTERM"), Some("truecolor"));
+    assert_eq!(
+        var(&env, "COS_HOOK_SOCKET"),
+        Some(fixture.dir.path().join("hooks.sock").to_str().unwrap())
+    );
+    // The fake's own settings (cos's test config) still reach it.
+    assert!(var(&env, "COS_FAKE_CLAUDE_TRANSCRIPTS").is_some());
+
+    // The agent shows the names it got, never the values.
+    assert_eq!(
+        agent.env_names,
+        ["CLAUDE_CONFIG_DIR", "ONLY_GLOBAL", "PATH", "SHARED"]
+    );
+    let json = serde_json::to_string(&client.agent(agent.id).await.unwrap()).unwrap();
+    assert!(json.contains("\"env_names\":[\"CLAUDE_CONFIG_DIR\""), "{json}");
+    assert!(!json.contains("sk-project-secret"), "{json}");
+    for event in fixture.log.after(0, 1000).unwrap() {
+        let data = event.data.to_string();
+        assert!(
+            !data.contains("sk-project-secret") && !data.contains("claude-personal"),
+            "{event:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_resume_gets_the_env_as_it_is_now() {
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+    let project = fixture.project_id();
+    client
+        .set_project_env(project, "FOO", "one".into())
+        .await
+        .unwrap();
+    client
+        .set_project_env(project, "BAR", "gone soon".into())
+        .await
+        .unwrap();
+    let agent = fixture.start_agent("hello").await;
+    let agent = fixture.until_idle_with(agent.id, "echo: hello").await;
+    assert_eq!(agent.env_names, ["BAR", "FOO"]);
+
+    client
+        .set_project_env(project, "FOO", "two".into())
+        .await
+        .unwrap();
+    client.unset_project_env(project, "BAR").await.unwrap();
+    client.set_global_env("NEW", "~".into()).await.unwrap();
+    // Running agents keep what they started with.
+    let env = launched_env(fixture.dir.path(), &agent.session_id);
+    assert_eq!(var(&env, "FOO"), Some("one"));
+    assert_eq!(client.agent(agent.id).await.unwrap().env_names, ["BAR", "FOO"]);
+
+    client.stop_agent(agent.id).await.unwrap();
+    fixture.until_state(agent.id, AgentState::Exited).await;
+    client.resume_agent(agent.id).await.unwrap();
+    let resumed = fixture.until_state(agent.id, AgentState::Idle).await;
+    let env = launched_env(fixture.dir.path(), &agent.session_id);
+    assert_eq!(var(&env, "FOO"), Some("two"));
+    assert_eq!(var(&env, "BAR"), None);
+    assert_eq!(
+        var(&env, "NEW"),
+        Some(home().as_str()),
+        "`~` alone is the home folder"
+    );
+    assert_eq!(resumed.env_names, ["FOO", "NEW"]);
+}
+
+#[tokio::test]
+async fn a_logged_out_claude_config_dir_needs_a_login() {
+    let fixture = Fixture::start_with(|config| {
+        config.env.push(("COS_FAKE_CLAUDE_LOGGED_OUT".into(), "1".into()));
+    })
+    .await;
+    let client = &fixture.client;
+
+    let agent = fixture.start_agent("hello").await;
+    fixture.until_state(agent.id, AgentState::NeedsLogin).await;
+    let screen = client.screen(agent.id).await.unwrap();
+    assert!(screen.text.contains("Select login method"), "{}", screen.text);
+
+    // Someone logs in in its terminal; then it carries on.
+    client.say(agent.id, "login".into()).await.unwrap();
+    fixture.until_idle_with(agent.id, "echo: hello").await;
+
+    // Stopping it while it shows the login screen kills it.
+    let agent = fixture.start_agent("again").await;
+    fixture.until_state(agent.id, AgentState::NeedsLogin).await;
+    client.stop_agent(agent.id).await.unwrap();
+    let stopped = fixture.until_state(agent.id, AgentState::Exited).await;
+    assert_eq!(stopped.exit_code, None);
+}

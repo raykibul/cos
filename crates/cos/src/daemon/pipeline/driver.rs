@@ -628,7 +628,7 @@ impl Driver {
                 AgentState::Exited | AgentState::Interrupted => {
                     return Err(anyhow!("agent {id} exited before it could take a message"));
                 }
-                AgentState::Starting | AgentState::NeedsTrust => {}
+                AgentState::Starting | AgentState::NeedsTrust | AgentState::NeedsLogin => {}
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(anyhow!("agent {id} didn't start in time"));

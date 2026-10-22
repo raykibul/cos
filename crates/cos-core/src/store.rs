@@ -289,6 +289,22 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX staff_inbox_waiting ON staff_inbox (project_id, delivered_ms, id);
 ",
+    "
+    -- Environment variables for agents: a project's (project_id set) or the
+    -- global list (project_id NULL). Values are secrets: never logged.
+    CREATE TABLE env (
+        project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
+        name       TEXT    NOT NULL,
+        value      TEXT    NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        UNIQUE (project_id, name)
+    );
+    -- UNIQUE treats NULLs as distinct, so this keeps global names unique too.
+    CREATE UNIQUE INDEX env_by_name ON env (COALESCE(project_id, 0), name);
+    -- The names (JSON array) of the extra variables an agent was last
+    -- launched with. Never the values.
+    ALTER TABLE agents ADD COLUMN env_names TEXT;
+",
 ];
 
 #[derive(Debug, thiserror::Error)]

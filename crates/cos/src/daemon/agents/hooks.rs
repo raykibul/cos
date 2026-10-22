@@ -1,7 +1,7 @@
 //! What each hook means for its agent: state changes, and permission
 //! requests turned into approvals.
 //!
-//! - `SessionStart` → `idle` (from `starting` or `needs_trust`)
+//! - `SessionStart` → `idle` (from `starting`, `needs_trust` or `needs_login`)
 //! - `UserPromptSubmit`, `PreToolUse`, `PostToolUse` → `working`
 //! - `PermissionRequest` → an approval and `waiting_approval`, unless Rust
 //!   rules answer it at once (see [`super::approvals`])
@@ -73,7 +73,10 @@ impl Inner {
         match hook.event.as_str() {
             "SessionStart" => {
                 let state = self.agents.get(id)?.map(|agent| agent.state);
-                if matches!(state, Some(AgentState::Starting | AgentState::NeedsTrust)) {
+                if matches!(
+                    state,
+                    Some(AgentState::Starting | AgentState::NeedsTrust | AgentState::NeedsLogin)
+                ) {
                     self.agents.set_state(id, AgentState::Idle)?;
                 } else {
                     self.agents.touch(id)?;
