@@ -24,6 +24,7 @@ Change it only together with all sides.
 - **One per project.** It is created lazily, the first time you start it or message it.
 - **Its own worktree.** It works in a worktree made from the project's local HEAD, with no fetch: branch `<project>/chief`, folder `<home>/worktrees/<project>-<id>/chief`. This worktree is not a workspace and isn't listed among them. It gives the chief a copy of the repo to read without touching your checkout.
 - **A runtime agent with `role: "staff"`.** It runs in a PTY with hooks, so you can watch it, type into it, stop it and resume it. Every restart resumes the same Claude session (`--resume`), so its conversation carries on.
+- **It survives daemon restarts.** When the daemon starts, every chief that was running when it stopped or crashed (now `interrupted`) is resumed with `--resume`, one a second, once the daemon serves. A chief you stopped yourself (the stop route, `cos agent stop`, the app's Stop) stays stopped: that intent is stored with the chief and cleared by the next start or resume. Your own agents, and the ones a chief started, stay `interrupted` until you resume them (the app's Resume, `cos agent resume <id>`).
   - **Model:** `COS_STAFF_MODEL`, else Claude's default. It can be set per project with `PUT /v1/projects/{id}/staff`.
   - **Permission mode:** `default`.
   - **User settings:** loaded (`user_settings: true`). This is your own assistant, unlike run agents.
@@ -67,6 +68,8 @@ These go into the chief's inbox:
 
 Wakeups follow the run chief's rules: only while the chief is idle, at most 20 items or 24 KiB per wakeup, and at most 30 wakeups an hour. Messages you type go straight in and are never batched. Reuse the run chief's inbox code where you can.
 
+**Pausing coordination:** a per-project flag, `paused`. While it's on, news still collects in the inbox but no wakeup is delivered; your typed messages still go in. Resuming delivers what waited once the chief is idle. It is set with `PUT …/staff {paused}`, shows in `Staff` with `updates_waiting` (news not delivered yet), and each change logs `staff.changed`. CLI: `cos staff pause [project]` and `cos staff resume [project]`.
+
 ### Transcript
 
 The app shows the chief as a chat, read from Claude's own transcript. Every hook gives `transcript_path`, which the daemon stores per agent. This works for any agent, not only the chief.
@@ -83,7 +86,9 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 
 - **Wakeups:** a user turn that is a cos inbox wakeup (it starts with `[cos ·`) has `kind: "update"`, and the app shows it as a small "N updates from agents" row, not as your message.
 - **Skipped entries:** thinking, system and meta entries, and entries the daemon doesn't understand, are left out. Parse leniently: an unknown line is skipped, never an error.
-- **Missing file:** while there's no transcript file, the result is `{messages: [], next: 0}`.
+- **Missing file:** while there's no transcript file, the result is `{messages: [], next: 0, context: null}`.
+- **Context:** `context: {used_tokens, window_tokens}` says how full the conversation is, for the whole file whatever `after` is: `used_tokens` is the newest reply's `usage` (input, cache-read and cache-creation tokens; subagents' and Claude's `<synthetic>` replies don't count), and `window_tokens` the model's window when cos knows it: 1M for a model launched or named with `[1m]` and for those whose window is 1M by default (Opus and Sonnet from 4.6, Haiku from 5, Fable), 200K for older Claude models, else null. It is null before the first reply.
+- **Reading:** the daemon keeps each file parsed, keyed by its length and modification time, and parses only the appended lines when it grew; a file that shrank or was rewritten is parsed from the top.
 - **Events:** `agent.transcript` with `{agent_id, next}` is logged at most once a second per agent, when the file grows. Each `Stop` and `UserPromptSubmit` hook is enough of a signal; the daemon doesn't need to watch the file.
 
 ### Routes
@@ -91,7 +96,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 | Route | Body | Result |
 |---|---|---|
 | `GET /v1/projects/{id}/staff` | | `Staff` (below). It exists even before the chief starts. |
-| `PUT /v1/projects/{id}/staff` | `{model?}` | `Staff` |
+| `PUT /v1/projects/{id}/staff` | `{model?, paused?}` | `Staff`. A field left out stays as it is. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; does nothing if it's running. |
 | `POST /v1/projects/{id}/staff/message` | `{text}` | 202. Starts it if needed, then types the text in as a bracketed paste and presses Return. If it's working, the text waits in its inbox and is delivered first thing on the next wakeup. |
 | `GET /v1/projects/{id}/staff/inbox` | | `{items: [...]}`, newest first: what agents reported, for the app's activity panel. |
@@ -100,7 +105,8 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 // Staff
 {"project_id": 1, "agent_id": 14, "state": "idle",   // agent_id and state are null before it first starts
  "model": null, "brief": "…", "worktree": "/…/chief", "branch": "topflexi/chief",
- "working_agents": 2, "waiting_on_you": 1}            // counts over the agents it started
+ "working_agents": 2, "waiting_on_you": 1,            // counts over the agents it started
+ "paused": false, "updates_waiting": 0}               // coordination paused; news not delivered yet
 ```
 
 **Agent JSON gains** `spawned_by` (an agent id or null) and `transcript_path`. **Workspace JSON gains** `city` and `branch`; `title` may now be null.
@@ -114,6 +120,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 - `cos staff [project]`: its state, brief and agents.
 - `cos staff say [project] "text"`.
 - `cos staff attach [project]`: like `cos agent attach`.
+- `cos staff pause [project]` and `cos staff resume [project]`: its coordination.
 
 ## App: Chief of Staff and workspaces
 
@@ -126,7 +133,9 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
   - A workspace's agents and runs are listed on the workspace page, not in the sidebar. Selene does the same, and it keeps the sidebar short.
   - "Waiting on you" and the event log stay at the top. Add Project stays as a `+` beside "Projects".
 - **The chief page** looks like a chat, as in the screenshot the user shared:
-  - **Header:** ★, "Chief of Staff · project", and its state ("Ready for your next message", "Working…", "Not started"). On the right: the model, a terminal toggle (opens Claude's own terminal for it in a right-hand split, as in Selene's Ctrl+J), and a ⋯ menu with Stop and Restart.
+  - **Header:** ★, "Chief of Staff · project", and its state ("Ready for your next message", "Working…", "Not started"). On the right: a context meter ("42% context", with the exact numbers in its tooltip, from the transcript's `context`), the model, a terminal toggle (opens Claude's own terminal for it in a right-hand split, as in Selene's Ctrl+J), and a ⋯ menu with Stop, Restart and Pause coordination (Resume coordination while paused).
+  - **The split** between the conversation and the terminal has a draggable divider with a minimum width on each side; its width is remembered, and a double-click resets it.
+  - **Paused:** a "Coordination paused · N updates waiting" strip above the composer, with Resume.
   - **Conversation:** from the transcript route, rendered as markdown in the reading serif. Your messages appear as bubbles. Tool calls are compact single-line rows that expand. Inbox wakeups appear as a small "N updates from agents" row.
   - **Composer:** "What should we work on?", where Enter sends and Shift-Enter adds a line. It posts to `…/staff/message`.
   - **Before it starts:** an empty state with three suggestions that fill the composer: "Plan the next feature and split it across agents", "Review what every workspace is doing right now", "Collect the open questions from running agents".
@@ -139,10 +148,11 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
   - `hosts_list` → `{hosts: [{id, name, address | null}], current}`;
   - `host_add({name, address})`;
   - `host_remove({id})`;
-  - `host_select({id})`.
+  - `host_select({id})`;
+  - `host_rename({id, name})` → `HostList`.
 
-  Hosts are stored in the app's config dir as JSON. "This Mac" always exists and can't be removed. Selecting a host closes every stream; the UI then reloads its state and follows the new host's events.
-- **Sidebar top:** a host picker in the style of Selene's (its avatar letter and name), listing This Mac, every saved host, and "Add a Mac…".
+  Hosts are stored in the app's config dir as JSON. "This Mac" always exists and can't be removed, but it can be renamed: its label is stored, its id stays `local`. A name is trimmed, non-empty, at most 60 characters, and not another host's (ignoring case), for adding and renaming alike. Selecting a host closes every stream; the UI then reloads its state and follows the new host's events. A host may be a Mac or a Linux server, so the app says "machine" for hosts and keeps "This Mac" for this one.
+- **Sidebar top:** a host picker in the style of Selene's (its avatar letter and name), listing This Mac, every saved host, "Add a machine…" and a way to rename a host.
 - **Remote refusals:** these come back as 403 with a `code` (see [daemon.md](daemon.md), "Remote access"). The app shows a full-page state for each:
   - `device_pending`: "Waiting for approval on <host>", with the command from the message.
   - `device_denied`, `wrong_user`, `tagged_device` and `unknown_peer`: explain the problem.
@@ -161,7 +171,7 @@ What the daemon side does differently from, or in addition to, the above. Detail
 - **Inbox items** have the shape `{id, project_id, kind: "agent" | "run" | "message", agent_id, run_id, text, created_ms, delivered_ms}`; the first line of `text` is a heading. `GET …/staff/inbox` returns the latest 100 items of news and leaves out your messages.
 - **`Staff.model`** is the model it runs: the project's, else `COS_STAFF_MODEL`; null means Claude's default.
 - **`POST …/staff/message`** returns the start error (for example 409 when the repo folder is gone) instead of 202 when the chief can't be started. A message waits until the chief is idle, so one sent while it starts goes in once it's ready. Messages are at most 100,000 characters.
-- **Two more events:** `staff.changed` `{project_id}` when its model or brief changes, and `staff.stopped` `{project_id, agent_id}` when its process ends.
+- **Two more events:** `staff.changed` `{project_id}` when its model, brief or pause changes, and `staff.stopped` `{project_id, agent_id}` when its process ends.
 - **The wakeup header** is always `[cos · N updates]`, even for one.
 - **`workspace_create`** (and `new_workspace`) starts from `origin` when the project has one, else from `HEAD`.
 - **`agent_send`** to a stopped agent resumes it and waits up to a minute for it to be ready before typing.

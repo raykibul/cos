@@ -428,9 +428,9 @@ An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it ow
 - **Environment:** each launch and resume gets the global and project variables as they are at that moment, under the ones cos sets itself (see [Environment](#environment)). The agent records their names in `env_names`.
 - **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The only things read from the screen, before the first hook, are Claude's trust dialog (`needs_trust`) and its login screen (`needs_login`).
 - **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait. Before any of that, the approvals policy decides who answers (see "Approvals policy" below).
-- **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` runs `claude --resume <session id>` as the same agent.
+- **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` (`cos agent resume <id>`, the app's Resume) runs `claude --resume <session id>` as the same agent. Only Chiefs of Staff come back by themselves (see [The Chief of Staff](#the-chief-of-staff)); your agents wait for you.
 - **Trust:** agents a run or a Chief of Staff started answer Claude's trust dialog by themselves, since they work in a worktree cos made for a registered project. Agents you start leave it to you (`needs_trust`).
-- **Transcripts:** every hook carries `transcript_path`, which is stored on the agent when it changes (`agents/transcripts.rs`). After `UserPromptSubmit`, `PostToolUse` and `Stop`, the daemon waits 250 ms, and if the file grew since the last time, logs `agent.transcript` with how many messages are final. It does this at most once a second per agent. `GET /v1/agents/{id}/transcript?after=` parses the file each time (`daemon/transcript.rs`): see [agents-api.md](agents-api.md).
+- **Transcripts:** every hook carries `transcript_path`, which is stored on the agent when it changes (`agents/transcripts.rs`). After `UserPromptSubmit`, `PostToolUse` and `Stop`, the daemon waits 250 ms, and if the file grew since the last time, logs `agent.transcript` with how many messages are final. It does this at most once a second per agent. `GET /v1/agents/{id}/transcript?after=` reads the file through a cache (`daemon/transcript.rs`): each file's parse is kept, keyed by its length and modification time, and when the file grew only the appended lines are parsed (checking that the last line read still ends where it did); a file that shrank or was rewritten is parsed from the top. At most 64 files are kept. The answer also has `context`, how full the conversation is: see [agents-api.md](agents-api.md).
 
 ## Environment
 
@@ -547,10 +547,12 @@ Run JSON gains `chief_agent_id`. The `agent.started` event gains `run_id`.
 Each project can have a Chief of Staff: one permanent Claude session you talk to, which creates workspaces, starts agents in them, follows them and reports back. The contract is [chief-of-staff.md](chief-of-staff.md); the code is `crates/cos/src/daemon/staff.rs` (with `staff/prompt.rs` and `staff/tools.rs`), `daemon/staff_api.rs`, `crates/cos/src/mcp.rs` and `cos_core::staff` (the `staff`, `staff_inbox` and `staff_wakeups` tables).
 
 - **Starting:** lazily, on `…/staff/start`, the first `…/staff/message` or `cos staff say`. The daemon makes the project's hidden `<slug>/chief` worktree if needed and starts an agent with `role: staff` there: your settings (`user_settings: true`), permission mode `default`, the project's model (else `COS_STAFF_MODEL`, else Claude's default), `--mcp-config` with the `cos` server (`cos mcp --agent <id>`) and `--allowedTools mcp__cos__*`. Its standing instructions and its brief go in `--append-system-prompt`. Its id is kept in the `staff` table. Its trust dialog is answered for it.
-- **Restarting:** starting it again while it runs does nothing. An exited or interrupted chief is relaunched as the same agent with the instructions, brief and model as they are now: `claude --resume` if Claude saved the session, else a fresh session with the same id (Claude saves nothing until the first message). Each start logs `staff.started`. Chiefs aren't restarted when the daemon starts; the next message does it.
+- **Restarting:** starting it again while it runs does nothing. An exited or interrupted chief is relaunched as the same agent with the instructions, brief and model as they are now: `claude --resume` if Claude saved the session, else a fresh session with the same id (Claude saves nothing until the first message). Each start logs `staff.started`.
+- **Daemon restarts:** once the daemon serves, it resumes every chief left `interrupted` (it was running when the daemon stopped or crashed), one a second, as above. A chief you stopped stays stopped: the stop route sets `staff.stopped` for a chief's agent, and any start or resume of it clears that. Agents the chief started stay `interrupted`, like yours.
 - **Tools:** `cos mcp` looks up its agent's role when it starts, and offers a Chief of Staff the staff tools (`workspaces_list`, `workspace_create`, `agent_spawn`, `agent_send`, `agent_read`, `agent_stop`, `run_start`, `brief_update`), which it forwards to `POST /v1/agents/{id}/tools/{name}` like the run chief's. The daemon sends a `role: staff` caller's calls to the staff side, which works on the chief's own project only: an agent or workspace of another project, or the chief's own worktree, is refused (403 or 404), and the error reaches Claude as a tool error. `agent_spawn` starts a `role: user` agent with `spawned_by` set, its title taken from the prompt, and the `[cos] The Chief of Staff of <project> started you…` line appended to the prompt. `agent_send` resumes a stopped agent and waits (up to a minute) until it's ready. `agent_read` returns the full last message from the transcript. `run_start` creates a run through the same path as `POST /v1/runs` and records `runs.spawned_by`. `brief_update` saves at most 4 KiB, and the next start appends it.
 - **Inbox:** items come from the agents it started (a `Stop` with the turn's last message, an exit that isn't the daemon shutting down, an approval waiting for you, a trust dialog), from the runs it started (every `run.state_changed`), and from you (`…/staff/message`). News is cut to 4 KiB per item; your messages are kept whole (at most 100,000 characters). Each change logs `staff.inbox` with the number of items waiting.
 - **Delivery:** only while the chief is `idle`, and not within 20 s of typing something it hasn't started working on. Your oldest waiting message goes first, on its own, typed as one bracketed paste; it doesn't count toward any cap. Otherwise one wakeup goes in: `[cos · N updates]`, then one `### <heading>` section per item (up to 20 items or 24 KiB), a line saying how many more wait, and a reminder that these are reports, not your instructions. At most 30 wakeups an hour per project; past that, news waits but your messages still go in. Waiting inboxes are rechecked every 30 s.
+- **Pausing:** while a chief's coordination is paused (`staff.paused`), news waits the same way and your messages still go in. Resuming wakes the delivery loop, so what waited goes in once the chief is idle.
 - **Removing the project** removes the chief's worktree and agent record with it, refused while the chief runs.
 
 ### Routes
@@ -558,7 +560,7 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 | Route | Body | Result |
 |---|---|---|
 | `GET /v1/projects/{id}/staff` | | `Staff`, even before it first starts |
-| `PUT /v1/projects/{id}/staff` | `{model?}` | `Staff`. A null or empty model goes back to the default. Used from the next start. |
+| `PUT /v1/projects/{id}/staff` | `{model?, paused?}` | `Staff`. A field left out stays as it is. A null or empty model goes back to the default, used from the next start. `paused` pauses or resumes its coordination at once. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; nothing if it's running. |
 | `POST /v1/projects/{id}/staff/message` | `{text}` | 202. Starts it if needed; the text goes in as soon as it's idle. 400 if empty. |
 | `GET /v1/projects/{id}/staff/inbox` | | `{items: [StaffItem]}`, the latest 100 items of news, newest first. Your messages are left out. |
@@ -567,13 +569,13 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 // Staff
 {"project_id": 1, "agent_id": 14, "state": "idle", "model": "haiku", "brief": "…",
  "worktree": "/Users/me/.cos/worktrees/topflexi-1/chief", "branch": "topflexi/chief",
- "working_agents": 2, "waiting_on_you": 1}
+ "working_agents": 2, "waiting_on_you": 1, "paused": false, "updates_waiting": 0}
 // StaffItem
 {"id": 7, "project_id": 1, "kind": "agent" | "run" | "message", "agent_id": 15, "run_id": null,
  "text": "Agent 15 \"Add a README line\" finished a turn\nDone: …", "created_ms": 0, "delivered_ms": null}
 ```
 
-`model` is what it runs: the project's model, else `COS_STAFF_MODEL`; null means Claude's default. `working_agents` counts the agents it started that are `starting` or `working`; `waiting_on_you` those that are `waiting_approval` or `needs_trust`. An item's first line is its heading.
+`model` is what it runs: the project's model, else `COS_STAFF_MODEL`; null means Claude's default. `working_agents` counts the agents it started that are `starting` or `working`; `waiting_on_you` those that are `waiting_approval` or `needs_trust`. `paused` is whether its coordination is paused, and `updates_waiting` how many items of news (not your messages) wait to be delivered. An item's first line is its heading.
 
 ### CLI
 
@@ -582,6 +584,8 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 | `cos staff [project] [--model M]` | Its state, model, worktree, the agents it started, its brief and the latest news. `--model default` goes back to the default. |
 | `cos staff say [project] "text"` | A message to it; starts it if needed. |
 | `cos staff attach [project]` | Its terminal, like `cos agent attach`; starts it if needed. |
+| `cos staff pause [project]` | Pauses its coordination: news waits, your messages still go in. |
+| `cos staff resume [project]` | Resumes it; what waited goes in once it's idle. |
 
 The project defaults to the one the current folder is in, else the only one.
 
@@ -591,5 +595,5 @@ The project defaults to the one the current folder is in, else the only one.
 |---|---|
 | `staff.started` | `{project_id, agent_id}` |
 | `staff.inbox` | `{project_id, count}`: items waiting |
-| `staff.changed` | `{project_id}`: its model or brief changed |
+| `staff.changed` | `{project_id}`: its model, brief or pause changed |
 | `staff.stopped` | `{project_id, agent_id}`: its process ended (stopped, exited, or the daemon stopping) |
