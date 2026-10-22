@@ -1,4 +1,4 @@
-//! `cos sessions`: the Claude sessions running on this Mac, from Claude's own
+//! `cos sessions`: the Claude sessions running on this machine, from Claude's own
 //! session files. Read-only; works without the daemon.
 
 use std::path::{Path, PathBuf};

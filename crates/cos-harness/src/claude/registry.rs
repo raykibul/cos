@@ -119,12 +119,13 @@ pub async fn live_sessions(config_dirs: &[PathBuf]) -> Vec<RunningSession> {
         .collect()
 }
 
-fn is_alive(session: &RunningSession, started: &HashMap<u32, String>) -> bool {
+fn is_alive(session: &RunningSession, started: &HashMap<u32, Option<String>>) -> bool {
     match (started.get(&session.pid), &session.proc_start) {
         (None, _) => false,
         // The pid is in use; make sure it's still the same process.
-        (Some(actual), Some(recorded)) => same_time(actual, recorded),
-        (Some(_), None) => true,
+        (Some(Some(actual)), Some(recorded)) => same_time(actual, recorded),
+        // Running, but its start time is unknown on one side.
+        (Some(_), _) => true,
     }
 }
 
@@ -134,28 +135,36 @@ fn same_time(a: &str, b: &str) -> bool {
 }
 
 /// When each running process among `pids` started, as `ps -o lstart` prints
-/// it in UTC, which is how Claude records it.
-async fn process_start_times(pids: impl Iterator<Item = u32>) -> HashMap<u32, String> {
-    let pids: Vec<String> = pids.map(|pid| pid.to_string()).collect();
+/// it in UTC, which is how Claude records it. A pid that is running but
+/// whose start time is unknown maps to `None`: that happens on Linux images
+/// without `ps` (procps), where `/proc` still says which pids exist.
+async fn process_start_times(pids: impl Iterator<Item = u32>) -> HashMap<u32, Option<String>> {
+    let pids: Vec<u32> = pids.collect();
     if pids.is_empty() {
         return HashMap::new();
     }
-    let Ok(output) = Command::new("ps")
-        .args(["-o", "pid=,lstart=", "-p", &pids.join(",")])
+    let list: Vec<String> = pids.iter().map(ToString::to_string).collect();
+    let output = Command::new("ps")
+        .args(["-o", "pid=,lstart=", "-p", &list.join(",")])
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
         .output()
-        .await
-    else {
-        return HashMap::new();
-    };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (pid, started) = line.trim().split_once(char::is_whitespace)?;
-            Some((pid.parse().ok()?, started.trim().to_owned()))
-        })
-        .collect()
+        .await;
+    match output {
+        Ok(output) => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (pid, started) = line.trim().split_once(char::is_whitespace)?;
+                Some((pid.parse().ok()?, Some(started.trim().to_owned())))
+            })
+            .collect(),
+        Err(_) if Path::new("/proc/self").is_dir() => pids
+            .into_iter()
+            .filter(|pid| Path::new(&format!("/proc/{pid}")).is_dir())
+            .map(|pid| (pid, None))
+            .collect(),
+        Err(_) => HashMap::new(),
+    }
 }
 
 #[cfg(test)]
@@ -170,7 +179,9 @@ mod tests {
 
     async fn own_start_time() -> String {
         let started = process_start_times(std::iter::once(std::process::id())).await;
-        started[&std::process::id()].clone()
+        started[&std::process::id()]
+            .clone()
+            .expect("ps is installed where tests run")
     }
 
     #[test]
