@@ -15,18 +15,27 @@ import { CosStore } from "./store/store";
 // parameters set it up for development and screenshots:
 //   ?daemon=off      start with the daemon stopped
 //   ?static          no simulated activity
-//   ?page=run:10     open a page (waiting, events, project:1, workspace:3, agent:7, run:10)
+//   ?page=run:10     open a page (waiting, events, settings, project:1, chief:1, workspace:3, agent:7, run:10)
 //   ?dialog=newRun:3 open a sheet over it
+//   ?terminal        open the chief's terminal split
+//   ?host=h1         start on another Mac (h1 Studio waits for approval, h2 can't be reached)
+//   ?firewall        this Mac's tailnet listener is blocked by the macOS firewall
 //   ?theme=dark      force a colour scheme
 const params = new URLSearchParams(window.location.search);
 
 function parsePage(value: string | null): Page | undefined {
   if (!value) return undefined;
   const [kind, id] = value.split(":");
-  if (kind === "waiting" || kind === "events") return { kind };
+  if (kind === "waiting" || kind === "events" || kind === "settings") return { kind };
   const n = Number(id);
   if (!Number.isInteger(n)) return undefined;
-  if (kind === "project" || kind === "workspace" || kind === "agent" || kind === "run") {
+  if (
+    kind === "project" ||
+    kind === "chief" ||
+    kind === "workspace" ||
+    kind === "agent" ||
+    kind === "run"
+  ) {
     return { kind, id: n };
   }
   return undefined;
@@ -38,7 +47,10 @@ function parseDialog(value: string | null): DialogState | null {
   const n = Number(id);
   switch (kind) {
     case "addProject":
+    case "addHost":
       return { kind };
+    case "removeHost":
+      return id ? { kind, hostId: id } : null;
     case "newWorkspace":
     case "removeProject":
       return { kind, projectId: n };
@@ -65,11 +77,14 @@ async function main() {
   const bridge = await createBridge({
     running: params.get("daemon") !== "off",
     simulate: !params.has("static"),
+    host: params.get("host") ?? undefined,
+    firewall: params.has("firewall"),
   });
   const cos = new CosStore(bridge);
   const ui = createUiStore({
     page: parsePage(params.get("page")) ?? { kind: "waiting" },
     dialog: parseDialog(params.get("dialog")),
+    chiefTerminal: params.has("terminal"),
   });
   followAttention(cos);
   void cos.start();

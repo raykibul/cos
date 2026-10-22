@@ -8,7 +8,7 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 import { useState } from "react";
-import type { Agent, Approval } from "../api/models";
+import { type Agent, type Approval, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos } from "../app/context";
 import {
   approvalDetail,
@@ -21,6 +21,7 @@ import {
   agent as agentOf,
   pendingApproval,
   project as projectOf,
+  projectOfPage,
   run as runOf,
   workspace as workspaceOf,
 } from "../store/selectors";
@@ -56,7 +57,11 @@ function AgentView({ agent }: { agent: Agent }) {
   const { cos, ui } = useApp();
   const canChange = useCanChange();
   const workspace = useCos((s) => workspaceOf(s, agent.workspaceId));
-  const project = useCos((s) => (workspace ? projectOf(s, workspace.projectId) : undefined));
+  // A Chief of Staff has no workspace; its project is the one it serves.
+  const project = useCos((s) => {
+    const id = workspace?.projectId ?? projectOfPage(s, { kind: "agent", id: agent.id });
+    return id !== null ? projectOf(s, id) : undefined;
+  });
   const run = useCos((s) => (agent.runId !== null ? runOf(s, agent.runId) : undefined));
   const approval = useCos((s) => pendingApproval(s, agent.id));
   const [busy, setBusy] = useState<"stop" | "resume" | null>(null);
@@ -147,7 +152,7 @@ function AgentView({ agent }: { agent: Agent }) {
       >
         {project ? (
           <>
-            <Crumb onClick={() => ui.navigate({ kind: "project", id: project.id })}>
+            <Crumb onClick={() => ui.navigate({ kind: "chief", id: project.id })}>
               {project.name}
             </Crumb>
             <CrumbSep />
@@ -156,7 +161,7 @@ function AgentView({ agent }: { agent: Agent }) {
         {workspace ? (
           <>
             <Crumb onClick={() => ui.navigate({ kind: "workspace", id: workspace.id })}>
-              {workspace.title}
+              {workspaceName(workspace)}
             </Crumb>
             <CrumbSep />
           </>
@@ -184,7 +189,7 @@ function AgentView({ agent }: { agent: Agent }) {
   );
 }
 
-function TrustBanner({ agent, path }: { agent: Agent; path: string | null }) {
+export function TrustBanner({ agent, path }: { agent: Agent; path: string | null }) {
   const { cos, ui } = useApp();
   const canChange = useCanChange();
   const [busy, setBusy] = useState(false);
@@ -213,7 +218,7 @@ function TrustBanner({ agent, path }: { agent: Agent; path: string | null }) {
   );
 }
 
-function ApprovalBanner({ approval }: { approval: Approval }) {
+export function ApprovalBanner({ approval }: { approval: Approval }) {
   const withChief = isWithChief(approval);
   const why = routeExplanation(approval);
   return (

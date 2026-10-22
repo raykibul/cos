@@ -1,39 +1,7 @@
-import { Check, Copy, PowerOff } from "lucide-react";
-import { useState } from "react";
+import { PowerOff } from "lucide-react";
 import { useCos } from "../app/context";
+import { CommandLine } from "../ui/CommandLine";
 import { PageHeader } from "../ui/Page";
-
-function CommandLine({ command, note }: { command: string; note: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div>
-      <div className="flex items-center gap-2 rounded-xl border border-line bg-surface py-1.5 pr-1.5 pl-4 shadow-card">
-        <code className="min-w-0 flex-1 truncate font-mono text-[13.5px] text-ink select-all">
-          <span className="text-ink-3 select-none">$ </span>
-          {command}
-        </code>
-        <button
-          type="button"
-          aria-label={`Copy ${command}`}
-          onClick={() => {
-            void navigator.clipboard?.writeText(command).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-          className="flex size-8 items-center justify-center rounded-lg text-ink-3 hover:bg-subtle hover:text-ink"
-        >
-          {copied ? (
-            <Check className="size-4 text-tone-green" strokeWidth={2} />
-          ) : (
-            <Copy className="size-4" strokeWidth={1.8} />
-          )}
-        </button>
-      </div>
-      <p className="mt-1.5 px-1 text-[12.5px] text-ink-3">{note}</p>
-    </div>
-  );
-}
 
 /** Shown in place of any page while the daemon doesn't answer. The app keeps trying. */
 export function NotRunning() {

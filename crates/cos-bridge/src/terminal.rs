@@ -20,7 +20,8 @@ enum End {
 impl Bridge {
     /// Streams agent `agent_id`'s terminal until it exits or the handle is
     /// closed. After a drop it sends `disconnected`, reconnects with backoff,
-    /// and the next message is a fresh `snapshot`.
+    /// and the next message is a fresh `snapshot`. A refusal is a
+    /// `disconnected` with the daemon's code, and waits the longest backoff.
     ///
     /// Must be called inside a Tokio runtime.
     pub fn attach_terminal(&self, agent_id: i64, sink: impl Sink<TerminalMessage>) -> StreamHandle {
@@ -42,16 +43,22 @@ impl Bridge {
                 retry.reset();
                 last_drop = None;
             }
+            let delay = if error.is_refusal() {
+                retry.longest()
+            } else {
+                retry.delay()
+            };
             if last_drop.as_deref() != Some(error.message.as_str()) {
                 let message = TerminalMessage::Disconnected {
                     reason: error.message.clone(),
+                    code: error.code,
                 };
                 if !outbox.send(message) {
                     return;
                 }
                 last_drop = Some(error.message);
             }
-            tokio::time::sleep(retry.delay()).await;
+            tokio::time::sleep(delay).await;
         }
     }
 

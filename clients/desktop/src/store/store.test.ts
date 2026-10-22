@@ -36,6 +36,11 @@ describe("refresh rules", () => {
     ["task.state_changed", [runs]],
     ["question.asked", [questions]],
     ["question.answered", [questions]],
+    // Once a second while Claude talks: only a page showing that agent reads it.
+    ["agent.transcript", []],
+    // Without a project id, every chief.
+    ["staff.started", ["GET /v1/projects/1/staff", "GET /v1/projects/2/staff", agents]],
+    ["staff.inbox", []],
     ["daemon.started", []],
     ["something.new", []],
   ];

@@ -36,8 +36,14 @@ pub enum EventMessage {
     LogReset,
     Disconnected {
         reason: String,
+        /// Nothing answers: the socket is missing, or the host can't be
+        /// reached.
         #[serde(rename = "notRunning")]
         not_running: bool,
+        /// The daemon's refusal code (`device_pending`, …), or null when it
+        /// didn't refuse.
+        #[serde(default)]
+        code: Option<String>,
     },
 }
 
@@ -64,6 +70,9 @@ pub enum TerminalMessage {
     },
     Disconnected {
         reason: String,
+        /// The daemon's refusal code, or null.
+        #[serde(default)]
+        code: Option<String>,
     },
 }
 
@@ -95,9 +104,18 @@ mod tests {
         assert_eq!(
             to_json(EventMessage::Disconnected {
                 reason: "gone".into(),
-                not_running: true
+                not_running: true,
+                code: None,
             }),
-            json!({"type": "disconnected", "reason": "gone", "notRunning": true})
+            json!({"type": "disconnected", "reason": "gone", "notRunning": true, "code": null})
+        );
+        assert_eq!(
+            to_json(EventMessage::Disconnected {
+                reason: "wait".into(),
+                not_running: false,
+                code: Some("device_pending".into()),
+            }),
+            json!({"type": "disconnected", "reason": "wait", "notRunning": false, "code": "device_pending"})
         );
     }
 
@@ -129,9 +147,10 @@ mod tests {
         );
         assert_eq!(
             to_json(TerminalMessage::Disconnected {
-                reason: "gone".into()
+                reason: "gone".into(),
+                code: None,
             }),
-            json!({"type": "disconnected", "reason": "gone"})
+            json!({"type": "disconnected", "reason": "gone", "code": null})
         );
     }
 

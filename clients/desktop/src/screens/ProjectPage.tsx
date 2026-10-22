@@ -1,5 +1,5 @@
 import { FolderGit2, GitBranch, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
-import type { Workspace } from "../api/models";
+import { type Workspace, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { agentLabel, pluralize, runLabel } from "../domain/labels";
 import { agentNeedsYou, currentRun, project as projectOf, userAgents } from "../store/selectors";
@@ -139,7 +139,7 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
           onClick={() => ui.navigate({ kind: "workspace", id: workspace.id })}
           className="truncate rounded text-left font-serif text-[16px] font-medium text-ink after:absolute after:inset-0 after:rounded-xl"
         >
-          {workspace.title}
+          {workspaceName(workspace)}
         </button>
         {waiting > 0 ? (
           <span className="ml-auto rounded-full bg-accent/12 px-2 py-0.5 text-[11.5px] font-medium text-accent-ink">
@@ -169,7 +169,7 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
           trigger={(props) => (
             <button
               type="button"
-              aria-label={`Actions for ${workspace.title}`}
+              aria-label={`Actions for ${workspaceName(workspace)}`}
               {...props}
               className={cx(
                 "relative z-10 flex size-6 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-subtle hover:text-ink",

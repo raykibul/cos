@@ -9,12 +9,44 @@ export function changesProjects(kind: string): boolean {
   return kind.startsWith("project.") || kind.startsWith("workspace.");
 }
 
+/** `device.requested`, `.approved`, `.denied` and `.removed`. */
+export function changesDevices(kind: string): boolean {
+  return kind.startsWith("device.");
+}
+
 /**
  * An approval changes its agent's state and `pending_approval_id`; a removed
  * workspace takes its agents with it.
  */
 export function changesAgents(kind: string): boolean {
-  return kind.startsWith("agent.") || kind.startsWith("approval.") || kind === "workspace.removed";
+  // A transcript growing (once a second while Claude talks) changes no agent.
+  if (kind === "agent.transcript") return false;
+  return (
+    kind.startsWith("agent.") ||
+    kind.startsWith("approval.") ||
+    kind === "workspace.removed" ||
+    // Starting the Chief of Staff starts its agent.
+    kind === "staff.started"
+  );
+}
+
+/**
+ * A project's Chief of Staff record: its agent appears when it starts. Its
+ * state and counts follow from the agents list, so agent events don't
+ * refetch it.
+ */
+export function changesStaff(kind: string): boolean {
+  return kind === "staff.started" || kind === "staff.changed" || kind === "staff.stopped";
+}
+
+/** The project a staff event is about. */
+export function projectOf(event: LoggedEvent): number | null {
+  return optNum(event.data.project_id);
+}
+
+/** The agent an event is about. */
+export function agentOf(event: LoggedEvent): number | null {
+  return optNum(event.data.agent_id);
 }
 
 export function changesApprovals(kind: string): boolean {

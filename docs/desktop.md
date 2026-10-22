@@ -39,13 +39,19 @@ The UI never talks to the socket. It calls these commands with `invoke` from `@t
 
 | Command | Arguments | Result |
 |---|---|---|
-| `daemon_info` | – | `{socket: string, home: string}`: where the bridge looks for the daemon (`$COS_HOME/cos.sock`, else `~/.cos/cos.sock`) |
+| `daemon_info` | – | `{socket: string, home: string, host: Host}`: where the bridge looks for this Mac's daemon (`$COS_HOME/cos.sock`, else `~/.cos/cos.sock`), and the host in use |
 | `daemon_request` | `{method: "GET"\|"POST"\|"PUT"\|"PATCH"\|"DELETE", path: string, body?: any}` (`PATCH` renames workspaces and moves tasks) | `{status: number, body: any \| null}`. `path` must start with `/v1/`, else it is refused. `body` is the parsed JSON, or null for an empty response. A non-JSON response comes back as a string. Any HTTP status is a normal result; only failing to reach the daemon is an error. |
 | `follow_events` | `{after: number \| null, onMessage: Channel<EventMessage>}` | `number`: a stream id |
 | `attach_terminal` | `{agentId: number, onMessage: Channel<TerminalMessage>}` | `number`: a stream id |
 | `close_stream` | `{id: number}` | – |
+| `hosts_list` | – | `HostList`: `{hosts: Host[], current: string}`, where `Host` is `{id: string, name: string, address: string \| null}`. This Mac comes first, with id `"local"` and no address. |
+| `host_add` | `{name: string, address: string}` | `Host`. It saves the host but doesn't switch to it. The address is `name`, `name:port`, `100.x.y.z:port` or an IPv6 address, read as `cos --host` reads it; the port defaults to 7700. A malformed address, a name over 64 characters or an address already saved is `bad_request`. |
+| `host_remove` | `{id: string}` | `HostList`. Removing the host in use switches to This Mac, as `host_select` does. This Mac can't be removed. |
+| `host_select` | `{id: string}` | `HostList`. It closes every stream and points every later command at that host. The UI then reloads its state and follows the new host's events. |
 
-**Errors:** a rejected `invoke` carries `{kind: "not_running" | "io" | "bad_request", message: string}`. `not_running` means the socket is missing or refuses connections.
+**Errors:** a rejected `invoke` carries `{kind: "not_running" | "io" | "bad_request", message: string, code?: string}`. `not_running` means the socket is missing or refuses connections or, for another Mac, that nothing answers at its address (the connect fails or takes over 5 s); the message names the address.
+
+**Hosts:** saved as `hosts.json` in the app's config folder (`~/Library/Application Support/local.cos.desktop/`), with the host picked last, which the app starts on. Another Mac is reached over Tailscale, as plain HTTP on TCP. Its daemon may refuse this Mac with a 403 and a `code` (see "Remote access" in [daemon.md](daemon.md)). For `daemon_request` that is a normal response; a stream turns it into `disconnected` with that `code`.
 
 **Keys and resizes** go through `daemon_request`: `POST /v1/agents/{id}/keys {data: base64}` and `POST /v1/agents/{id}/resize {rows, cols}`. Keystrokes must stay in order, so the UI sends them one request at a time and batches what was typed meanwhile.
 
@@ -56,10 +62,11 @@ type EventMessage =
   | { type: "connected"; status: DaemonStatus }        // GET /v1/status, sent on each (re)connect
   | { type: "event"; event: LoggedEvent }              // one log event, in order
   | { type: "log_reset" }                              // the daemon's log restarted below `after`; the UI drops its events
-  | { type: "disconnected"; reason: string; notRunning: boolean };
+  | { type: "disconnected"; reason: string; notRunning: boolean; code: string | null };
 ```
 
 - **Reconnects:** the bridge keeps the stream open until `close_stream`. On a drop it sends `disconnected`, retries with backoff (0.5 s doubling to 5 s), and resumes after the last `seq` it delivered, sending `connected` again first.
+- **Refusals:** when the daemon refuses this Mac, `code` says why (`device_pending`, `device_denied`, `wrong_user`, …) and the bridge waits the longest delay, 5 s, before asking again. An approval on the other Mac lets the app in within seconds.
 - **Log reset:** if `status.last_seq` is lower than the last `seq` delivered, it sends `log_reset` and restarts from 0.
 
 ### TerminalMessage
@@ -72,10 +79,10 @@ type TerminalMessage =
   | { type: "output"; data: string }                                 // base64
   | { type: "resize"; rows: number; cols: number }
   | { type: "exit"; exitCode: number | null }
-  | { type: "disconnected"; reason: string };
+  | { type: "disconnected"; reason: string; code: string | null };
 ```
 
-- **Reconnects:** after `disconnected` (not after `exit`), the bridge reconnects by itself with the same backoff. The next message is a fresh `snapshot`, so the UI resets the terminal and plays it.
+- **Reconnects:** after `disconnected` (not after `exit`), the bridge reconnects by itself with the same backoff, waiting 5 s after a refusal. The next message is a fresh `snapshot`, so the UI resets the terminal and plays it.
 
 ## Shell: window and tray
 
@@ -97,19 +104,22 @@ React 19, TypeScript (strict), Vite, Tailwind CSS 4. State through a small store
 
 - **Look:** like the Claude and Codex desktop apps. A quiet sidebar, a large calm content area, few borders, generous spacing, rounded 8–12 px cards, and light and dark themes from the system. Use a sans for the UI (Inter, bundled through `@fontsource`), a serif for big headings (Source Serif 4), and a monospace for paths and code (JetBrains Mono). Claude's warm neutrals: an off-white `#FAF9F5`-ish light background, a near-black `#1F1E1D`-ish dark one, and one accent (Claude orange `#D97757`) used sparingly. Icons from `lucide-react`.
 - **Sidebar:**
+  - A host picker at the top: the host's avatar letter and name, and a menu with This Mac, the saved Macs, "Add a Mac…" and Settings.
   - "Waiting on you" with a count, and the event log.
   - Projects, each with its workspaces, and under each workspace its agents (yours) and runs.
-  - A footer with the daemon's status and Add Project.
+  - A footer with Add Project, and the host in use with its daemon's status.
 - **Screens.** The Swift app (removed in this change; see git history before the removal for `clients/desktop/Cos/*.swift`) is the reference for behaviour:
   - **Agent page:** the Ghostty terminal filling the page, with a header (title, state, model, Stop, Resume, Remove). A Trust banner shows for `needs_trust`, and an approval banner with Allow and Deny (and the policy `reason`) for a pending approval. A chief-routed approval shows "The chief is deciding", with Allow and Deny still offered.
   - **Workspace page:** its agents and runs, plus a "New agent" composer (a prompt box like Claude's chat input, with model and permission-mode pickers) and New Run.
   - **Run page:** the goal and state, the plan with Approve Plan, the board (tasks with state, checks, review, last failure, and Retry/Fail/Cancel), each worker's and the chief's terminal on click, open questions with answer buttons, "Message the chief", limits, the activity (the run's approvals), and the report rendered as markdown.
-  - **Waiting on you:** pending approvals not routed to the chief, trust dialogs, open questions, and plans awaiting approval.
+  - **Waiting on you:** pending approvals not routed to the chief, trust dialogs, open questions, plans awaiting approval, and, on This Mac, devices asking to reach it.
   - **Event log:** a live list of events.
   - **Project page:** its workspaces, with New Workspace, Rename and Remove.
+  - **Another Mac refusing or unreachable:** a full page in place of the content. A refusal explains its `code`, shows the command from the message (`cos devices approve 4`), and keeps retrying where waiting may help (`device_pending`, `device_denied`, `tailscale_unavailable`). "Can't reach <host>" shows the address and what to check. Both offer Try now and Switch to This Mac.
+  - **Settings:** the saved Macs, with Add, Switch and Remove. On This Mac, Remote access: on or off and the port (`GET`/`PUT /v1/tailnet`), the addresses, the `reason` when it can't listen and, for the macOS firewall, the command that allows cos; then the devices from `/v1/devices` with Approve, Deny and Remove. On another Mac it says that's managed there.
 - **Terminal:** **ghostty-web** (Ghostty's VT engine in WebAssembly, with an xterm.js-compatible API), wrapped in one `Terminal` component so swapping to `@xterm/xterm` is a one-file change.
   - Feed it `snapshot`, then `output`. Size it to the page and send `resize` (debounced 150 ms).
   - Send keystrokes, pastes (bracketed paste when the terminal asks for it) and mouse reports through `keys`.
   - Copy, paste and select all work with Cmd-C, Cmd-V and Cmd-A.
-- **Fake bridge:** `src/bridge/fake.ts` implements the same interface as `src/bridge/tauri.ts` with canned projects, agents in every state, approvals, a run in each state, questions, a report, and terminal streams replaying a Claude Code screen. The app picks it when `window.__TAURI_INTERNALS__` is missing.
+- **Fake bridge:** `src/bridge/fake.ts` implements the same interface as `src/bridge/tauri.ts` with canned projects, agents in every state, approvals, a run in each state, questions, a report, and terminal streams replaying a Claude Code screen. It also has two other Macs: Studio refuses with `device_pending` until it is approved (by itself 12 s after the first try, unless `?static`), and Travel laptop can't be reached. This Mac has a tailnet listener (`?firewall` blocks it) and three devices. The app picks it when `window.__TAURI_INTERNALS__` is missing.
 - **Data:** a `DaemonClient` in TypeScript wraps `daemon_request` with typed calls for every route in [daemon.md](daemon.md), [agents-api.md](agents-api.md) and [orchestration.md](orchestration.md). A store keeps projects, agents, approvals, runs and questions current from `follow_events`, refetching what each event kind changes (coalesced so a burst costs one request).

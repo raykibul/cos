@@ -2,7 +2,7 @@
 // notifications; the UI tells it what's waiting.
 
 import { approvalDetail, isForYou } from "../domain/approvals";
-import { approvalsForYou, waitingCount } from "./selectors";
+import { approvalsForYou, pendingDevices, waitingCount } from "./selectors";
 import type { CosStore, DaemonState } from "./store";
 
 export interface AttentionOptions {
@@ -12,8 +12,8 @@ export interface AttentionOptions {
 
 /**
  * Calls `set_waiting_count` whenever the count changes, and `notify` for an
- * approval routed to you or a chief's question that appears while the window
- * isn't focused. What was already there when the lists first load doesn't
+ * approval routed to you, a chief's question or a device asking to reach this
+ * Mac that appears while the window isn't focused. What was already there when the lists first load doesn't
  * notify. Returns a function that stops it.
  */
 export function followAttention(store: CosStore, options: AttentionOptions = {}): () => void {
@@ -22,6 +22,7 @@ export function followAttention(store: CosStore, options: AttentionOptions = {})
   let lastCount: number | null = null;
   let seenApprovals: Set<number> | null = null;
   let seenQuestions: Set<number> | null = null;
+  let seenDevices: Set<number> | null = null;
 
   const check = (s: DaemonState) => {
     const count = s.connection === "running" ? waitingCount(s) : (lastCount ?? 0);
@@ -42,6 +43,22 @@ export function followAttention(store: CosStore, options: AttentionOptions = {})
           const agent = s.agents.find((a) => a.id === approval.agentId);
           const title = agent ? `${agent.title} needs approval` : "An agent needs approval";
           bridge.notify(title, approvalDetail(approval)).catch(() => undefined);
+        }
+      }
+    }
+
+    const devices = pendingDevices(s);
+    if (seenDevices === null) {
+      if (s.devicesLoaded) seenDevices = new Set(devices.map((d) => d.id));
+    } else {
+      for (const device of devices) {
+        if (seenDevices.has(device.id)) continue;
+        seenDevices.add(device.id);
+        if (!hasFocus()) {
+          const name = device.hostname || device.name;
+          bridge
+            .notify(`${name} wants to reach this Mac`, "Approve it in cos under Waiting on you.")
+            .catch(() => undefined);
         }
       }
     }

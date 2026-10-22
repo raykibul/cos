@@ -6,12 +6,24 @@
 
 import { toBase64 } from "../api/client";
 import { makeFixtures, type FakeAgent, type Fixtures, type Raw } from "./fake/fixtures";
+import {
+  type FakeHost,
+  firewallReason,
+  makeDevices,
+  makeHosts,
+  refusalOf,
+  tailnetStatus,
+} from "./fake/remote";
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
+import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
 import type {
   Bridge,
+  BridgeError,
   DaemonInfo,
   DaemonResponse,
   EventMessage,
+  Host,
+  HostList,
   HttpMethod,
   TerminalMessage,
 } from "./types";
@@ -24,6 +36,17 @@ export interface FakeOptions {
   /** Start with the daemon stopped. */
   running?: boolean;
   now?: number;
+  /** The host in use at the start (`local`, `h1` Studio, `h2` Travel laptop). */
+  host?: string;
+  /** This Mac's tailnet listener reports the macOS firewall blocking it. */
+  firewall?: boolean;
+  /** How long a refused or unreachable stream waits before trying again. */
+  retryMs?: number;
+  /**
+   * With `simulate`, how long after it's first tried Studio approves this
+   * Mac.
+   */
+  approveAfterMs?: number;
 }
 
 interface Follower {
@@ -80,6 +103,11 @@ export class FakeDaemon {
   readonly questions: Raw[];
   readonly limits: Record<number, Raw>;
   readonly reports: Record<number, string>;
+  /** Devices that tried this daemon's tailnet listener. */
+  readonly devices: Raw[];
+  tailnet: Raw;
+  /** Reached over the tailnet: device and listener routes answer `host_only`. */
+  readonly remote: boolean;
   readonly events: Raw[] = [];
   /** Every request, for tests: `GET /v1/projects`. */
   readonly requests: { method: string; path: string; body: unknown }[] = [];
@@ -90,9 +118,14 @@ export class FakeDaemon {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   readonly followers = new Map<number, Follower>();
   readonly terminals = new Map<number, TerminalStream>();
+  /** The Chiefs of Staff and transcripts (fake/staff.ts). */
+  readonly staffDesk: FakeStaffDesk;
 
-  constructor(options: FakeOptions = {}) {
+  constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
+    this.remote = remote;
+    this.devices = remote ? [] : makeDevices(this.fixtures.now);
+    this.tailnet = tailnetStatus(!remote, 7700, options.firewall ? firewallReason : null);
     const f = copy({ ...this.fixtures, screens: undefined });
     this.projects = f.projects;
     this.workspaces = f.workspaces;
@@ -106,6 +139,10 @@ export class FakeDaemon {
     this.running = options.running ?? true;
     this.simulate = options.simulate ?? true;
     this.startedAt = new Date(this.fixtures.now - 90_100_000).toISOString();
+    const staff = makeStaff(this.fixtures.now);
+    this.agents.push(staff.agent);
+    this.fixtures.screens[staff.agent.id] = staff.screen;
+    this.staffDesk = new FakeStaffDesk(this, staff);
     for (const item of this.fixtures.history) {
       this.events.push({
         seq: this.events.length + 1,
@@ -129,7 +166,7 @@ export class FakeDaemon {
       home: "/Users/me/.cos",
       events: this.events.length,
       last_seq: this.lastSeq,
-      tailnet: { enabled: false, port: 7700, state: "off", addresses: [] },
+      tailnet: copy(this.tailnet),
     };
   }
 
@@ -207,10 +244,14 @@ export class FakeDaemon {
       if (result === undefined) return { status: 204, body: null };
       return result;
     } catch (error) {
-      if (error instanceof HttpError)
+      if (error instanceof HttpError || error instanceof StaffError)
         return { status: error.status, body: { error: error.message } };
       throw error;
     }
+  }
+
+  get screens(): Fixtures["screens"] {
+    return this.fixtures.screens;
   }
 
   private route(
@@ -229,6 +270,8 @@ export class FakeDaemon {
       const limit = Math.min(Number(q.get("limit") ?? 100), 1000);
       return ok({ events: this.events.filter((e) => (e.seq as number) > after).slice(0, limit) });
     }
+    const staff = this.staffDesk.route(method, path, q, b);
+    if (staff) return staff;
 
     // Projects and workspaces.
     if (method === "GET" && path === "/v1/projects") {
@@ -365,11 +408,76 @@ export class FakeDaemon {
       return ok(question);
     }
 
-    // Devices and the tailnet.
-    if (method === "GET" && path === "/v1/devices") return ok({ devices: [] });
-    if (method === "GET" && path === "/v1/tailnet") return ok(this.status().tailnet);
+    // Devices and the tailnet: on the socket only.
+    if (path === "/v1/tailnet" || path.startsWith("/v1/devices")) {
+      return this.remoteAccess(method, path, b);
+    }
 
     throw new HttpError(404, `no route for ${method} ${path}`);
+  }
+
+  private remoteAccess(method: string, path: string, b: Raw): DaemonResponse | undefined {
+    if (this.remote) {
+      return {
+        status: 403,
+        body: { error: "remote access is managed on the host itself", code: "host_only" },
+      };
+    }
+    const ok = (body: unknown): DaemonResponse => ({ status: 200, body: copy(body) });
+    if (method === "GET" && path === "/v1/tailnet") return ok(this.tailnet);
+    if (method === "PUT" && path === "/v1/tailnet") {
+      const port = b.port === undefined ? (this.tailnet.port as number) : Number(b.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new HttpError(400, `port must be between 1 and 65535, not ${String(b.port)}`);
+      }
+      const reason = (this.tailnet.reason as string | undefined) ?? null;
+      this.tailnet = tailnetStatus(Boolean(b.enabled), port, reason);
+      this.log("tailnet.changed", copy(this.tailnet));
+      return ok(this.tailnet);
+    }
+    if (method === "GET" && path === "/v1/devices") return ok({ devices: this.devices });
+    const p = path.match(/^\/v1\/devices\/(\d+)(?:\/(approve|deny))?$/);
+    if (!p) throw new HttpError(404, `no route for ${method} ${path}`);
+    const device = this.find(this.devices, Number(p[1]), "device");
+    const data = { device_id: device.id, node_id: device.node_id, name: device.name };
+    if (method === "DELETE" && !p[2]) {
+      this.devices.splice(this.devices.indexOf(device), 1);
+      this.log("device.removed", data);
+      return undefined;
+    }
+    if (method === "POST" && p[2]) {
+      device.state = p[2] === "approve" ? "approved" : "denied";
+      device.decided_at = new Date().toISOString();
+      this.log(p[2] === "approve" ? "device.approved" : "device.denied", data);
+      return ok(device);
+    }
+    throw new HttpError(404, `no route for ${method} ${path}`);
+  }
+
+  /** A new device asks for access, as a first connection does. */
+  requestDevice(name: string, hostname: string, os = "macOS"): Raw {
+    const now = new Date().toISOString();
+    const device: Raw = {
+      id: this.id(),
+      node_id: `n${name}CNTRL`,
+      name,
+      hostname,
+      os,
+      login_name: "me@example.com",
+      state: "pending",
+      last_ip: "100.101.102.130",
+      first_seen_at: now,
+      last_seen_at: now,
+    };
+    this.devices.push(device);
+    this.log("device.requested", {
+      device_id: device.id,
+      node_id: device.node_id,
+      name,
+      hostname,
+      os,
+    });
+    return device;
   }
 
   private find(list: Raw[], id: number, what: string): Raw {
@@ -378,7 +486,7 @@ export class FakeDaemon {
     return item;
   }
 
-  private id(): number {
+  id(): number {
     return ++this.nextId;
   }
 
@@ -433,14 +541,22 @@ export class FakeDaemon {
         `${project.name as string} has no origin remote; start from HEAD instead`,
       );
     }
+    // A city nobody uses yet, else the first with a `-vN` suffix, as the daemon does.
     const taken = new Set(this.workspaces.map((w) => w.name));
-    const name = cities.find((c) => !taken.has(c)) ?? `ws-${this.nextId + 1}`;
+    const name =
+      cities.find((c) => !taken.has(c)) ??
+      `${cities[0]}-v${[...taken].filter((t) => String(t).startsWith(`${cities[0]}-v`)).length + 1}`;
+    const slug = String(project.name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
     const ws = {
       id: this.id(),
       project_id: projectId,
       name,
-      title: String(b.title ?? "").trim() || name,
-      branch: `cos/${name}`,
+      title: String(b.title ?? "").trim() || null,
+      city: name,
+      branch: `${slug}/${name}`,
       path: `/Users/me/.cos/worktrees/${project.name as string}-${projectId}/${name}`,
       base,
       base_ref: base === "origin" ? `origin/${project.base_branch as string}` : "HEAD",
@@ -481,7 +597,7 @@ export class FakeDaemon {
 
   // MARK: Agents
 
-  private setAgentState(agent: FakeAgent, state: string): void {
+  setAgentState(agent: FakeAgent, state: string): void {
     if (agent.state === state) return;
     const from = agent.state;
     agent.state = state;
@@ -716,7 +832,7 @@ export class FakeDaemon {
           !["done", "failed", "cancelled"].includes(r.state as string),
       )
     ) {
-      throw new HttpError(409, `${ws.title as string} already has a run going`);
+      throw new HttpError(409, `${(ws.title ?? ws.city) as string} already has a run going`);
     }
     const id = Math.max(...this.runs.map((r) => r.id as number)) + 1;
     const chief = this.id();
@@ -1028,12 +1144,65 @@ export class FakeDaemon {
   }
 }
 
-/** The bridge for a plain browser: everything answered by `FakeDaemon`. */
+/** `host[:port]` → `host:port`, as the shell reads it (port 7700 by default). */
+export function parseAddress(address: string): string {
+  const typed = address.trim();
+  const refuse = (why: string): BridgeError => ({
+    kind: "bad_request",
+    message: `"${typed}" is not a host address (${why}). Use a name or IP, like my-mac, my-mac:7700 or 100.101.102.103`,
+  });
+  if (!typed) throw refuse("it's empty");
+  if (typed.includes("://") || typed.includes("/")) throw refuse("leave out http:// and any path");
+  if (/\s/.test(typed)) throw refuse("it has spaces");
+  const withPort = /^(\[[^\]]+\]|[^:]+):\d+$/.test(typed);
+  const full = withPort
+    ? typed
+    : typed.includes(":") && !typed.startsWith("[")
+      ? `[${typed}]:7700`
+      : `${typed}:7700`;
+  const port = Number(full.slice(full.lastIndexOf(":") + 1));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw refuse("bad port");
+  const host = full.slice(0, full.lastIndexOf(":"));
+  const valid = host.startsWith("[")
+    ? /^\[[0-9a-fA-F:.]+\]$/.test(host)
+    : /^[A-Za-z0-9._-]+$/.test(host);
+  if (!valid) throw refuse("not a name or IP address");
+  return full;
+}
+
+interface OpenStream {
+  hostId: string;
+  /** A retry waiting while the host refuses or can't be reached. */
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+/** Why a host doesn't let this Mac in right now. */
+interface Gate {
+  message: string;
+  notRunning: boolean;
+  code: string | null;
+  status: number;
+}
+
+/**
+ * The bridge for a plain browser: everything answered by `FakeDaemon`s, one
+ * per host. This Mac's daemon is `daemon`. Studio (`h1`) keeps this Mac
+ * waiting for approval (until `approve("h1")`, or a while after it's first
+ * tried when simulating); the travel laptop (`h2`) can't be reached.
+ */
 export class FakeBridge implements Bridge {
   readonly kind = "fake" as const;
-  readonly daemon: FakeDaemon;
+  readonly hosts: FakeHost[];
+  readonly daemons = new Map<string, FakeDaemon>();
+  current: string;
+  private readonly options: FakeOptions;
   private readonly latencyMs: number;
+  private readonly retryMs: number;
+  private readonly approveAfterMs: number;
+  private readonly simulate: boolean;
   private nextStream = 1;
+  private nextHost = 3;
+  private readonly open = new Map<number, OpenStream>();
   /** What the shell would show; tests read these. */
   readonly calls: { setWaitingCount: number[]; notify: { title: string; body: string }[] } = {
     setWaitingCount: [],
@@ -1041,8 +1210,78 @@ export class FakeBridge implements Bridge {
   };
 
   constructor(options: FakeOptions = {}) {
-    this.daemon = new FakeDaemon(options);
+    this.options = options;
+    this.hosts = makeHosts();
+    for (const host of this.hosts) this.addDaemon(host);
+    this.current = this.hosts.some((h) => h.id === options.host) ? options.host! : "local";
     this.latencyMs = options.latencyMs ?? 60;
+    this.retryMs = options.retryMs ?? 3000;
+    this.approveAfterMs = options.approveAfterMs ?? 12_000;
+    this.simulate = options.simulate ?? true;
+  }
+
+  private addDaemon(host: FakeHost): void {
+    const remote = host.address !== null;
+    const options = remote ? { ...this.options, running: true } : this.options;
+    this.daemons.set(host.id, new FakeDaemon(options, remote));
+  }
+
+  /** This Mac's daemon. */
+  get daemon(): FakeDaemon {
+    return this.daemons.get("local")!;
+  }
+
+  /** The daemon of the host in use. */
+  get currentDaemon(): FakeDaemon {
+    return this.daemons.get(this.current)!;
+  }
+
+  private hostOf(id: string): FakeHost | undefined {
+    return this.hosts.find((h) => h.id === id);
+  }
+
+  /** Lets this Mac in, as `cos devices approve` on that host does. */
+  approve(hostId: string): void {
+    const host = this.hostOf(hostId);
+    if (host) host.access = { kind: "open" };
+  }
+
+  /** Refuses this Mac from now on, with one of the daemon's codes. */
+  refuse(hostId: string, code: string, message: string, status = 403): void {
+    const host = this.hostOf(hostId);
+    if (host) host.access = { kind: "refused", status, code, message };
+  }
+
+  /** Makes a host unreachable, or reachable again. */
+  setReachable(hostId: string, reachable: boolean): void {
+    const host = this.hostOf(hostId);
+    if (host) host.access = reachable ? { kind: "open" } : { kind: "unreachable" };
+  }
+
+  private gate(hostId: string): Gate | null {
+    const host = this.hostOf(hostId);
+    if (!host) return null;
+    const access = host.access;
+    if (access.kind === "pending") {
+      // When simulating, the first try starts the clock for the approval.
+      if (access.approveAt === null && this.simulate) {
+        access.approveAt = Date.now() + this.approveAfterMs;
+      }
+      if (access.approveAt !== null && Date.now() >= access.approveAt) {
+        host.access = { kind: "open" };
+        return null;
+      }
+    }
+    if (host.access.kind === "unreachable") {
+      return {
+        message: `could not reach ${host.address}: Connection refused (os error 61)`,
+        notRunning: true,
+        code: null,
+        status: 0,
+      };
+    }
+    const refusal = refusalOf(host);
+    return refusal ? { ...refusal, notRunning: false } : null;
   }
 
   private wait(): Promise<void> {
@@ -1058,16 +1297,59 @@ export class FakeBridge implements Bridge {
     };
   }
 
+  private publicHost(host: FakeHost): Host {
+    return { id: host.id, name: host.name, address: host.address };
+  }
+
   async daemonInfo(): Promise<DaemonInfo> {
-    return { socket: "/Users/me/.cos/cos.sock", home: "/Users/me/.cos" };
+    return {
+      socket: "/Users/me/.cos/cos.sock",
+      home: "/Users/me/.cos",
+      host: this.publicHost(this.hostOf(this.current)!),
+    };
   }
 
   async daemonRequest(method: HttpMethod, path: string, body?: unknown): Promise<DaemonResponse> {
     await this.wait();
     if (!path.startsWith("/v1/"))
       throw { kind: "bad_request", message: `${path} isn't a /v1/ path` };
-    if (!this.daemon.running) throw this.notRunning();
-    return this.daemon.handle(method, path, body ?? null);
+    const gate = this.gate(this.current);
+    if (gate?.notRunning) throw { kind: "not_running", message: gate.message };
+    if (gate) return { status: gate.status, body: { error: gate.message, code: gate.code } };
+    const daemon = this.currentDaemon;
+    if (!daemon.running) throw this.notRunning();
+    return daemon.handle(method, path, body ?? null);
+  }
+
+  /**
+   * Runs `connect` once the host lets this Mac in, sending `disconnected`
+   * (once per reason) and trying again every `retryMs` until then.
+   */
+  private whenAdmitted(
+    id: number,
+    hostId: string,
+    dropped: (gate: Gate) => void,
+    connect: () => void,
+  ): void {
+    const stream: OpenStream = { hostId, timer: null };
+    this.open.set(id, stream);
+    let last: string | null = null;
+    const attempt = () => {
+      stream.timer = null;
+      if (!this.open.has(id)) return;
+      const gate = this.gate(hostId);
+      if (gate) {
+        const key = `${gate.code}:${gate.message}`;
+        if (key !== last) {
+          last = key;
+          dropped(gate);
+        }
+        stream.timer = setTimeout(attempt, this.retryMs);
+        return;
+      }
+      connect();
+    };
+    stream.timer = setTimeout(attempt, this.latencyMs);
   }
 
   async followEvents(
@@ -1075,21 +1357,32 @@ export class FakeBridge implements Bridge {
     onMessage: (message: EventMessage) => void,
   ): Promise<number> {
     const id = this.nextStream++;
-    const daemon = this.daemon;
+    const daemon = this.currentDaemon;
     const follower = { id, onMessage, lastSeq: after ?? 0 };
-    daemon.followers.set(id, follower);
-    setTimeout(() => {
-      if (!daemon.followers.has(id)) return;
-      if (!daemon.running) {
-        onMessage({ type: "disconnected", reason: this.notRunning().message, notRunning: true });
-        return;
-      }
-      onMessage({ type: "connected", status: daemon.status() });
-      for (const event of daemon.events.filter((e) => (e.seq as number) > follower.lastSeq)) {
-        onMessage({ type: "event", event: copy(event) });
-      }
-      follower.lastSeq = daemon.lastSeq;
-    }, this.latencyMs);
+    this.whenAdmitted(
+      id,
+      this.current,
+      (gate) =>
+        onMessage({
+          type: "disconnected",
+          reason: gate.message,
+          notRunning: gate.notRunning,
+          code: gate.code,
+        }),
+      () => {
+        daemon.followers.set(id, follower);
+        if (!daemon.running) {
+          const reason = this.notRunning().message;
+          onMessage({ type: "disconnected", reason, notRunning: true, code: null });
+          return;
+        }
+        onMessage({ type: "connected", status: daemon.status() });
+        for (const event of daemon.events.filter((e) => (e.seq as number) > follower.lastSeq)) {
+          onMessage({ type: "event", event: copy(event) });
+        }
+        follower.lastSeq = daemon.lastSeq;
+      },
+    );
     return id;
   }
 
@@ -1098,19 +1391,84 @@ export class FakeBridge implements Bridge {
     onMessage: (message: TerminalMessage) => void,
   ): Promise<number> {
     const id = this.nextStream++;
-    setTimeout(() => {
-      if (!this.daemon.running) {
-        onMessage({ type: "disconnected", reason: this.notRunning().message });
-        return;
-      }
-      this.daemon.attach(agentId, onMessage, id);
-    }, this.latencyMs);
+    const daemon = this.currentDaemon;
+    this.whenAdmitted(
+      id,
+      this.current,
+      (gate) => onMessage({ type: "disconnected", reason: gate.message, code: gate.code }),
+      () => {
+        if (!daemon.running) {
+          onMessage({ type: "disconnected", reason: this.notRunning().message, code: null });
+          return;
+        }
+        daemon.attach(agentId, onMessage, id);
+      },
+    );
     return id;
   }
 
   async closeStream(id: number): Promise<void> {
-    this.daemon.followers.delete(id);
-    this.daemon.detach(id);
+    const stream = this.open.get(id);
+    if (stream?.timer) clearTimeout(stream.timer);
+    this.open.delete(id);
+    for (const daemon of this.daemons.values()) {
+      daemon.followers.delete(id);
+      daemon.detach(id);
+    }
+  }
+
+  private closeAll(): void {
+    for (const id of [...this.open.keys()]) void this.closeStream(id);
+  }
+
+  /** Streams still open, for tests. */
+  get openStreams(): number {
+    return this.open.size;
+  }
+
+  async hostsList(): Promise<HostList> {
+    return { hosts: this.hosts.map((h) => this.publicHost(h)), current: this.current };
+  }
+
+  async hostAdd(name: string, address: string): Promise<Host> {
+    const trimmed = name.trim();
+    if (!trimmed) throw { kind: "bad_request", message: "give the Mac a name" };
+    const full = parseAddress(address);
+    const existing = this.hosts.find((h) => h.address === full);
+    if (existing) {
+      throw { kind: "bad_request", message: `${full} is already saved as ${existing.name}` };
+    }
+    // A new Mac asks its owner to approve this one first.
+    const host: FakeHost = {
+      id: `h${this.nextHost++}`,
+      name: trimmed,
+      address: full,
+      access: { kind: "pending", approveAt: null },
+    };
+    this.hosts.push(host);
+    this.addDaemon(host);
+    return this.publicHost(host);
+  }
+
+  async hostRemove(id: string): Promise<HostList> {
+    if (id === "local") throw { kind: "bad_request", message: "This Mac can't be removed" };
+    const index = this.hosts.findIndex((h) => h.id === id);
+    if (index < 0) throw { kind: "bad_request", message: `no saved host ${id}` };
+    this.hosts.splice(index, 1);
+    this.daemons.get(id)?.dispose();
+    this.daemons.delete(id);
+    if (this.current === id) {
+      this.closeAll();
+      this.current = "local";
+    }
+    return this.hostsList();
+  }
+
+  async hostSelect(id: string): Promise<HostList> {
+    if (!this.hostOf(id)) throw { kind: "bad_request", message: `no saved host ${id}` };
+    this.closeAll();
+    this.current = id;
+    return this.hostsList();
   }
 
   async setWaitingCount(count: number): Promise<void> {

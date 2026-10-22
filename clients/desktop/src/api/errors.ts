@@ -23,26 +23,34 @@ export type CosErrorKind =
 export class CosError extends Error {
   readonly kind: CosErrorKind;
   readonly status: number | null;
+  /**
+   * A remote daemon's refusal (`device_pending`, `host_only`, …; see
+   * "Refusals" in docs/daemon.md), or null.
+   */
+  readonly code: string | null;
 
-  constructor(kind: CosErrorKind, message: string, status: number | null = null) {
+  constructor(
+    kind: CosErrorKind,
+    message: string,
+    status: number | null = null,
+    code: string | null = null,
+  ) {
     super(message);
     this.name = "CosError";
     this.kind = kind;
     this.status = status;
+    this.code = code;
   }
 
   static fromResponse(status: number, body: unknown, path: string): CosError {
-    let message: string | null = null;
-    if (
-      typeof body === "object" &&
-      body !== null &&
-      typeof (body as { error?: unknown }).error === "string"
-    ) {
-      message = (body as { error: string }).error;
-    } else if (typeof body === "string" && body.trim() !== "") {
-      message = body.trim();
-    }
-    message ??= `The cos daemon answered ${status} for ${path}.`;
+    const rawCode =
+      typeof body === "object" && body !== null ? (body as { code?: unknown }).code : undefined;
+    const code = typeof rawCode === "string" ? rawCode : null;
+    if (code) return new CosError("http", errorText(body, status, path), status, code);
+    return CosError.plain(status, errorText(body, status, path));
+  }
+
+  private static plain(status: number, message: string): CosError {
     if (status === 404) return new CosError("not_found", message, status);
     if (status === 409) return new CosError("conflict", message, status);
     return new CosError("http", message, status);
@@ -56,6 +64,19 @@ export class CosError extends Error {
     if (typeof error === "string") return new CosError("io", error);
     return new CosError("io", "Something went wrong talking to cos.");
   }
+}
+
+/** The daemon's `{"error": …}`, the body as text, or a plain description. */
+function errorText(body: unknown, status: number, path: string): string {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    typeof (body as { error?: unknown }).error === "string"
+  ) {
+    return (body as { error: string }).error;
+  }
+  if (typeof body === "string" && body.trim() !== "") return body.trim();
+  return `The cos daemon answered ${status} for ${path}.`;
 }
 
 export function isNotFound(error: unknown): boolean {

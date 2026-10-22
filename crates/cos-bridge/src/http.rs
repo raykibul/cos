@@ -1,4 +1,5 @@
-//! HTTP/1.1 over the daemon's Unix socket, one connection per request.
+//! HTTP/1.1 to the daemon, over its Unix socket or TCP, one connection per
+//! request.
 
 use std::io::ErrorKind as IoKind;
 
@@ -8,10 +9,15 @@ use hyper::http::uri::PathAndQuery;
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpStream, UnixStream};
 use tokio::task::AbortHandle;
 
-use crate::{Bridge, BridgeError, Response};
+use crate::{Bridge, BridgeError, Response, Target};
+
+/// A connection to the daemon, whichever way it was made.
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
 /// The methods `daemon_request` accepts. `PATCH` is here because renaming a
 /// workspace uses it.
@@ -82,7 +88,7 @@ impl Bridge {
         let mut request = Request::builder()
             .method(method)
             .uri(path)
-            .header(hyper::header::HOST, "cos");
+            .header(hyper::header::HOST, self.target.host_header());
         if body.is_some() {
             request = request.header(hyper::header::CONTENT_TYPE, "application/json");
         }
@@ -96,17 +102,40 @@ impl Bridge {
         Ok((response, connection))
     }
 
-    async fn connect(&self) -> Result<UnixStream, BridgeError> {
-        UnixStream::connect(&self.socket).await.map_err(|error| {
-            if matches!(error.kind(), IoKind::NotFound | IoKind::ConnectionRefused) {
-                BridgeError::not_running(format!(
-                    "the cos daemon is not running (no answer on {})",
-                    self.socket.display()
-                ))
-            } else {
-                BridgeError::io(format!("could not connect to {}: {error}", self.socket.display()))
+    async fn connect(&self) -> Result<Box<dyn Stream>, BridgeError> {
+        match &self.target {
+            Target::Unix(socket) => match UnixStream::connect(socket).await {
+                Ok(stream) => Ok(Box::new(stream)),
+                Err(error) if matches!(error.kind(), IoKind::NotFound | IoKind::ConnectionRefused) => {
+                    Err(BridgeError::not_running(format!(
+                        "the cos daemon is not running (no answer on {})",
+                        socket.display()
+                    )))
+                }
+                Err(error) => Err(BridgeError::io(format!(
+                    "could not connect to {}: {error}",
+                    socket.display()
+                ))),
+            },
+            // Any failure to connect means the host can't be reached: it's
+            // off, asleep, off the tailnet, or not listening (`cos remote on`).
+            Target::Tcp(address) => {
+                let connect = TcpStream::connect(address.as_str());
+                match tokio::time::timeout(self.connect_timeout, connect).await {
+                    Ok(Ok(stream)) => {
+                        let _ = stream.set_nodelay(true);
+                        Ok(Box::new(stream))
+                    }
+                    Ok(Err(error)) => Err(BridgeError::not_running(format!(
+                        "could not reach {address}: {error}"
+                    ))),
+                    Err(_) => Err(BridgeError::not_running(format!(
+                        "could not reach {address}: no answer in {} s",
+                        self.connect_timeout.as_secs()
+                    ))),
+                }
             }
-        })
+        }
     }
 }
 
@@ -155,11 +184,24 @@ fn parse_body(bytes: &[u8]) -> Option<Value> {
 }
 
 /// The `error` message of a daemon's error body, or a plain description.
-pub(crate) fn error_message(status: u16, bytes: &[u8]) -> String {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
+fn error_message(status: u16, body: Option<&Value>) -> String {
+    body.and_then(|value| value.get("error")?.as_str().map(str::to_owned))
         .unwrap_or_else(|| format!("the daemon answered {status}"))
+}
+
+/// A failed answer as an error: a refusal if the body has a `code` (see
+/// "Refusals" in `docs/daemon.md`), else the daemon's message.
+pub(crate) fn answer_error(status: u16, bytes: &[u8]) -> BridgeError {
+    error_from(status, serde_json::from_slice::<Value>(bytes).ok().as_ref())
+}
+
+/// [`answer_error`] for a body that's already parsed.
+pub(crate) fn error_from(status: u16, body: Option<&Value>) -> BridgeError {
+    let message = error_message(status, body);
+    match body.and_then(|value| value.get("code")?.as_str()) {
+        Some(code) => BridgeError::refused(code, message),
+        None => BridgeError::io(message),
+    }
 }
 
 #[cfg(test)]
@@ -207,7 +249,28 @@ mod tests {
 
     #[test]
     fn error_messages_come_from_the_body() {
-        assert_eq!(error_message(404, br#"{"error":"no agent 9"}"#), "no agent 9");
-        assert_eq!(error_message(500, b"oops"), "the daemon answered 500");
+        assert_eq!(
+            answer_error(404, br#"{"error":"no agent 9"}"#),
+            BridgeError::io("no agent 9")
+        );
+        assert_eq!(
+            answer_error(500, b"oops"),
+            BridgeError::io("the daemon answered 500")
+        );
+    }
+
+    #[test]
+    fn a_body_with_a_code_is_a_refusal() {
+        let error = answer_error(
+            403,
+            br#"{"error":"this device (laptop) is waiting for approval","code":"device_pending"}"#,
+        );
+        assert_eq!(
+            error,
+            BridgeError::refused("device_pending", "this device (laptop) is waiting for approval")
+        );
+        let error = answer_error(503, br#"{"code":"tailscale_unavailable"}"#);
+        assert_eq!(error.code.as_deref(), Some("tailscale_unavailable"));
+        assert_eq!(error.message, "the daemon answered 503");
     }
 }

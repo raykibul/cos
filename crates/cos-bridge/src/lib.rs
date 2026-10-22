@@ -1,10 +1,11 @@
-//! The desktop app's link to the cos daemon, without any Tauri code.
+//! The desktop app's link to a cos daemon, without any Tauri code.
 //!
-//! [`Bridge`] sends requests to the daemon's HTTP API over its Unix socket,
-//! follows the event log ([`Bridge::follow_events`]) and attaches to agents'
-//! terminals ([`Bridge::attach_terminal`]). Both streams reconnect by
-//! themselves until their [`StreamHandle`] is closed. The contract with the
-//! UI is in `docs/desktop.md`.
+//! [`Bridge`] sends requests to the daemon's HTTP API, over this Mac's Unix
+//! socket or another Mac's tailnet listener ([`Target`]), follows the event
+//! log ([`Bridge::follow_events`]) and attaches to agents' terminals
+//! ([`Bridge::attach_terminal`]). Both streams reconnect by themselves until
+//! their [`StreamHandle`] is closed. The contract with the UI is in
+//! `docs/desktop.md`.
 
 mod error;
 mod events;
@@ -12,6 +13,7 @@ mod http;
 mod messages;
 mod sse;
 mod stream;
+mod target;
 mod terminal;
 
 use std::path::{Path, PathBuf};
@@ -20,8 +22,10 @@ use std::time::Duration;
 pub use error::{BridgeError, ErrorKind};
 pub use messages::{DaemonInfo, EventMessage, Response, TerminalMessage};
 pub use stream::{Sink, StreamHandle};
+pub use target::{DEFAULT_PORT, Target, parse_address};
 
 /// How long to wait between reconnects: `initial`, doubling up to `max`.
+/// A refusal waits `max` straight away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Backoff {
     pub initial: Duration,
@@ -38,20 +42,31 @@ impl Default for Backoff {
     }
 }
 
-/// Talks to one daemon through its socket. Cheap to clone.
+/// How long connecting to a host over TCP may take. A Mac that's asleep or
+/// off the tailnet otherwise hangs for over a minute.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Talks to one daemon. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct Bridge {
-    socket: PathBuf,
+    target: Target,
     backoff: Backoff,
+    connect_timeout: Duration,
 }
 
 impl Bridge {
     /// A bridge to the daemon listening on `socket`. Nothing connects until
     /// the first request or stream.
     pub fn new(socket: impl Into<PathBuf>) -> Self {
+        Self::to(Target::Unix(socket.into()))
+    }
+
+    /// A bridge to the daemon at `target`.
+    pub fn to(target: Target) -> Self {
         Self {
-            socket: socket.into(),
+            target,
             backoff: Backoff::default(),
+            connect_timeout: CONNECT_TIMEOUT,
         }
     }
 
@@ -67,16 +82,34 @@ impl Bridge {
         self
     }
 
-    pub fn socket(&self) -> &Path {
-        &self.socket
+    /// The same bridge, aimed at another daemon.
+    #[must_use]
+    pub fn retarget(&self, target: Target) -> Self {
+        Self {
+            target,
+            ..self.clone()
+        }
     }
 
-    /// Where the bridge looks for the daemon.
-    pub fn info(&self) -> DaemonInfo {
-        DaemonInfo {
-            socket: self.socket.clone(),
-            home: self.socket.parent().map(Path::to_path_buf).unwrap_or_default(),
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+
+    /// The socket, for a bridge to this Mac's daemon.
+    pub fn socket(&self) -> Option<&Path> {
+        match &self.target {
+            Target::Unix(socket) => Some(socket),
+            Target::Tcp(_) => None,
         }
+    }
+
+    /// Where the bridge looks for this Mac's daemon; `None` for a host over
+    /// TCP.
+    pub fn info(&self) -> Option<DaemonInfo> {
+        self.socket().map(|socket| DaemonInfo {
+            socket: socket.to_path_buf(),
+            home: socket.parent().map(Path::to_path_buf).unwrap_or_default(),
+        })
     }
 }
 
@@ -118,10 +151,25 @@ mod tests {
 
     #[test]
     fn info_names_the_socket_and_its_folder() {
-        let info = Bridge::new("/tmp/home/cos.sock").info();
+        let info = Bridge::new("/tmp/home/cos.sock").info().unwrap();
         assert_eq!(
             serde_json::to_value(info).unwrap(),
             serde_json::json!({"socket": "/tmp/home/cos.sock", "home": "/tmp/home"})
         );
+    }
+
+    #[test]
+    fn retargeting_keeps_the_backoff() {
+        let backoff = Backoff {
+            initial: Duration::from_millis(1),
+            max: Duration::from_millis(2),
+        };
+        let local = Bridge::new("/tmp/cos.sock").with_backoff(backoff);
+        let remote = local.retarget(Target::tcp("my-mac").unwrap());
+        assert_eq!(remote.backoff, backoff);
+        assert_eq!(remote.target(), &Target::Tcp("my-mac:7700".into()));
+        assert_eq!(remote.socket(), None);
+        assert_eq!(remote.info(), None);
+        assert_eq!(local.socket(), Some(Path::new("/tmp/cos.sock")));
     }
 }

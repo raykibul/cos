@@ -22,6 +22,21 @@ const types = {
 };
 
 const shots = [
+  ["chief-conversation", "page=chief:1"],
+  [
+    "chief-rows-open",
+    "page=chief:1",
+    async (page) => {
+      await page.getByRole("button", { name: "2 updates from agents" }).click();
+      await page
+        .getByRole("button", { name: /Started an agent/ })
+        .first()
+        .click();
+    },
+  ],
+  ["chief-empty", "page=chief:2"],
+  ["chief-terminal", "page=chief:1&terminal"],
+  ["sidebar-expanded", "page=workspace:3"],
   ["waiting", "page=waiting"],
   ["events", "page=events"],
   ["project", "page=project:1"],
@@ -42,6 +57,20 @@ const shots = [
   ["sheet-new-run", "page=workspace:4&dialog=newRun:4"],
   ["sheet-add-project", "page=waiting&dialog=addProject"],
   ["sheet-new-workspace", "page=project:1&dialog=newWorkspace:1"],
+  [
+    "host-picker",
+    "page=waiting",
+    (page) => page.getByRole("button", { name: "Mac: This Mac" }).click(),
+  ],
+  ["sheet-add-host", "page=waiting&dialog=addHost"],
+  ["host-device-pending", "host=h1"],
+  ["host-unreachable", "host=h2"],
+  ["remote-access", "page=settings"],
+  [
+    "remote-access-firewall",
+    "page=settings&firewall",
+    (page) => page.getByRole("list", { name: "Devices" }).scrollIntoViewIfNeeded(),
+  ],
 ];
 
 const server = createServer((req, res) => {

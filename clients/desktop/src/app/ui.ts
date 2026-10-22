@@ -10,9 +10,13 @@ export type Page =
   | { kind: "waiting" }
   | { kind: "events" }
   | { kind: "project"; id: number }
+  /** A project's Chief of Staff; `id` is the project's. */
+  | { kind: "chief"; id: number }
   | { kind: "workspace"; id: number }
   | { kind: "agent"; id: number }
-  | { kind: "run"; id: number };
+  | { kind: "run"; id: number }
+  /** Settings: your Macs, and remote access to this one. */
+  | { kind: "settings" };
 
 export type DialogState =
   | { kind: "addProject" }
@@ -25,7 +29,9 @@ export type DialogState =
   | { kind: "newRun"; workspaceId: number }
   | { kind: "cancelRun"; runId: number }
   | { kind: "taskAction"; runId: number; taskId: number; action: TaskActionKind }
-  | { kind: "limits"; runId: number };
+  | { kind: "limits"; runId: number }
+  | { kind: "addHost" }
+  | { kind: "removeHost"; hostId: string };
 
 export interface Toast {
   id: number;
@@ -37,8 +43,13 @@ export interface UiState {
   page: Page;
   dialog: DialogState | null;
   toasts: Toast[];
-  /** Sidebar rows folded away, by key (`p1`, `w3`). */
-  collapsed: Record<string, boolean>;
+  /**
+   * Sidebar projects unfolded (true) or folded (false) by hand, by project
+   * id. Unset, a project is unfolded while the page is inside it.
+   */
+  expanded: Record<number, boolean>;
+  /** Whether the chief page shows its agent's terminal in a split. */
+  chiefTerminal: boolean;
 }
 
 export function samePage(a: Page, b: Page): boolean {
@@ -52,7 +63,8 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     page: { kind: "waiting" },
     dialog: null,
     toasts: [],
-    collapsed: {},
+    expanded: {},
+    chiefTerminal: false,
     ...initial,
   }));
 
@@ -66,8 +78,12 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     close() {
       store.setState({ dialog: null });
     },
-    toggle(key: string) {
-      store.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !s.collapsed[key] } }));
+    /** Unfolds or folds a project in the sidebar. */
+    setExpanded(projectId: number, expanded: boolean) {
+      store.setState((s) => ({ expanded: { ...s.expanded, [projectId]: expanded } }));
+    },
+    toggleChiefTerminal(open?: boolean) {
+      store.setState((s) => ({ chiefTerminal: open ?? !s.chiefTerminal }));
     },
     toast(title: string, message: string) {
       const id = ++toastId;
