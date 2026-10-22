@@ -27,7 +27,7 @@ Unanswered requests are refused after 5 minutes (`timeout::UNANSWERED_AFTER`), a
 | `ask_user` | you | anything cos can't classify confidently: unknown programs and git aliases, commands it can't parse, paths only known at run time, `pip install` that might be global, the stash, interactive tools, containers |
 | `never_delegated` | you, whatever the preset | see below |
 
-jev, when it arrives, will sit in front of the chief for the worktree-only chief tier. It never sees network, install or never-delegated requests.
+jev ([judge.md](judge.md)) runs in shadow mode for now: it judges every request routed to you, in projects where it's switched on, and logs what it would have done without changing the route. It may only ever approve what this crate already puts in `allowed` or `chief (worktree)` (every path inside the worktree, no network, no install); that check is Rust, whatever jev answers. When it goes live it sits in front of the chief for the worktree-only tier and never decides network, install or never-delegated requests.
 
 ### Never delegated
 
