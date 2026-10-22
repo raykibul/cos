@@ -21,15 +21,20 @@ import {
   decodeEvent,
   decodeStatus,
 } from "../api/models";
+import { type InboxItem, type Staff, type Transcript, type TranscriptMessage } from "../api/staff";
 import type { Bridge, DaemonInfo, EventMessage } from "../bridge/types";
 import {
+  agentOf,
   changesAgents,
   changesApprovals,
   changesProjects,
   changesQuestions,
   changesRuns,
+  changesStaff,
+  projectOf,
   runRefreshFor,
 } from "../domain/events";
+import { type PendingMessage, mergeMessages, reconcilePending } from "../domain/transcript";
 import { CoalescedRefresh, type Result } from "./coalesce";
 
 export type Connection = "connecting" | "running" | "not_running" | "reconnecting";
@@ -76,6 +81,24 @@ export interface DaemonState {
   reports: Record<number, ReportState>;
   /** Every approval, newest first, while a run page shows its activity. */
   allApprovals: Approval[];
+  /** Each project's Chief of Staff, by project id. */
+  staffs: Record<number, Staff>;
+  /** False when the daemon answers 404 for the staff routes. */
+  staffSupported: boolean;
+  /** What the chief's agents reported, newest first, by project id, while a page shows it. */
+  inboxes: Record<number, InboxItem[]>;
+  /** Conversations read from transcripts, by agent id, while a page shows them. */
+  transcripts: Record<number, TranscriptState>;
+  /** What you sent each project's chief that its transcript doesn't show yet. */
+  pending: Record<number, PendingMessage[]>;
+}
+
+export interface TranscriptState {
+  messages: TranscriptMessage[];
+  /** What to ask for next (`after=next`). */
+  next: number;
+  loaded: boolean;
+  error: string | null;
 }
 
 export function initialState(): DaemonState {
@@ -105,7 +128,17 @@ export function initialState(): DaemonState {
     limitsSupported: true,
     reports: {},
     allApprovals: [],
+    staffs: {},
+    staffSupported: true,
+    inboxes: {},
+    transcripts: {},
+    pending: {},
   };
+}
+
+interface Watch<T> {
+  count: number;
+  refresh: CoalescedRefresh<T>;
 }
 
 interface RunWatch {
@@ -149,6 +182,14 @@ export class CosStore {
   private readonly runsRefresh: CoalescedRefresh<Run[]>;
   private readonly questionsRefresh: CoalescedRefresh<Question[]>;
   private readonly allApprovalsRefresh: CoalescedRefresh<Approval[]>;
+  private readonly staffRefreshes = new Map<number, CoalescedRefresh<Staff>>();
+  /** Set on each (re)connect: the next project list refetches every chief. */
+  private staffStale = true;
+  private readonly transcriptWatches = new Map<number, Watch<Transcript>>();
+  /** Agents whose transcript restarted: the next fetch reads it from the top. */
+  private readonly transcriptResets = new Set<number>();
+  private readonly inboxWatches = new Map<number, Watch<InboxItem[]>>();
+  private nextPendingId = 1;
 
   constructor(
     readonly bridge: Bridge,
@@ -164,9 +205,10 @@ export class CosStore {
     this.projectsRefresh = new CoalescedRefresh(
       () => client.projects(),
       (result) => {
-        if (result.ok)
+        if (result.ok) {
           this.set({ projects: result.value, projectsLoaded: true, projectsError: null });
-        else this.set({ projectsError: message(result.error) });
+          this.followProjects(result.value);
+        } else this.set({ projectsError: message(result.error) });
       },
     );
     this.agentsRefresh = new CoalescedRefresh(
@@ -288,9 +330,13 @@ export class CosStore {
           status = null;
         }
         this.set({ status, connection: "running", connectionReason: null });
+        this.staffStale = true;
         this.refreshProjects();
         this.refreshAgents();
         this.refreshRuns();
+        // What changed while away: the conversations and inboxes on screen.
+        for (const watch of this.transcriptWatches.values()) watch.refresh.request();
+        for (const watch of this.inboxWatches.values()) watch.refresh.request();
         break;
       }
       case "event": {
@@ -324,6 +370,18 @@ export class CosStore {
     if (changesApprovals(kind)) this.approvalsRefresh.request();
     if (changesRuns(kind)) this.runsRefresh.request();
     if (changesQuestions(kind)) this.questionsRefresh.request();
+    if (changesStaff(kind)) {
+      const project = projectOf(event);
+      if (project !== null) this.refreshStaff(project);
+      else for (const p of this.get().projects) this.refreshStaff(p.id);
+    }
+    if (kind === "staff.inbox") {
+      const project = projectOf(event);
+      for (const [id, watch] of this.inboxWatches) {
+        if (project === null || project === id) watch.refresh.request();
+      }
+    }
+    if (kind === "agent.transcript") this.transcriptGrew(event);
     if (this.watches.size > 0) {
       for (const [id, watch] of this.watches) {
         const refresh = runRefreshFor(event, id);
@@ -482,6 +540,278 @@ export class CosStore {
       board.run.reportPath !== null;
     const watch = this.watches.get(id);
     if (mayHaveReport && this.get().reports[id] === undefined && watch) watch.report.request();
+  }
+
+  // MARK: The Chief of Staff
+
+  /**
+   * After the project list loads: fetch the chief of every project after a
+   * (re)connect, else only of projects that are new, and forget removed ones.
+   */
+  private followProjects(projects: Project[]): void {
+    const all = this.staffStale;
+    this.staffStale = false;
+    const ids = new Set(projects.map((p) => p.id));
+    const staffs = this.get().staffs;
+    for (const project of projects) {
+      if (all || staffs[project.id] === undefined) this.refreshStaff(project.id);
+    }
+    if (Object.keys(staffs).some((id) => !ids.has(Number(id)))) {
+      this.set((s) => ({
+        staffs: Object.fromEntries(Object.entries(s.staffs).filter(([id]) => ids.has(Number(id)))),
+      }));
+    }
+  }
+
+  refreshStaff(projectId: number): void {
+    let refresh = this.staffRefreshes.get(projectId);
+    if (!refresh) {
+      refresh = new CoalescedRefresh(
+        () => this.client.staff(projectId),
+        (result) => {
+          if (result.ok) this.storeStaff(result.value);
+          else if (isNotFound(result.error) && !this.get().projects.some((p) => p.id === projectId))
+            return;
+          else if (isNotFound(result.error)) this.set({ staffSupported: false });
+        },
+      );
+      this.staffRefreshes.set(projectId, refresh);
+    }
+    refresh.request();
+  }
+
+  private storeStaff(staff: Staff): void {
+    this.set((s) => ({ staffs: { ...s.staffs, [staff.projectId]: staff }, staffSupported: true }));
+  }
+
+  /** `agent.transcript {agent_id, next}`: read what's new, if a page shows that agent. */
+  private transcriptGrew(event: LoggedEvent): void {
+    const id = agentOf(event);
+    if (id === null) return;
+    const watch = this.transcriptWatches.get(id);
+    if (!watch) return;
+    const next = typeof event.data.next === "number" ? event.data.next : null;
+    const have = this.get().transcripts[id]?.next ?? 0;
+    if (next !== null && next === have) return;
+    // A shorter transcript started over (a new session): read it from the top.
+    if (next !== null && next < have) this.transcriptResets.add(id);
+    watch.refresh.request();
+  }
+
+  /** Keeps an agent's conversation current until the returned function is called. */
+  watchTranscript(agentId: number): () => void {
+    return this.watch(this.transcriptWatches, agentId, () => {
+      const refresh = new CoalescedRefresh<Transcript>(
+        () => {
+          const reset = this.transcriptResets.delete(agentId);
+          const after = reset ? 0 : (this.get().transcripts[agentId]?.next ?? 0);
+          return this.client.transcript(agentId, after).then((page) => ({ ...page, reset }));
+        },
+        (result) => this.applyTranscript(agentId, result),
+      );
+      return refresh;
+    });
+  }
+
+  private applyTranscript(agentId: number, result: Result<Transcript & { reset?: boolean }>): void {
+    this.set((s) => {
+      const current = s.transcripts[agentId];
+      if (!result.ok) {
+        const error = isNotFound(result.error)
+          ? "This daemon can't show conversations yet. Update cos."
+          : message(result.error);
+        return {
+          transcripts: {
+            ...s.transcripts,
+            [agentId]: {
+              messages: current?.messages ?? [],
+              next: current?.next ?? 0,
+              loaded: true,
+              error,
+            },
+          },
+        };
+      }
+      const page = result.value;
+      const messages = page.reset
+        ? page.messages
+        : mergeMessages(current?.messages ?? [], page.messages);
+      const transcripts = {
+        ...s.transcripts,
+        [agentId]: {
+          messages,
+          next: Math.max(page.reset ? 0 : (current?.next ?? 0), page.next),
+          loaded: true,
+          error: null,
+        },
+      };
+      // What you sent shows once; drop it when the transcript has it.
+      let pending = s.pending;
+      for (const [project, staff] of Object.entries(s.staffs)) {
+        const id = Number(project);
+        if (staff.agentId !== agentId || !pending[id]?.length) continue;
+        const left = reconcilePending(pending[id], messages);
+        if (left !== pending[id]) pending = { ...pending, [id]: left };
+      }
+      return { transcripts, pending };
+    });
+  }
+
+  /** Keeps a project's chief inbox current until the returned function is called. */
+  watchInbox(projectId: number): () => void {
+    return this.watch(
+      this.inboxWatches,
+      projectId,
+      () =>
+        new CoalescedRefresh(
+          () => this.client.staffInbox(projectId),
+          (result) => {
+            if (result.ok)
+              this.set((s) => ({ inboxes: { ...s.inboxes, [projectId]: result.value } }));
+          },
+        ),
+    );
+  }
+
+  /** A counted watch: the first one creates and fetches; the last one disposes. */
+  private watch<T>(
+    watches: Map<number, Watch<T>>,
+    id: number,
+    create: () => CoalescedRefresh<T>,
+  ): () => void {
+    const existing = watches.get(id);
+    if (existing) existing.count += 1;
+    else {
+      const watch = { count: 1, refresh: create() };
+      watches.set(id, watch);
+      watch.refresh.request();
+    }
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const watch = watches.get(id);
+      if (!watch) return;
+      watch.count -= 1;
+      if (watch.count <= 0) {
+        watch.refresh.dispose();
+        watches.delete(id);
+      }
+    };
+  }
+
+  isWatchingTranscript(agentId: number): boolean {
+    return this.transcriptWatches.has(agentId);
+  }
+
+  async startStaff(projectId: number): Promise<Staff> {
+    const staff = await this.client.startStaff(projectId);
+    this.storeStaff(staff);
+    this.agentsRefresh.request();
+    return staff;
+  }
+
+  /** `null` for the default model. It applies from the chief's next start. */
+  async setStaffModel(projectId: number, model: string | null): Promise<Staff> {
+    const staff = await this.client.setStaff(projectId, { model });
+    this.storeStaff(staff);
+    return staff;
+  }
+
+  /**
+   * Sends the chief a message. It shows at once as pending, and leaves when
+   * the transcript has it. A failure stays, to retry or discard.
+   */
+  async messageStaff(projectId: number, text: string): Promise<void> {
+    const staff = this.get().staffs[projectId];
+    const afterN = staff?.agentId != null ? (this.get().transcripts[staff.agentId]?.next ?? 0) : 0;
+    const item: PendingMessage = {
+      id: this.nextPendingId++,
+      text,
+      sentMs: Date.now(),
+      afterN,
+      state: "sending",
+    };
+    this.set((s) => ({
+      pending: { ...s.pending, [projectId]: [...(s.pending[projectId] ?? []), item] },
+    }));
+    await this.deliver(projectId, item);
+  }
+
+  private async deliver(projectId: number, item: PendingMessage): Promise<void> {
+    const update = (change: Partial<PendingMessage>) =>
+      this.set((s) => ({
+        pending: {
+          ...s.pending,
+          [projectId]: (s.pending[projectId] ?? []).map((p) =>
+            p.id === item.id ? { ...p, ...change } : p,
+          ),
+        },
+      }));
+    try {
+      await this.client.messageStaff(projectId, item.text);
+      update({ state: "sent", error: undefined });
+    } catch (error) {
+      update({ state: "failed", error: message(error) });
+      return;
+    }
+    // A first message starts the chief; either way its transcript grows.
+    this.refreshStaff(projectId);
+    const agentId = this.get().staffs[projectId]?.agentId;
+    if (agentId != null) this.transcriptWatches.get(agentId)?.refresh.request();
+  }
+
+  retryPending(projectId: number, id: number): Promise<void> {
+    const item = this.get().pending[projectId]?.find((p) => p.id === id);
+    if (!item) return Promise.resolve();
+    const retried: PendingMessage = { ...item, state: "sending", error: undefined };
+    this.set((s) => ({
+      pending: {
+        ...s.pending,
+        [projectId]: (s.pending[projectId] ?? []).map((p) => (p.id === id ? retried : p)),
+      },
+    }));
+    return this.deliver(projectId, retried);
+  }
+
+  discardPending(projectId: number, id: number): void {
+    this.set((s) => ({
+      pending: {
+        ...s.pending,
+        [projectId]: (s.pending[projectId] ?? []).filter((p) => p.id !== id),
+      },
+    }));
+  }
+
+  /** Stops the chief, waits for its agent to exit, and starts it again on the same session. */
+  async restartStaff(projectId: number, timeoutMs = 10_000): Promise<Staff> {
+    const agentId = this.get().staffs[projectId]?.agentId;
+    const agent = agentId != null ? this.get().agents.find((a) => a.id === agentId) : undefined;
+    if (agentId != null && agent && agent.state !== "exited" && agent.state !== "interrupted") {
+      await this.client.stopAgent(agentId);
+      this.agentsRefresh.request();
+      await this.until((s) => {
+        const state = s.agents.find((a) => a.id === agentId)?.state;
+        return state === undefined || state === "exited" || state === "interrupted";
+      }, timeoutMs);
+    }
+    return this.startStaff(projectId);
+  }
+
+  /** Resolves once the state passes the test, or after the timeout. */
+  private until(test: (state: DaemonState) => boolean, timeoutMs: number): Promise<void> {
+    if (test(this.get())) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        unsubscribe();
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      const unsubscribe = this.state.subscribe((state) => {
+        if (test(state)) done();
+      });
+    });
   }
 
   // MARK: Project and workspace actions
