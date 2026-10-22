@@ -6,7 +6,7 @@
 //! another machine's daemon over the tailnet with `--host`. `cos remote` and
 //! `cos devices` manage that remote access. `cos agent`, `cos agents`,
 //! `cos approvals`, `cos allow` and `cos deny` drive the agents the daemon
-//! runs in terminals.
+//! runs in terminals, and `cos staff` talks to a project's Chief of Staff.
 //! `cos try` runs one prompt through Claude Code without the daemon, and
 //! `cos sessions` lists the Claude sessions running on this Mac. See
 //! `docs/proposal.md` for where this is going.
@@ -25,6 +25,7 @@ mod mcp;
 mod projects_cmd;
 mod runs_cmd;
 mod sessions_cmd;
+mod staff_cmd;
 mod tailscale;
 mod try_cmd;
 mod try_pty;
@@ -112,7 +113,9 @@ enum Command {
     Say(chief_cmd::SayArgs),
     /// Print a run's report.
     Report(chief_cmd::ReportArgs),
-    /// Run by a chief's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
+    /// A project's Chief of Staff: show it, `say` something to it, or `attach` to its terminal.
+    Staff(staff_cmd::StaffArgs),
+    /// Run by a chief's or Chief of Staff's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
     #[command(hide = true)]
     Mcp(mcp::McpArgs),
 }
@@ -187,6 +190,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Answer(args) => chief_cmd::answer(&home, args).await,
         Command::Say(args) => chief_cmd::say(&home, args).await,
         Command::Report(args) => chief_cmd::report(&home, args).await,
+        Command::Staff(args) => staff_cmd::staff(&home, args).await,
         Command::Mcp(args) => mcp::run(&home, args).await,
     }
 }

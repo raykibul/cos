@@ -1,7 +1,8 @@
-//! The chief's CLI against a real `cos daemon`, with `cos-fake-claude` as
+//! The chiefs' CLI against a real `cos daemon`, with `cos-fake-claude` as
 //! Claude: a run starts its chief, and `cos questions`, `cos say` and
-//! `cos report` reach it. Also makes Cargo build the `cos` binary, which the
-//! daemon's unit tests run as the chief's MCP server.
+//! `cos report` reach it; `cos staff` shows and talks to a project's Chief of
+//! Staff. Also makes Cargo build the `cos` binary, which the daemon's unit
+//! tests run as the chief's MCP server.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -26,7 +27,9 @@ impl Daemon {
             .arg("daemon")
             .env("COS_HOME", home.path())
             .env("COS_CLAUDE_BIN", fake_claude())
+            .env("COS_FAKE_CLAUDE_TRANSCRIPTS", home.path().join("transcripts"))
             .env_remove("COS_CHIEF_MODEL")
+            .env_remove("COS_STAFF_MODEL")
             .env_remove("COS_HOST")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -151,4 +154,58 @@ fn a_run_gets_a_chief_you_can_talk_to() {
         String::from_utf8_lossy(&report.stderr)
     );
     daemon.ok(&["cancel", "1"]);
+}
+
+#[test]
+fn a_project_has_a_chief_of_staff_you_can_talk_to() {
+    assert!(
+        fake_claude().is_file(),
+        "{} is missing; run the tests with `cargo test --workspace` (make test)",
+        fake_claude().display()
+    );
+    let daemon = Daemon::start();
+    let scratch = tempfile::tempdir().unwrap();
+    let repo = git_repo(scratch.path());
+    daemon.ok(&["project", "add", repo.to_str().unwrap()]);
+
+    let shown = daemon.ok(&["staff", "repo"]);
+    assert!(
+        shown.starts_with("Chief of Staff · repo (project 1)\n"),
+        "{shown}"
+    );
+    assert!(shown.contains("state:    not started"), "{shown}");
+    assert!(shown.contains("model:    Claude's default"), "{shown}");
+    assert!(shown.contains("(branch repo/chief)"), "{shown}");
+
+    let said = daemon.ok(&["staff", "say", "repo", "hello there"]);
+    assert_eq!(
+        said,
+        "Sent to the Chief of Staff of repo. Follow it with `cos staff attach repo`.\n"
+    );
+    wait_for("the chief to answer", || {
+        daemon.ok(&["agents"]).contains("Chief of Staff · repo")
+            && daemon.ok(&["staff"]).contains("state:    idle (agent 1)")
+    });
+    // Its worktree isn't a workspace.
+    let listed = daemon.ok(&["project", "list"]);
+    assert!(!listed.contains("chief"), "{listed}");
+
+    let shown = daemon.ok(&["staff", "--model", "haiku"]);
+    assert!(shown.contains("model:    haiku"), "{shown}");
+    assert!(shown.contains("agents:   none yet"), "{shown}");
+    assert!(shown.contains("brief:    (empty)"), "{shown}");
+
+    let attach = daemon.cos(&["staff", "attach", "repo"]);
+    assert!(!attach.status.success());
+    assert!(
+        String::from_utf8_lossy(&attach.stderr).contains("attach needs a terminal"),
+        "{}",
+        String::from_utf8_lossy(&attach.stderr)
+    );
+    let unknown = daemon.cos(&["staff", "nope"]);
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("no project called nope"),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
+    );
 }
