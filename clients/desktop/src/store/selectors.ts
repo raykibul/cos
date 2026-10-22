@@ -1,8 +1,20 @@
 // Lookups over the store's state. Pure functions, so components and tests
 // share them.
 
-import type { Agent, Approval, Device, Project, Question, Run, Workspace } from "../api/models";
+import type {
+  Agent,
+  AgentState,
+  Approval,
+  Device,
+  Project,
+  Question,
+  Run,
+  Workspace,
+} from "../api/models";
+import type { Staff } from "../api/staff";
+import type { Page } from "../app/ui";
 import { isForYou } from "../domain/approvals";
+import { isAlive } from "../domain/labels";
 import { isRunFinished } from "../domain/tasks";
 import type { DaemonState } from "./store";
 
@@ -19,7 +31,10 @@ export function workspace(s: DaemonState, id: number | null | undefined): Worksp
   return undefined;
 }
 
-export function agent(s: DaemonState, id: number | null | undefined): Agent | undefined {
+export function agent(
+  s: Pick<DaemonState, "agents">,
+  id: number | null | undefined,
+): Agent | undefined {
   if (id === null || id === undefined) return undefined;
   return s.agents.find((a) => a.id === id);
 }
@@ -30,7 +45,10 @@ export function userAgents(s: DaemonState, workspaceId: number): Agent[] {
 }
 
 /** The approval an agent waits on, if any. */
-export function pendingApproval(s: DaemonState, agentId: number): Approval | undefined {
+export function pendingApproval(
+  s: Pick<DaemonState, "approvals">,
+  agentId: number,
+): Approval | undefined {
   return s.approvals.find((a) => a.agentId === agentId && a.state === "pending");
 }
 
@@ -127,6 +145,123 @@ export function waitingCountForRun(s: DaemonState, runId: number): number {
     questionsFor(s, runId).length +
     approvalsForYou(s).filter((a) => ids.has(a.agentId)).length
   );
+}
+
+// MARK: The Chief of Staff and workspaces
+
+/** A project's workspaces, newest first. */
+export function workspacesNewestFirst(project: Project): Workspace[] {
+  return [...project.workspaces].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+}
+
+export function staffOf(s: DaemonState, projectId: number): Staff | undefined {
+  return s.staffs[projectId];
+}
+
+/** The chief's runtime agent, once it has started. */
+export function staffAgent(s: DaemonState, projectId: number): Agent | undefined {
+  return agent(s, s.staffs[projectId]?.agentId);
+}
+
+/**
+ * The chief's state: its agent's, which events keep current, else the
+ * staff record's; null before it first starts.
+ */
+export function staffState(s: DaemonState, projectId: number): AgentState | null {
+  const staff = s.staffs[projectId];
+  if (!staff || staff.agentId === null) return null;
+  return staffAgent(s, projectId)?.state ?? staff.state;
+}
+
+/** Agents the chief started. */
+export function spawnedAgents(
+  s: Pick<DaemonState, "agents">,
+  staffAgentId: number | null | undefined,
+): Agent[] {
+  if (staffAgentId === null || staffAgentId === undefined) return [];
+  return s.agents.filter((a) => a.spawnedBy === staffAgentId);
+}
+
+/** Something one of the chief's agents (or the chief) waits on you for. */
+export interface ChiefRequest {
+  agent: Agent;
+  /** Its approval routed to you; none for the trust dialog. */
+  approval: Approval | undefined;
+}
+
+/** The chief's own requests and those of the agents it started that wait on you, oldest first. */
+export function chiefRequests(
+  s: Pick<DaemonState, "agents" | "approvals" | "staffs">,
+  projectId: number,
+): ChiefRequest[] {
+  const chiefId = s.staffs[projectId]?.agentId;
+  if (chiefId === null || chiefId === undefined) return [];
+  const chief = agent(s, chiefId);
+  const agents = [...(chief ? [chief] : []), ...spawnedAgents(s, chiefId)];
+  const requests: ChiefRequest[] = [];
+  for (const a of agents) {
+    const approval = pendingApproval(s, a.id);
+    if (approval && isForYou(approval)) requests.push({ agent: a, approval });
+    else if (a.state === "needs_trust") requests.push({ agent: a, approval: undefined });
+  }
+  return requests.sort(
+    (x, y) =>
+      (x.approval?.createdMs ?? x.agent.lastActivityMs ?? 0) -
+      (y.approval?.createdMs ?? y.agent.lastActivityMs ?? 0),
+  );
+}
+
+/** How a set of agents is doing, for a status dot: waiting on you, working, idle or nothing. */
+export type Activity = "attention" | "working" | "idle" | "none";
+
+export function activityOf(s: DaemonState, agents: Agent[]): Activity {
+  if (agents.some((a) => agentNeedsYou(s, a))) return "attention";
+  if (agents.some((a) => a.state === "working" || a.state === "starting")) return "working";
+  if (agents.some((a) => isAlive(a.state))) return "idle";
+  return "none";
+}
+
+/** Every agent in a workspace, yours and a run's. */
+export function workspaceAgents(s: DaemonState, workspaceId: number): Agent[] {
+  return s.agents.filter((a) => a.workspaceId === workspaceId);
+}
+
+/** A project's chief row: the chief itself, and anything in its workspaces waiting on you. */
+export function projectActivity(s: DaemonState, project: Project): Activity {
+  const ids = new Set(project.workspaces.map((w) => w.id));
+  const agents = s.agents.filter((a) => a.workspaceId !== null && ids.has(a.workspaceId));
+  const chief = staffAgent(s, project.id);
+  if (chief) agents.push(chief);
+  const activity = activityOf(s, agents);
+  // The chief's own idleness is the row's resting state; it says nothing.
+  return activity === "idle" ? "none" : activity;
+}
+
+/** The workspace a page shows, directly or through one of its agents or runs. */
+export function workspaceOfPage(s: DaemonState, page: Page): number | null {
+  switch (page.kind) {
+    case "workspace":
+      return page.id;
+    case "agent":
+      return agent(s, page.id)?.workspaceId ?? null;
+    case "run":
+      return run(s, page.id)?.workspaceId ?? null;
+    default:
+      return null;
+  }
+}
+
+/** The project a page belongs to, for unfolding it in the sidebar. */
+export function projectOfPage(s: DaemonState, page: Page): number | null {
+  if (page.kind === "chief" || page.kind === "project") return page.id;
+  const ws = workspace(s, workspaceOfPage(s, page));
+  if (ws) return ws.projectId;
+  if (page.kind === "agent") {
+    for (const [project, staff] of Object.entries(s.staffs)) {
+      if (staff.agentId === page.id) return Number(project);
+    }
+  }
+  return null;
 }
 
 /** The current run and the latest two finished ones, plus the selected one. */

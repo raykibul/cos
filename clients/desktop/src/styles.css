@@ -318,6 +318,40 @@
   font-weight: 620;
 }
 
+/* The Chief of Staff's replies: prose in the reading serif, at a size made
+   for paragraphs, as in Selene. Code stays monospace. */
+.chief-prose {
+  font-family: var(--font-serif);
+  font-size: 16.5px;
+  line-height: 1.55;
+  letter-spacing: -0.003em;
+  font-optical-sizing: auto;
+}
+.chief-prose :is(p, ul, ol, blockquote, table, pre) {
+  margin: 0 0 0.75em;
+}
+.chief-prose > :last-child {
+  margin-bottom: 0;
+}
+.chief-prose li {
+  margin: 0 0 0.3em;
+  padding-left: 0.15em;
+}
+.chief-prose :is(h1, h2, h3, h4) {
+  margin: 1.3em 0 0.5em;
+  font-weight: 600;
+}
+.chief-prose strong {
+  font-weight: 650;
+}
+.chief-prose code {
+  font-size: 0.8em;
+}
+.chief-prose table {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+}
+
 /* ghostty-web draws on a canvas inside this box. It makes the box
    contenteditable to take keys, so WebKit would draw its own blinking text
    caret down the left edge; the terminal draws its own cursor instead. */

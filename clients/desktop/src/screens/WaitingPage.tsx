@@ -1,6 +1,6 @@
 import { CheckCircle2, ClipboardList, ShieldQuestion, TerminalSquare } from "lucide-react";
 import { useState } from "react";
-import type { Agent, Approval, Run } from "../api/models";
+import { type Agent, type Approval, type Run, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { approvalDetail, approvalHeadline, routeExplanation } from "../domain/approvals";
 import { pluralize } from "../domain/labels";
@@ -141,7 +141,7 @@ function Meta({
         </button>
       ) : null}
       {agent && agent.role !== "user" ? <span>· {agent.role}</span> : null}
-      {ws ? <span className="truncate">· in {ws.title}</span> : null}
+      {ws ? <span className="truncate">· in {workspaceName(ws)}</span> : null}
       <span className="ml-auto shrink-0">{relativeTime(since, now)}</span>
     </div>
   );
@@ -160,7 +160,7 @@ function PlanCard({ run }: { run: Run }) {
       <div className="min-w-0 flex-1">
         <p className="text-[12.5px] text-ink-3">
           The chief's plan is ready{tasks ? ` · ${pluralize(tasks, "task")}` : ""}
-          {ws ? ` · in ${ws.title}` : ""} · {relativeTime(run.updatedAt, now)}
+          {ws ? ` · in ${workspaceName(ws)}` : ""} · {relativeTime(run.updatedAt, now)}
         </p>
         <p className="mt-0.5 truncate text-[14.5px] font-medium text-ink">{run.goal}</p>
       </div>

@@ -69,7 +69,10 @@ export interface Workspace {
   id: number;
   projectId: number;
   name: string;
-  title: string;
+  /** Null when it has none: clients show the city instead (see `workspaceName`). */
+  title: string | null;
+  /** The city it's named after: the last segment of its branch, as in `topflexi/lisbon`. */
+  city: string;
   branch: string;
   path: string;
   /** `origin` or `head`. */
@@ -89,21 +92,44 @@ export interface Project {
   workspaces: Workspace[];
 }
 
+/** A project's name as a git-safe slug, the first half of its workspace branches. */
+export function projectSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** The last segment of a branch: `topflexi/lisbon-v1` → `lisbon-v1`. */
+export function cityOf(branch: string): string {
+  const parts = branch.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
 export function decodeWorkspace(value: unknown): Workspace {
   const o = asObject(value, "workspace");
+  const id = reqNum(o, "id", "workspace");
   const name = str(o.name);
+  const branch = str(o.branch);
+  const title = str(o.title).trim();
   return {
-    id: reqNum(o, "id", "workspace"),
+    id,
     projectId: num(o.project_id, 0),
     name,
-    title: str(o.title) || name,
-    branch: str(o.branch),
+    title: title || null,
+    city: str(o.city) || cityOf(branch) || name || `workspace ${id}`,
+    branch,
     path: str(o.path),
     base: str(o.base, "origin"),
     baseRef: str(o.base_ref),
     baseCommit: str(o.base_commit),
     createdAt: time(o.created_at),
   };
+}
+
+/** What every client shows for a workspace: its title, else its city. */
+export function workspaceName(workspace: Pick<Workspace, "title" | "city">): string {
+  return workspace.title ?? workspace.city;
 }
 
 export function decodeProject(value: unknown): Project {
@@ -131,11 +157,12 @@ export type AgentState =
   | "interrupted"
   | (string & {});
 
-export type AgentRole = "user" | "chief" | "worker" | "reviewer" | (string & {});
+export type AgentRole = "user" | "chief" | "worker" | "reviewer" | "staff" | (string & {});
 
 export interface Agent {
   id: number;
-  workspaceId: number;
+  /** Null for an agent outside any workspace, such as a Chief of Staff in its own worktree. */
+  workspaceId: number | null;
   /** The run that started it; null for your own. */
   runId: number | null;
   taskId: number | null;
@@ -157,6 +184,10 @@ export interface Agent {
   pendingApprovalId: number | null;
   /** Only when it runs outside the workspace folder (a task's worktree). */
   cwd: string | null;
+  /** The Chief of Staff agent that started it, if one did. */
+  spawnedBy: number | null;
+  /** Claude's JSONL transcript, once a hook has reported it. */
+  transcriptPath: string | null;
 }
 
 export function decodeAgent(value: unknown): Agent {
@@ -164,7 +195,7 @@ export function decodeAgent(value: unknown): Agent {
   const id = reqNum(o, "id", "agent");
   return {
     id,
-    workspaceId: reqNum(o, "workspace_id", "agent"),
+    workspaceId: optNum(o.workspace_id),
     runId: optNum(o.run_id),
     taskId: optNum(o.task_id),
     role: str(o.role, "user"),
@@ -184,6 +215,8 @@ export function decodeAgent(value: unknown): Agent {
     lastMessage: optStr(o.last_message),
     pendingApprovalId: optNum(o.pending_approval_id),
     cwd: optStr(o.cwd),
+    spawnedBy: optNum(o.spawned_by),
+    transcriptPath: optStr(o.transcript_path),
   };
 }
 

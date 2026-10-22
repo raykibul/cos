@@ -225,7 +225,7 @@ describe("sheets", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add project" }));
     await act(() => settle());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(ui.store.getState().page.kind).toBe("project");
+    expect(ui.store.getState().page.kind).toBe("chief");
   });
 
   it("starts a run with a preset and cap", async () => {

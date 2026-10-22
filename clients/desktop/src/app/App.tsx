@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useMemo } from "react";
 import { type CosStore, isThisMac } from "../store/store";
+import { ChiefPage } from "../pages/chief/ChiefPage";
 import { AgentPage } from "../screens/AgentPage";
 import { EventLogPage } from "../screens/EventLogPage";
 import { HostRefused, HostUnreachable } from "../screens/HostUnavailable";
@@ -55,6 +56,8 @@ function Content() {
       return <EventLogPage />;
     case "project":
       return <ProjectPage key={page.id} projectId={page.id} />;
+    case "chief":
+      return <ChiefPage key={page.id} projectId={page.id} />;
     case "workspace":
       return <WorkspacePage key={page.id} workspaceId={page.id} />;
     case "agent":

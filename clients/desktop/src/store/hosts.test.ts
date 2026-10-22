@@ -76,6 +76,25 @@ describe("hosts", () => {
     expect(cos.get().events).toHaveLength(before);
   });
 
+  it("forgets the old host's chiefs and conversations", async () => {
+    const { cos, bridge } = await started();
+    bridge.approve("h1");
+    const unwatchOld = cos.watchTranscript(40);
+    await settle();
+    expect(cos.isWatchingTranscript(40)).toBe(true);
+
+    await cos.switchHost("h1");
+    expect(cos.get().transcripts).toEqual({});
+    expect(cos.isWatchingTranscript(40)).toBe(false);
+    // A page on Studio watches the same id; the old page letting go late
+    // doesn't end it.
+    const unwatchNew = cos.watchTranscript(40);
+    unwatchOld();
+    expect(cos.isWatchingTranscript(40)).toBe(true);
+    unwatchNew();
+    expect(cos.isWatchingTranscript(40)).toBe(false);
+  });
+
   it("a refusal is its own connection state, until the host approves", async () => {
     const { cos, bridge } = await started();
     await cos.switchHost("h1");

@@ -1,5 +1,5 @@
 import { Bot, GitBranch, ListChecks, MoreHorizontal, Pencil, Play, Trash2 } from "lucide-react";
-import type { Run } from "../api/models";
+import { type Run, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { runLabel } from "../domain/labels";
 import { countsSummary, isRunFinished, progress } from "../domain/tasks";
@@ -11,14 +11,14 @@ import {
   workspace as workspaceOf,
 } from "../store/selectors";
 import { relativeTime } from "../ui/format";
-import { Button, EmptyState, PathText, SectionTitle, StateBadge } from "../ui/kit";
+import { Button, EmptyState, PathText, Pill, SectionTitle, StateBadge } from "../ui/kit";
 import { Menu } from "../ui/Menu";
 import { Crumb, CrumbSep, PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { toneClasses } from "../ui/tones";
 import { folderItems } from "./common";
 import { Composer } from "./Composer";
 import { toNewAgent } from "./composerValue";
-import { AgentListRow } from "./shared";
+import { AgentTabs } from "../pages/workspace/AgentTabs";
 
 export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
   const { cos, ui } = useApp();
@@ -99,16 +99,17 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
       >
         {project ? (
           <>
-            <Crumb onClick={() => ui.navigate({ kind: "project", id: project.id })}>
-              {project.name}
+            <Crumb onClick={() => ui.navigate({ kind: "chief", id: project.id })}>
+              <span className="text-tone-amber">★</span> {project.name}
             </Crumb>
             <CrumbSep />
           </>
         ) : null}
-        <Crumb>{workspace.title}</Crumb>
+        <Crumb>{workspaceName(workspace)}</Crumb>
       </PageHeader>
-      <PageBody>
+      <PageBody wide>
         <PageTitle
+          badge={workspace.title !== null ? <Pill>{workspace.city}</Pill> : null}
           subtitle={
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <span className="flex items-center gap-1 font-mono text-[12.5px] text-ink-2">
@@ -120,15 +121,30 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
             </span>
           }
         >
-          {workspace.title}
+          {workspaceName(workspace)}
         </PageTitle>
 
         <section className="mb-9">
+          <SectionTitle>Agents</SectionTitle>
+          {agentsError ? <p className="mb-2 text-[12.5px] text-tone-red">{agentsError}</p> : null}
+          {agents.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-line-strong">
+              <EmptyState icon={Bot} title="No agents here yet">
+                Type below to start one. Agents a run starts are on its page.
+              </EmptyState>
+            </div>
+          ) : (
+            <AgentTabs agents={agents} path={workspace.path} approvals={approvals} />
+          )}
+        </section>
+
+        <section className="mb-9">
+          <SectionTitle>New agent</SectionTitle>
           <Composer
             disabled={!canChange || !agentsSupported}
             placeholder={
               agentsSupported
-                ? `What should Claude work on in ${workspace.title}?`
+                ? `What should Claude work on in ${workspaceName(workspace)}?`
                 : "This daemon can't start agents. Update cos."
             }
             onSend={(value) =>
@@ -149,28 +165,6 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
             <RunCard run={active} />
           </section>
         ) : null}
-
-        <section className="mb-9">
-          <SectionTitle>Agents</SectionTitle>
-          {agentsError ? <p className="mb-2 text-[12.5px] text-tone-red">{agentsError}</p> : null}
-          {agents.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-line-strong">
-              <EmptyState icon={Bot} title="No agents here yet">
-                Type above to start one. Agents a run starts are on its page.
-              </EmptyState>
-            </div>
-          ) : (
-            <div className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-card">
-              {agents.map((agent) => (
-                <AgentListRow
-                  key={agent.id}
-                  agent={agent}
-                  approval={approvals.find((a) => a.agentId === agent.id)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
 
         {runsSupported ? (
           <section>

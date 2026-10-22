@@ -15,6 +15,7 @@ import {
   tailnetStatus,
 } from "./fake/remote";
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
+import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
 import type {
   Bridge,
   BridgeError,
@@ -117,6 +118,8 @@ export class FakeDaemon {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   readonly followers = new Map<number, Follower>();
   readonly terminals = new Map<number, TerminalStream>();
+  /** The Chiefs of Staff and transcripts (fake/staff.ts). */
+  readonly staffDesk: FakeStaffDesk;
 
   constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
@@ -136,6 +139,10 @@ export class FakeDaemon {
     this.running = options.running ?? true;
     this.simulate = options.simulate ?? true;
     this.startedAt = new Date(this.fixtures.now - 90_100_000).toISOString();
+    const staff = makeStaff(this.fixtures.now);
+    this.agents.push(staff.agent);
+    this.fixtures.screens[staff.agent.id] = staff.screen;
+    this.staffDesk = new FakeStaffDesk(this, staff);
     for (const item of this.fixtures.history) {
       this.events.push({
         seq: this.events.length + 1,
@@ -237,10 +244,14 @@ export class FakeDaemon {
       if (result === undefined) return { status: 204, body: null };
       return result;
     } catch (error) {
-      if (error instanceof HttpError)
+      if (error instanceof HttpError || error instanceof StaffError)
         return { status: error.status, body: { error: error.message } };
       throw error;
     }
+  }
+
+  get screens(): Fixtures["screens"] {
+    return this.fixtures.screens;
   }
 
   private route(
@@ -259,6 +270,8 @@ export class FakeDaemon {
       const limit = Math.min(Number(q.get("limit") ?? 100), 1000);
       return ok({ events: this.events.filter((e) => (e.seq as number) > after).slice(0, limit) });
     }
+    const staff = this.staffDesk.route(method, path, q, b);
+    if (staff) return staff;
 
     // Projects and workspaces.
     if (method === "GET" && path === "/v1/projects") {
@@ -473,7 +486,7 @@ export class FakeDaemon {
     return item;
   }
 
-  private id(): number {
+  id(): number {
     return ++this.nextId;
   }
 
@@ -528,14 +541,22 @@ export class FakeDaemon {
         `${project.name as string} has no origin remote; start from HEAD instead`,
       );
     }
+    // A city nobody uses yet, else the first with a `-vN` suffix, as the daemon does.
     const taken = new Set(this.workspaces.map((w) => w.name));
-    const name = cities.find((c) => !taken.has(c)) ?? `ws-${this.nextId + 1}`;
+    const name =
+      cities.find((c) => !taken.has(c)) ??
+      `${cities[0]}-v${[...taken].filter((t) => String(t).startsWith(`${cities[0]}-v`)).length + 1}`;
+    const slug = String(project.name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
     const ws = {
       id: this.id(),
       project_id: projectId,
       name,
-      title: String(b.title ?? "").trim() || name,
-      branch: `cos/${name}`,
+      title: String(b.title ?? "").trim() || null,
+      city: name,
+      branch: `${slug}/${name}`,
       path: `/Users/me/.cos/worktrees/${project.name as string}-${projectId}/${name}`,
       base,
       base_ref: base === "origin" ? `origin/${project.base_branch as string}` : "HEAD",
@@ -576,7 +597,7 @@ export class FakeDaemon {
 
   // MARK: Agents
 
-  private setAgentState(agent: FakeAgent, state: string): void {
+  setAgentState(agent: FakeAgent, state: string): void {
     if (agent.state === state) return;
     const from = agent.state;
     agent.state = state;
@@ -811,7 +832,7 @@ export class FakeDaemon {
           !["done", "failed", "cancelled"].includes(r.state as string),
       )
     ) {
-      throw new HttpError(409, `${ws.title as string} already has a run going`);
+      throw new HttpError(409, `${(ws.title ?? ws.city) as string} already has a run going`);
     }
     const id = Math.max(...this.runs.map((r) => r.id as number)) + 1;
     const chief = this.id();
