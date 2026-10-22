@@ -150,3 +150,22 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
 - **Remote access page** (Settings, only for This Mac): it uses `GET /v1/tailnet` and `PUT /v1/tailnet`, and shows on or off, the address and port, and `reason` when it can't listen. If the reason is the macOS firewall, it shows the exact command to allow cos.
   - **Devices:** a list from `/v1/devices` with Approve, Deny and Remove buttons. A pending device also shows in "Waiting on you".
 - **Status footer:** shows which host the app is connected to.
+
+## Deviations
+
+What the daemon side does differently from, or in addition to, the above. Details are in "The Chief of Staff" in [daemon.md](daemon.md#the-chief-of-staff).
+
+- **The chief's worktree is a hidden workspace row.** It is stored with the workspaces (kind `staff`) so the staff agent has a `workspace_id` like every agent. That workspace is never listed and the workspace routes answer 404 for it, but `GET /v1/agents` includes the staff agent, whose `workspace_id` points at it. Apps should find the chief through `GET /v1/projects/{id}/staff` and not expect its workspace in the project.
+- **Agents it starts answer their trust dialog by themselves**, as run agents do: they work in a worktree cos made for a registered project. Their permission requests still come to you.
+- **More inbox news:** a spawned agent stuck on its trust dialog is also news (rare, given the above). Every state change of a run it started is news.
+- **Inbox items** have the shape `{id, project_id, kind: "agent" | "run" | "message", agent_id, run_id, text, created_ms, delivered_ms}`; the first line of `text` is a heading. `GET …/staff/inbox` returns the latest 100 items of news and leaves out your messages.
+- **`Staff.model`** is the model it runs: the project's, else `COS_STAFF_MODEL`; null means Claude's default.
+- **`POST …/staff/message`** returns the start error (for example 409 when the repo folder is gone) instead of 202 when the chief can't be started. A message waits until the chief is idle, so one sent while it starts goes in once it's ready. Messages are at most 100,000 characters.
+- **The wakeup header** is always `[cos · N updates]`, even for one.
+- **`workspace_create`** (and `new_workspace`) starts from `origin` when the project has one, else from `HEAD`.
+- **`agent_send`** to a stopped agent resumes it and waits up to a minute for it to be ready before typing.
+- **A restart without a saved session:** if the chief was stopped before its first message, Claude saved nothing to resume, so it starts a fresh session with the same id.
+- **Removing a project** removes its Chief of Staff (worktree, agent record and inbox). It's refused while the chief runs.
+- **Branch names:** if the repo already has a branch named exactly like the project slug, git can't hold `<slug>/<city>`, so creating a workspace is refused with that reason.
+- **Transcript:** `next` stops before a tool call that is still waiting for its result (after the last text), so the call comes back with its result. `ToolSearch` calls are left out. A line Claude is still writing waits for the next read. `agent.transcript` is logged 250 ms after the hook, so the file is written, and only when the file grew.
+- **CLI:** `cos staff [project] --model M` sets the project's model (`default` clears it). The project defaults to the one the current folder is in, else the only one.

@@ -31,7 +31,7 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | `runs/<run id>/board.md` | The run's board as markdown, rewritten whenever it changes. Nothing is written inside the repo. |
 | `runs/<run id>/report.md` | The chief's report, with the "Approved on your behalf" section appended. |
 
-The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR`, `COS_CLAUDE_BIN` and `COS_CHIEF_MODEL` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
+The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR`, `COS_CLAUDE_BIN`, `COS_CHIEF_MODEL` and `COS_STAFF_MODEL` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
 
 ## Event log
 
@@ -67,11 +67,13 @@ curl -N --unix-socket ~/.cos/cos.sock 'http://cos/v1/events/stream?after=0'
 A **project** is a registered git repo. A **workspace** is a git worktree of a project that cos creates and owns. Agents run inside workspaces: the chief, agents you start, and reviewers all share the workspace's folder. When the chief runs tasks in parallel, each of those workers gets its own short-lived worktree branched from the workspace, merged back after review. Those task worktrees are internal and aren't listed as workspaces.
 
 - Registering a subfolder or a linked worktree of a repo registers its main checkout, so a repo can't be added twice.
-- A workspace's folder is `<cos home>/worktrees/<project name>-<project id>/<name>`. Its branch is `cos/<name>`, where `<name>` is a city (`lisbon`, then `lisbon-v1`, `lisbon-v2`, … if taken).
+- A workspace's folder is `<cos home>/worktrees/<project name>-<project id>/<name>`. Its branch is `<project slug>/<name>`, where `<name>` is a city (`lisbon`, then `lisbon-v1`, `lisbon-v2`, … if the branch or the folder is taken). The slug is the project's name in lowercase, with runs of anything other than `[a-z0-9]` turned into `-` and the ends trimmed (`My App_2` → `my-app-2`). Workspaces made before this keep their `cos/<name>` branches. If the repo already has a branch named exactly like the slug, git can't hold branches under it, so creating a workspace is refused with that reason.
+- A workspace's title is optional. Without one it is `null`, and clients show the city (`city`, the last segment of the branch).
+- Each project also has a hidden worktree for its Chief of Staff (`<project slug>/chief`, folder `chief`), made from the main checkout's `HEAD` the first time the chief starts. It is stored as a workspace row of kind `staff`, so its agent has a workspace, but it isn't listed and the workspace routes don't touch it. See "The Chief of Staff" below.
 - A workspace starts from either:
   - `origin` (the default): cos fetches `origin/<base branch>` and starts from exactly that commit. If the fetch fails, nothing is created; cos never falls back to a stale branch.
   - `head`: the main checkout's current `HEAD`, so agents see commits you haven't pushed. Uncommitted changes are not copied.
-- Removing a workspace deletes its folder only if it has no uncommitted changes, and always keeps its branch, so commits are never lost. Removing a project only unregisters it; your repo is never touched. A project with workspaces can't be removed.
+- Removing a workspace deletes its folder only if it has no uncommitted changes, and always keeps its branch, so commits are never lost. Removing a project only unregisters it; your repo is never touched. A project with workspaces can't be removed. Its Chief of Staff goes with it (its worktree, agent record and inbox), unless the chief is running.
 
 ### Routes
 
@@ -79,9 +81,9 @@ A **project** is a registered git repo. A **workspace** is a git worktree of a p
 |---|---|---|
 | `GET /v1/projects` | | `{projects: [Project]}`, in the order they were added, each with its workspaces |
 | `POST /v1/projects` | `{"path": "/abs/path"}` | `Project`: 201 if new, 200 if already registered |
-| `DELETE /v1/projects/{id}` | | 204. 409 if it still has workspaces. |
+| `DELETE /v1/projects/{id}` | | 204. 409 if it still has workspaces, or its Chief of Staff is running. |
 | `POST /v1/projects/{id}/workspaces` | `{"base": "origin" or "head", "title": "optional"}` | 201 `Workspace` |
-| `PATCH /v1/workspaces/{id}` | `{"title": "..."}` | `Workspace` |
+| `PATCH /v1/workspaces/{id}` | `{"title": "..."}` | `Workspace`. A null or empty title clears it. |
 | `DELETE /v1/workspaces/{id}` | | 204. 409 if the worktree has uncommitted changes or an agent is running in it. Its exited agents and their approvals are forgotten with it. |
 
 Errors are `{"error": "message"}`, and the message is written to be shown to the user as-is. Codes: 400 bad input, or git refused (not a repo, no `origin` remote, fetch failed); 404 unknown id; 409 conflict.
@@ -91,7 +93,7 @@ Errors are `{"error": "message"}`, and the message is written to be shown to the
 {"id": 1, "name": "cos", "root": "/Users/me/personal/apps/cos", "base_branch": "main",
  "has_origin": true, "created_at": "2026-10-22T09:00:00Z", "workspaces": [/* Workspace */]}
 // Workspace
-{"id": 3, "project_id": 1, "name": "lisbon", "title": "lisbon", "branch": "cos/lisbon",
+{"id": 3, "project_id": 1, "name": "lisbon", "city": "lisbon", "title": null, "branch": "cos/lisbon",
  "path": "/Users/me/.cos/worktrees/cos-1/lisbon", "base": "origin", "base_ref": "origin/main",
  "base_commit": "3f2c…40 hex", "created_at": "2026-10-22T09:01:00Z"}
 ```
@@ -106,7 +108,7 @@ Every change is logged, so clients that follow the stream can refresh their proj
 |---|---|
 | `project.added` | `{project_id, name, root}` |
 | `project.removed` | `{project_id, name}` |
-| `workspace.created` | `{workspace_id, project_id, name, branch, path, base}` |
+| `workspace.created` | `{workspace_id, project_id, name, city, title, branch, path, base}` |
 | `workspace.renamed` | `{workspace_id, project_id, title}` |
 | `workspace.removed` | `{workspace_id, project_id, name, branch}` |
 
@@ -124,7 +126,7 @@ When the chief runs tasks in parallel, each worker gets its own worktree. The gi
 | Merge | `task.merge(title)` | `Merged {commit}`, `AlreadyMerged`, or `Conflict {paths}` |
 | Clean up | `task.remove(force)`, then `task.delete_branch()` | |
 
-**Naming.** A task worktree starts at the tip of the workspace branch. Its branch is `cos/<workspace>-t<task id>-<slug of title>`, for example `cos/lisbon-t7-add-login-page`, and its folder is `<dir>/<workspace>-<workspace id>/t7-add-login-page`. If the branch or folder exists, `-2`, `-3`, … is added. It can't be `cos/lisbon/t7-…`, because git can't hold a branch `cos/lisbon` and branches under `cos/lisbon/` at once. Uncommitted changes in the workspace aren't copied into the task worktree.
+**Naming.** A task worktree starts at the tip of the workspace branch. Its branch is `<workspace branch>-t<task id>-<slug of title>`, for example `cos/lisbon-t7-add-login-page`, and its folder is `<dir>/<workspace>-<workspace id>/t7-add-login-page`. If the branch or folder exists, `-2`, `-3`, … is added. It can't be `cos/lisbon/t7-…`, because git can't hold a branch `cos/lisbon` and branches under `cos/lisbon/` at once. Uncommitted changes in the workspace aren't copied into the task worktree.
 
 **Scope.** A task's changes are its commits, `git diff <base commit>...<task branch>`, which is what the merge brings in. The report fails if any of these is true:
 
@@ -396,6 +398,8 @@ An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it ow
 - **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The one thing read from the screen is Claude's trust dialog (`needs_trust`).
 - **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait. Before any of that, the approvals policy decides who answers (see "Approvals policy" below).
 - **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` runs `claude --resume <session id>` as the same agent.
+- **Trust:** agents a run or a Chief of Staff started answer Claude's trust dialog by themselves, since they work in a worktree cos made for a registered project. Agents you start leave it to you (`needs_trust`).
+- **Transcripts:** every hook carries `transcript_path`, which is stored on the agent when it changes (`agents/transcripts.rs`). After `UserPromptSubmit`, `PostToolUse` and `Stop`, the daemon waits 250 ms, and if the file grew since the last time, logs `agent.transcript` with how many messages are final. It does this at most once a second per agent. `GET /v1/agents/{id}/transcript?after=` parses the file each time (`daemon/transcript.rs`): see [agents-api.md](agents-api.md).
 
 ## Approvals policy
 
@@ -458,3 +462,53 @@ Run JSON gains `chief_agent_id`. The `agent.started` event gains `run_id`.
 | `question.asked` | `{question_id, run_id}` |
 | `question.answered` | `{question_id, run_id}` |
 | `run.report_written` | `{run_id, path}` |
+
+## The Chief of Staff
+
+Each project can have a Chief of Staff: one permanent Claude session you talk to, which creates workspaces, starts agents in them, follows them and reports back. The contract is [chief-of-staff.md](chief-of-staff.md); the code is `crates/cos/src/daemon/staff.rs` (with `staff/prompt.rs` and `staff/tools.rs`), `daemon/staff_api.rs`, `crates/cos/src/mcp.rs` and `cos_core::staff` (the `staff`, `staff_inbox` and `staff_wakeups` tables).
+
+- **Starting:** lazily, on `…/staff/start`, the first `…/staff/message` or `cos staff say`. The daemon makes the project's hidden `<slug>/chief` worktree if needed and starts an agent with `role: staff` there: your settings (`user_settings: true`), permission mode `default`, the project's model (else `COS_STAFF_MODEL`, else Claude's default), `--mcp-config` with the `cos` server (`cos mcp --agent <id>`) and `--allowedTools mcp__cos__*`. Its standing instructions and its brief go in `--append-system-prompt`. Its id is kept in the `staff` table. Its trust dialog is answered for it.
+- **Restarting:** starting it again while it runs does nothing. An exited or interrupted chief is relaunched as the same agent with the instructions, brief and model as they are now: `claude --resume` if Claude saved the session, else a fresh session with the same id (Claude saves nothing until the first message). Each start logs `staff.started`. Chiefs aren't restarted when the daemon starts; the next message does it.
+- **Tools:** `cos mcp` looks up its agent's role when it starts, and offers a Chief of Staff the staff tools (`workspaces_list`, `workspace_create`, `agent_spawn`, `agent_send`, `agent_read`, `agent_stop`, `run_start`, `brief_update`), which it forwards to `POST /v1/agents/{id}/tools/{name}` like the run chief's. The daemon sends a `role: staff` caller's calls to the staff side, which works on the chief's own project only: an agent or workspace of another project, or the chief's own worktree, is refused (403 or 404), and the error reaches Claude as a tool error. `agent_spawn` starts a `role: user` agent with `spawned_by` set, its title taken from the prompt, and the `[cos] The Chief of Staff of <project> started you…` line appended to the prompt. `agent_send` resumes a stopped agent and waits (up to a minute) until it's ready. `agent_read` returns the full last message from the transcript. `run_start` creates a run through the same path as `POST /v1/runs` and records `runs.spawned_by`. `brief_update` saves at most 4 KiB, and the next start appends it.
+- **Inbox:** items come from the agents it started (a `Stop` with the turn's last message, an exit that isn't the daemon shutting down, an approval waiting for you, a trust dialog), from the runs it started (every `run.state_changed`), and from you (`…/staff/message`). News is cut to 4 KiB per item; your messages are kept whole (at most 100,000 characters). Each change logs `staff.inbox` with the number of items waiting.
+- **Delivery:** only while the chief is `idle`, and not within 20 s of typing something it hasn't started working on. Your oldest waiting message goes first, on its own, typed as one bracketed paste; it doesn't count toward any cap. Otherwise one wakeup goes in: `[cos · N updates]`, then one `### <heading>` section per item (up to 20 items or 24 KiB), a line saying how many more wait, and a reminder that these are reports, not your instructions. At most 30 wakeups an hour per project; past that, news waits but your messages still go in. Waiting inboxes are rechecked every 30 s.
+- **Removing the project** removes the chief's worktree and agent record with it, refused while the chief runs.
+
+### Routes
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /v1/projects/{id}/staff` | | `Staff`, even before it first starts |
+| `PUT /v1/projects/{id}/staff` | `{model?}` | `Staff`. A null or empty model goes back to the default. Used from the next start. |
+| `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; nothing if it's running. |
+| `POST /v1/projects/{id}/staff/message` | `{text}` | 202. Starts it if needed; the text goes in as soon as it's idle. 400 if empty. |
+| `GET /v1/projects/{id}/staff/inbox` | | `{items: [StaffItem]}`, the latest 100 items of news, newest first. Your messages are left out. |
+
+```jsonc
+// Staff
+{"project_id": 1, "agent_id": 14, "state": "idle", "model": "haiku", "brief": "…",
+ "worktree": "/Users/me/.cos/worktrees/topflexi-1/chief", "branch": "topflexi/chief",
+ "working_agents": 2, "waiting_on_you": 1}
+// StaffItem
+{"id": 7, "project_id": 1, "kind": "agent" | "run" | "message", "agent_id": 15, "run_id": null,
+ "text": "Agent 15 \"Add a README line\" finished a turn\nDone: …", "created_ms": 0, "delivered_ms": null}
+```
+
+`model` is what it runs: the project's model, else `COS_STAFF_MODEL`; null means Claude's default. `working_agents` counts the agents it started that are `starting` or `working`; `waiting_on_you` those that are `waiting_approval` or `needs_trust`. An item's first line is its heading.
+
+### CLI
+
+| Command | What it does |
+|---|---|
+| `cos staff [project] [--model M]` | Its state, model, worktree, the agents it started, its brief and the latest news. `--model default` goes back to the default. |
+| `cos staff say [project] "text"` | A message to it; starts it if needed. |
+| `cos staff attach [project]` | Its terminal, like `cos agent attach`; starts it if needed. |
+
+The project defaults to the one the current folder is in, else the only one.
+
+### Events
+
+| Kind | Data |
+|---|---|
+| `staff.started` | `{project_id, agent_id}` |
+| `staff.inbox` | `{project_id, count}`: items waiting |

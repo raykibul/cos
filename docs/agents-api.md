@@ -39,7 +39,9 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
   "exited_ms": null,
   "exit_code": null,
   "last_message": "Done. I created hello.txt …",
-  "pending_approval_id": null
+  "pending_approval_id": null,
+  "spawned_by": null,
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-.cos-worktrees-app-1-lisbon/5504b543-….jsonl"
 }
 ```
 
@@ -57,7 +59,10 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 
 `last_message` is the `Stop` hook's `last_assistant_message`, cut to 2,000 characters.
 
+- **`role`:** `user` (you, or a Chief of Staff for you, started it), `chief`, `worker`, `reviewer`, or `staff` (a project's Chief of Staff).
 - **`run_id`:** the run's id (an integer), or null for agents you start.
+- **`spawned_by`:** the Chief of Staff agent that started it, else null.
+- **`transcript_path`:** Claude's transcript file, from the hooks; null until the first hook.
 - **`task_id`:** the task a worker or reviewer works on, else null.
 - **`cwd`:** only present when the agent runs somewhere other than the workspace folder: a worker or reviewer runs in its task's worktree.
 - **`permission_mode`:** `default`, `acceptEdits`, `plan` or `dontAsk`. `default` is started as `--permission-mode manual`, which is what the CLI now calls it.
@@ -79,6 +84,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 | `DELETE /v1/agents/{id}` | | 204. Forgets an exited agent. 409 if still running. |
 | `GET /v1/agents/{id}/screen` | | `{"rows", "cols", "text", "cursor": [row, col]}`: the current screen as plain text |
 | `GET /v1/agents/{id}/terminal` | | SSE stream of the terminal (below) |
+| `GET /v1/agents/{id}/transcript?after=N` | | `{"messages": [Message], "next": N}`: the chat read from Claude's transcript (below) |
 | `GET /v1/approvals?state=pending` | | `{"approvals": [Approval]}`, newest first. Without `state`, every approval. |
 | `GET /v1/approvals/{id}` | | Approval |
 | `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. You can answer any pending approval, including one routed to the chief. |
@@ -147,6 +153,25 @@ data: {"exit_code":0}
 - **`summary`:** the tool and its main argument, such as `Bash npm install left-pad` or `Write /path/to/file`.
 
 
+### Transcript
+
+`GET /v1/agents/{id}/transcript?after=N` reads the agent's transcript file and returns the messages numbered above `after` (default 0), oldest first, and `next`.
+
+```jsonc
+// Message
+{"n": 12, "role": "user" | "assistant", "kind": "text" | "tool" | "update",
+ "text": "markdown…",                                                  // text and update
+ "tool": {"name": "Bash", "summary": "npm test", "is_error": false},   // tool
+ "ts_ms": 1792611174811}
+```
+
+- **Numbers:** messages are numbered 1, 2, 3… in the order of the file, so the same file always gives the same numbers.
+- **`next`:** every message up to `next` is final. A tool call still waiting for its result comes after `next`, so asking again with `after=next` returns it again, with its result once it's in. Poll with `after=next` when `agent.transcript` arrives.
+- **Tool calls:** one message per call, with `summary` its main argument on one line (Bash's command, a file tool's path, a search's pattern, else its input as JSON, cut to 160 characters) and `is_error` from its result. `ToolSearch` (Claude loading deferred tools) is left out.
+- **`update`:** a user turn that starts with `[cos ·`, a Chief of Staff's inbox wakeup.
+- **Left out:** thinking, system and meta entries, subagents (sidechains), bookkeeping entries, local command echoes (`<command-…>`) and "[Request interrupted…]" markers. A bracketed paste is shown as the text you pasted. A line that isn't JSON, or isn't finished yet, is skipped.
+- **No file yet:** `{"messages": [], "next": 0}`.
+
 ## Events
 
 These go in the event log, so apps get them over `/v1/events/stream`. `data` holds the ids:
@@ -160,6 +185,7 @@ These go in the event log, so apps get them over `/v1/events/stream`. `data` hol
 | `approval.requested` | `{approval_id, agent_id, summary, tier, route}`. Not logged for `auto` approvals. |
 | `approval.decided` | `{approval_id, state, decided_by}`, plus `route: "auto"` for approvals Rust rules allowed |
 | `approval.routed` | `{approval_id, route, tier, run_id, agent_id, summary, reason}`: sent to the chief, or moved to you. The event's `run_id` is set. |
+| `agent.transcript` | `{agent_id, next}`: the transcript grew. At most once a second per agent. |
 
 Terminal output is never in the event log; it's too much data.
 
