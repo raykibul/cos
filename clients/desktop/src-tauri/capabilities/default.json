@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the UI in the main window may call: the cos commands, dragging the window by its title bar region, and checking focus.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-daemon-info",
+    "allow-daemon-request",
+    "allow-follow-events",
+    "allow-attach-terminal",
+    "allow-close-stream",
+    "allow-set-waiting-count",
+    "allow-notify",
+    "allow-reveal-path",
+    "allow-open-in-terminal",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-is-focused"
+  ]
+}
