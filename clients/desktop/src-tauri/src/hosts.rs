@@ -1,7 +1,8 @@
-//! The Macs the app can talk to: this one, through its socket, and the ones
-//! you saved, over Tailscale. Saved as `hosts.json` in the app's config
-//! folder, with the one you picked last. See "App: hosts and remote access"
-//! in `docs/chief-of-staff.md`.
+//! The machines the app can talk to: this Mac, through its socket, and the
+//! ones you saved (Macs or Linux servers), over Tailscale. Saved as
+//! `hosts.json` in the app's config folder, with the one you picked last and
+//! the name you gave this Mac, if any. See "App: hosts and remote access" in
+//! `docs/chief-of-staff.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -10,8 +11,10 @@ use serde::{Deserialize, Serialize};
 
 /// The id of this Mac, which always exists and can't be removed.
 pub(crate) const THIS_MAC: &str = "local";
+/// This Mac's name until you rename it.
 const THIS_MAC_NAME: &str = "This Mac";
-const MAX_NAME: usize = 64;
+/// The most characters in a host's name.
+const MAX_NAME: usize = 60;
 
 /// One host, as the UI sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,10 +26,11 @@ pub(crate) struct Host {
 }
 
 impl Host {
-    fn this_mac() -> Self {
+    /// This Mac, as "This Mac" until you rename it.
+    fn this_mac(name: Option<&str>) -> Self {
         Self {
             id: THIS_MAC.to_owned(),
-            name: THIS_MAC_NAME.to_owned(),
+            name: name.unwrap_or(THIS_MAC_NAME).to_owned(),
             address: None,
         }
     }
@@ -52,6 +56,9 @@ struct Saved {
     hosts: Vec<Host>,
     #[serde(default)]
     current: Option<String>,
+    /// The name you gave this Mac; none means "This Mac".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    this_mac: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +67,8 @@ pub(crate) struct Hosts {
     file: Option<PathBuf>,
     saved: Vec<Host>,
     current: String,
+    /// The name you gave this Mac, if any.
+    this_mac: Option<String>,
 }
 
 impl Hosts {
@@ -90,16 +99,21 @@ impl Hosts {
             .current
             .filter(|id| hosts.iter().any(|h| &h.id == id))
             .unwrap_or_else(|| THIS_MAC.to_owned());
+        let this_mac = saved
+            .this_mac
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty());
         Self {
             file,
             saved: hosts,
             current,
+            this_mac,
         }
     }
 
     pub(crate) fn list(&self) -> HostList {
         HostList {
-            hosts: std::iter::once(Host::this_mac())
+            hosts: std::iter::once(self.this_mac())
                 .chain(self.saved.iter().cloned())
                 .collect(),
             current: self.current.clone(),
@@ -107,12 +121,16 @@ impl Hosts {
     }
 
     pub(crate) fn current(&self) -> Host {
-        self.find(&self.current).unwrap_or_else(Host::this_mac)
+        self.find(&self.current).unwrap_or_else(|| self.this_mac())
+    }
+
+    fn this_mac(&self) -> Host {
+        Host::this_mac(self.this_mac.as_deref())
     }
 
     fn find(&self, id: &str) -> Option<Host> {
         if id == THIS_MAC {
-            return Some(Host::this_mac());
+            return Some(self.this_mac());
         }
         self.saved.iter().find(|h| h.id == id).cloned()
     }
@@ -120,15 +138,7 @@ impl Hosts {
     /// Saves a host. `address` is read as the CLI's `--host` reads it, so
     /// `my-mac` becomes `my-mac:7700`.
     pub(crate) fn add(&mut self, name: &str, address: &str) -> Result<Host, BridgeError> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(BridgeError::bad_request("give the Mac a name"));
-        }
-        if name.chars().count() > MAX_NAME {
-            return Err(BridgeError::bad_request(format!(
-                "a name can be at most {MAX_NAME} characters"
-            )));
-        }
+        let name = self.check_name(None, name)?;
         let address = parse_address(address)?;
         if let Some(existing) = self.saved.iter().find(|h| h.address.as_deref() == Some(&address)) {
             return Err(BridgeError::bad_request(format!(
@@ -150,6 +160,50 @@ impl Hosts {
         };
         self.change(|hosts| hosts.saved.push(host.clone()))?;
         Ok(host)
+    }
+
+    /// Renames a host, this Mac included; its id stays.
+    pub(crate) fn rename(&mut self, id: &str, name: &str) -> Result<Host, BridgeError> {
+        if self.find(id).is_none() {
+            return Err(BridgeError::bad_request(format!("no saved host {id}")));
+        }
+        let name = self.check_name(Some(id), name)?.to_owned();
+        self.change(|hosts| {
+            if id == THIS_MAC {
+                hosts.this_mac = Some(name);
+            } else if let Some(host) = hosts.saved.iter_mut().find(|h| h.id == id) {
+                host.name = name;
+            }
+        })?;
+        Ok(self.find(id).expect("the host is still there"))
+    }
+
+    /// `name` trimmed, if it's a valid name for host `id` (`None` for a new
+    /// one): not empty, at most [`MAX_NAME`] characters, and no other host's
+    /// name, ignoring case, since two hosts with one name can't be told
+    /// apart.
+    fn check_name<'a>(&self, id: Option<&str>, name: &'a str) -> Result<&'a str, BridgeError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(BridgeError::bad_request("give the machine a name"));
+        }
+        if name.chars().count() > MAX_NAME {
+            return Err(BridgeError::bad_request(format!(
+                "a name can be at most {MAX_NAME} characters"
+            )));
+        }
+        let lower = name.to_lowercase();
+        let taken = self
+            .list()
+            .hosts
+            .iter()
+            .any(|host| Some(host.id.as_str()) != id && host.name.to_lowercase() == lower);
+        if taken {
+            return Err(BridgeError::bad_request(format!(
+                "\"{name}\" is already the name of another machine"
+            )));
+        }
+        Ok(name)
     }
 
     /// Forgets a saved host. Removing the one in use switches to this Mac;
@@ -201,6 +255,7 @@ impl Hosts {
         let saved = Saved {
             hosts: self.saved.clone(),
             current: Some(self.current.clone()),
+            this_mac: self.this_mac.clone(),
         };
         let json = serde_json::to_vec_pretty(&saved).map_err(|error| BridgeError::io(error.to_string()))?;
         // Write then rename, so a crash never leaves half a file.
@@ -247,7 +302,7 @@ pub(crate) mod tests {
         assert_eq!(
             hosts.list(),
             HostList {
-                hosts: vec![Host::this_mac()],
+                hosts: vec![Host::this_mac(None)],
                 current: THIS_MAC.into()
             }
         );
@@ -291,7 +346,7 @@ pub(crate) mod tests {
         assert!(!hosts.remove("h1").unwrap());
         assert_eq!(
             Hosts::load(Some(scratch.file())).list().hosts,
-            vec![Host::this_mac()]
+            vec![Host::this_mac(None)]
         );
         // Ids aren't reused while a later one exists, and start again after.
         assert_eq!(hosts.add("Studio", "studio").unwrap().id, "h1");
@@ -306,7 +361,7 @@ pub(crate) mod tests {
             ("Studio", ""),
             ("Studio", "http://studio:7700"),
             ("Studio", "studio:0"),
-            (&"x".repeat(65), "studio"),
+            (&"x".repeat(61), "studio"),
         ] {
             let error = hosts.add(name, address).unwrap_err();
             assert_eq!(error.kind, ErrorKind::BadRequest, "{name:?} {address:?}");
@@ -321,7 +376,73 @@ pub(crate) mod tests {
         assert_eq!(hosts.remove(THIS_MAC).unwrap_err().kind, ErrorKind::BadRequest);
         assert_eq!(hosts.remove("h9").unwrap_err().kind, ErrorKind::BadRequest);
         assert_eq!(hosts.select("h9").unwrap_err().kind, ErrorKind::BadRequest);
-        assert_eq!(hosts.select(THIS_MAC).unwrap(), Host::this_mac());
+        assert_eq!(hosts.select(THIS_MAC).unwrap(), Host::this_mac(None));
+    }
+
+    #[test]
+    fn renames_hosts_and_this_mac_and_keeps_the_names() {
+        let scratch = Scratch::new();
+        let mut hosts = Hosts::load(Some(scratch.file()));
+        hosts.add("Studio", "studio").unwrap();
+        hosts.select("h1").unwrap();
+
+        let studio = hosts.rename("h1", "  Build box ").unwrap();
+        assert_eq!(studio.name, "Build box");
+        assert_eq!(studio.address.as_deref(), Some("studio:7700"));
+        let mine = hosts.rename(THIS_MAC, "MacBook Air").unwrap();
+        assert_eq!(mine.id, THIS_MAC, "this Mac keeps its id");
+        assert_eq!(mine.address, None);
+        assert_eq!(hosts.current().name, "Build box");
+
+        // A new launch reads the same names.
+        let again = Hosts::load(Some(scratch.file()));
+        assert_eq!(
+            again
+                .list()
+                .hosts
+                .iter()
+                .map(|h| (h.id.as_str(), h.name.as_str()))
+                .collect::<Vec<_>>(),
+            [("local", "MacBook Air"), ("h1", "Build box")]
+        );
+        // Renaming a host to its own name, in another case, is fine.
+        assert_eq!(hosts.rename("h1", "build BOX").unwrap().name, "build BOX");
+    }
+
+    #[test]
+    fn refuses_bad_and_duplicate_names() {
+        let mut hosts = Hosts::load(None);
+        hosts.add("Studio", "studio").unwrap();
+        hosts.add("Mini", "mini").unwrap();
+        for name in ["", "   ", &"x".repeat(61)] {
+            let error = hosts.rename("h1", name).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::BadRequest, "{name:?}");
+        }
+        assert!(hosts.rename("h1", &"x".repeat(60)).is_ok());
+
+        let error = hosts.rename("h2", "this mac").unwrap_err();
+        assert_eq!(
+            error.message,
+            "\"this mac\" is already the name of another machine"
+        );
+        let error = hosts.rename(THIS_MAC, " MINI ").unwrap_err();
+        assert!(error.message.contains("another machine"), "{}", error.message);
+        // Adding checks the same way.
+        let error = hosts.add("mini", "elsewhere").unwrap_err();
+        assert!(error.message.contains("another machine"), "{}", error.message);
+        assert_eq!(
+            hosts.rename("h9", "Nine").unwrap_err().kind,
+            ErrorKind::BadRequest
+        );
+        assert_eq!(
+            hosts
+                .list()
+                .hosts
+                .iter()
+                .map(|h| h.name.as_str())
+                .collect::<Vec<_>>(),
+            ["This Mac", &"x".repeat(60), "Mini"]
+        );
     }
 
     #[test]

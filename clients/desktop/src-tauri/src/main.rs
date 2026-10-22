@@ -28,6 +28,7 @@ fn main() {
             commands::close_stream,
             commands::hosts_list,
             commands::host_add,
+            commands::host_rename,
             commands::host_remove,
             commands::host_select,
             commands::tailnet_peers,
