@@ -3,6 +3,9 @@
 # testing install.sh offline (`make install-test`):
 #
 #   <out>/latest/download/{cos-<target>.tar.gz,SHA256SUMS}
+#   <out>/latest/tag                   v<version>: `cos upgrade` reads the
+#                                      latest tag here from a file:// base,
+#                                      where GitHub has a redirect
 #   <out>/download/v<version>/…        the same files
 #   <out>/download/v0.0.0-bad/…        with a wrong checksum
 #
@@ -21,6 +24,7 @@ for target in "$@"; do
     sh "$here/package-release.sh" "dist/cos-$version-$target" "$target" "$latest" >/dev/null
 done
 (cd "$latest" && sha256sum cos-*.tar.gz >SHA256SUMS)
+echo "v$version" >"$out/latest/tag"
 
 mkdir -p "$out/download"
 cp -R "$latest" "$out/download/v$version"

@@ -10,7 +10,8 @@
 //! `cos env` sets the environment variables agents get, globally or per project.
 //! `cos judge` shows and switches jev, which judges in shadow mode.
 //! `cos try` runs one prompt through Claude Code without the daemon, and
-//! `cos sessions` lists the Claude sessions running on this machine. See
+//! `cos sessions` lists the Claude sessions running on this machine.
+//! `cos upgrade` replaces this binary with a newer release. See
 //! `docs/proposal.md` for where this is going.
 
 mod agents_cmd;
@@ -34,6 +35,7 @@ mod staff_cmd;
 mod tailscale;
 mod try_cmd;
 mod try_pty;
+mod upgrade;
 mod which;
 
 use std::io::IsTerminal;
@@ -126,6 +128,8 @@ enum Command {
     /// jev, the fast judgment layer, in shadow mode: status, stats, a
     /// per-project switch and a test call.
     Judge(judge_cmd::JudgeArgs),
+    /// Upgrade cos to the latest release, with the Mac app, and restart the daemon on it.
+    Upgrade(upgrade::UpgradeArgs),
     /// Run by a chief's or Chief of Staff's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
     #[command(hide = true)]
     Mcp(mcp::McpArgs),
@@ -155,6 +159,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let home = CosHome::from_env()?;
+    if cli.host.is_some() && matches!(cli.command, Command::Upgrade(_)) {
+        anyhow::bail!(
+            "`cos upgrade` upgrades this machine only, so it doesn't take --host (or COS_HOST): \
+             run `cos upgrade` on that machine"
+        );
+    }
     if let Some(host) = cli
         .host
         .as_deref()
@@ -205,6 +215,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Staff(args) => staff_cmd::staff(&home, args).await,
         Command::Env(args) => env_cmd::env(&home, args).await,
         Command::Judge(args) => judge_cmd::judge(&home, args).await,
+        Command::Upgrade(args) => upgrade::upgrade(&home, args).await,
         Command::Mcp(args) => mcp::run(&home, args).await,
     }
 }

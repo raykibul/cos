@@ -20,12 +20,16 @@
 #   COS_APP_DIR=/some/dir       where to put cos.app (default /Applications,
 #                               falling back to ~/Applications)
 #   COS_APP_NO_QUIT=1           don't quit a running app (tests set it)
+#   COS_NO_SERVICE_HINT=1       don't print how to restart the daemon's
+#                               service (`cos upgrade` sets it, and restarts
+#                               the service itself)
 #   COS_DOWNLOAD_BASE=URL       where releases live (default
 #                               https://github.com/raykibul/cos/releases);
 #                               tests point it at a local folder (file://)
 #
 # It never restarts a running daemon: if `cos daemon install` set one up, it
-# prints the command to restart it on the new version.
+# prints the command to restart it on the new version. Once cos is
+# installed, `cos upgrade` runs this script for you and restarts the daemon.
 set -eu
 
 base="${COS_DOWNLOAD_BASE:-https://github.com/raykibul/cos/releases}"
@@ -57,7 +61,8 @@ Installs or upgrades cos from its GitHub releases.
   --with-cli    with --app, the CLI as well
 
 Settings: COS_VERSION, COS_INSTALL_DIR, COS_APP_DIR, COS_APP_NO_QUIT,
-COS_DOWNLOAD_BASE. See the top of install.sh.
+COS_NO_SERVICE_HINT, COS_DOWNLOAD_BASE. See the top of install.sh.
+Once cos is installed, \`cos upgrade\` upgrades it (and the app) for you.
 EOF
 }
 
@@ -119,6 +124,7 @@ fetch() {
 # Prints how to restart the daemon's service on the new binary, if
 # `cos daemon install` set one up.
 service_hint() {
+    [ "${COS_NO_SERVICE_HINT:-}" != 1 ] || return 0
     case "$(uname -s)" in
         Linux)
             unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/cos.service"
