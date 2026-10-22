@@ -21,6 +21,12 @@
 //!   returned (`error: …` for a tool error).
 //! - anything else: replies `echo: <prompt>`.
 //!
+//! **Transcript:** like Claude, it keeps one JSONL file per session, at
+//! `$COS_FAKE_CLAUDE_TRANSCRIPTS/<id>.jsonl` (else under the temp folder),
+//! and passes it to every hook as `transcript_path`: each prompt (a
+//! multi-line one wrapped in `<pasted_content>` as a paste), each tool call
+//! with its result, and each reply.
+//!
 //! `--resume <id>` continues session `<id>`; its `SessionStart` says
 //! `resume`. `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
 //! shows the trust dialog, reading keys one at a time like the real CLI: the
@@ -35,6 +41,7 @@
 //! `--resume`. A bracketed paste arrives as one message, as in the real CLI.
 
 use std::io::{BufRead, Read, Write};
+use std::path::PathBuf;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -73,6 +80,7 @@ pub(crate) fn run(args: &[String]) {
 
     let mut session = Session {
         script: Script::from_env(&id, role),
+        transcript: transcript_path(&id),
         id,
         cwd: std::env::current_dir().unwrap_or_default().display().to_string(),
         settings,
@@ -116,10 +124,17 @@ struct Session {
     input: Receiver<String>,
     mcp: Option<Server>,
     tool_uses: u32,
+    transcript: PathBuf,
 }
 
 impl Session {
     fn turn(&mut self, prompt: &str) {
+        let typed = if prompt.contains('\n') {
+            format!("<pasted_content id=\"fake\">\n{prompt}\n</pasted_content id=\"fake\">")
+        } else {
+            prompt.to_owned()
+        };
+        self.record("user", json!(typed));
         self.hook("UserPromptSubmit", json!({ "prompt": prompt }));
         if prompt.contains("hang forever") {
             show("working forever…");
@@ -143,6 +158,7 @@ impl Session {
             format!("echo: {prompt}")
         };
         show(&format!("⏺ {reply}"));
+        self.record("assistant", json!([{ "type": "text", "text": reply }]));
         self.hook(
             "Stop",
             json!({ "last_assistant_message": reply, "stop_hook_active": false }),
@@ -168,10 +184,12 @@ impl Session {
             "tool_input": arguments,
             "tool_use_id": format!("toolu_mcp_{}", self.tool_uses),
         });
+        self.record_tool_use(&tool_use);
         self.hook("PreToolUse", tool_use.clone());
         let reply = server
             .call(tool, arguments)
             .unwrap_or_else(|error| format!("error: {error}"));
+        self.record_tool_result(&tool_use, &reply, reply.starts_with("error:"));
         let mut post = tool_use;
         post["tool_response"] = json!(reply);
         self.hook("PostToolUse", post);
@@ -182,7 +200,8 @@ impl Session {
         let tool = json!({ "tool_name": tool_name, "tool_input": tool_input });
         let mut pre = tool.clone();
         pre["tool_use_id"] = json!("toolu_1");
-        self.hook("PreToolUse", pre);
+        self.record_tool_use(&pre);
+        self.hook("PreToolUse", pre.clone());
 
         let what = match tool_input.get("command").and_then(Value::as_str) {
             Some(command) => format!("run {command}"),
@@ -194,6 +213,7 @@ impl Session {
             None => self.answer_in_terminal(),
         };
         let allowed = outcome.starts_with("allowed");
+        self.record_tool_result(&pre, &outcome, !allowed);
         if allowed {
             let mut post = tool;
             post["tool_use_id"] = json!("toolu_1");
@@ -250,6 +270,48 @@ impl Session {
         }
     }
 
+    /// Appends an entry to the transcript.
+    fn record(&self, kind: &str, content: Value) {
+        let entry = json!({
+            "type": kind,
+            "isSidechain": false,
+            "sessionId": self.id,
+            "message": { "role": kind, "content": content },
+        });
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.transcript);
+        if let Ok(mut file) = file {
+            let _ = writeln!(file, "{entry}");
+        }
+    }
+
+    /// `tool` is a hook's `{tool_name, tool_input, tool_use_id}`.
+    fn record_tool_use(&self, tool: &Value) {
+        self.record(
+            "assistant",
+            json!([{
+                "type": "tool_use",
+                "id": tool["tool_use_id"],
+                "name": tool["tool_name"],
+                "input": tool["tool_input"],
+            }]),
+        );
+    }
+
+    fn record_tool_result(&self, tool: &Value, result: &str, is_error: bool) {
+        self.record(
+            "user",
+            json!([{
+                "type": "tool_result",
+                "tool_use_id": tool["tool_use_id"],
+                "content": result,
+                "is_error": is_error,
+            }]),
+        );
+    }
+
     /// Runs a hook to completion and returns what it printed.
     fn hook(&self, event: &str, extra: Value) -> String {
         let Some(mut child) = self.start_hook(event, extra) else {
@@ -269,7 +331,7 @@ impl Session {
             "hook_event_name": event,
             "session_id": self.id,
             "cwd": self.cwd,
-            "transcript_path": format!("/fake/{}.jsonl", self.id),
+            "transcript_path": self.transcript.display().to_string(),
         });
         if let (Some(input), Value::Object(extra)) = (input.as_object_mut(), extra) {
             input.extend(extra);
@@ -287,6 +349,14 @@ impl Session {
         }
         Some(child)
     }
+}
+
+/// Where the session's transcript goes; the folder is made if needed.
+fn transcript_path(id: &str) -> PathBuf {
+    let dir = std::env::var_os("COS_FAKE_CLAUDE_TRANSCRIPTS")
+        .map_or_else(|| std::env::temp_dir().join("cos-fake-claude"), PathBuf::from);
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("{id}.jsonl"))
 }
 
 /// Kills a hook and everything it started, as Claude does when it gives up on one.

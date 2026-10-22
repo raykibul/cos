@@ -6,6 +6,7 @@
 //! - `POST /v1/agents/{id}/input|keys|resize|trust|stop|resume`
 //! - `DELETE /v1/agents/{id}`
 //! - `GET /v1/agents/{id}/screen` and `GET /v1/agents/{id}/terminal` (SSE)
+//! - `GET /v1/agents/{id}/transcript?after=`
 //! - `GET /v1/approvals?state=`, `GET /v1/approvals/{id}`, `POST /v1/approvals/{id}`
 
 use std::convert::Infallible;
@@ -28,6 +29,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::agents::{AgentError, Screen, StartAgent, TerminalView};
+use super::transcript::Transcript;
 use super::api::{ApiError, AppState};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,6 +90,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/agents/{id}/resume", post(resume))
         .route("/v1/agents/{id}/screen", get(screen))
         .route("/v1/agents/{id}/terminal", get(terminal))
+        .route("/v1/agents/{id}/transcript", get(transcript))
         .route("/v1/approvals", get(list_approvals))
         .route("/v1/approvals/{id}", get(get_approval).post(answer))
 }
@@ -96,6 +99,12 @@ pub(crate) fn routes() -> Router<AppState> {
 struct AgentsQuery {
     workspace_id: Option<i64>,
     state: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TranscriptQuery {
+    #[serde(default)]
+    after: usize,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +205,18 @@ async fn resume(State(state): State<AppState>, id: Id) -> Result<(StatusCode, Js
 async fn remove_agent(State(state): State<AppState>, id: Id) -> Result<StatusCode, ApiError> {
     state.agents.remove(agent_id(id)?)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The agent's chat, read from Claude's transcript: the messages after
+/// `after`, and `next` to ask from next time.
+async fn transcript(
+    State(state): State<AppState>,
+    id: Id,
+    query: Result<Query<TranscriptQuery>, QueryRejection>,
+) -> Result<Json<Transcript>, ApiError> {
+    let id = agent_id(id)?;
+    let Query(query) = query.map_err(bad_query)?;
+    Ok(Json(state.agents.transcript(id, query.after).await?))
 }
 
 async fn screen(State(state): State<AppState>, id: Id) -> Result<Json<Screen>, ApiError> {

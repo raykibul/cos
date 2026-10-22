@@ -12,6 +12,7 @@ use serde::Deserialize;
 use super::{Client, find, read_json, sse_data};
 use crate::daemon::agents::{Screen, StartAgent};
 use crate::daemon::agents_api::{AgentsPage, Answer, ApprovalsPage, Input, Keys, Resize, Verdict};
+use crate::daemon::transcript::Transcript;
 
 impl Client {
     pub(crate) async fn agents(&self, workspace_id: Option<i64>) -> anyhow::Result<Vec<Agent>> {
@@ -74,6 +75,12 @@ impl Client {
 
     pub(crate) async fn screen(&self, id: i64) -> anyhow::Result<Screen> {
         self.get_json(&format!("/v1/agents/{id}/screen")).await
+    }
+
+    /// The agent's chat from Claude's transcript, the messages after `after`.
+    pub(crate) async fn transcript(&self, id: i64, after: usize) -> anyhow::Result<Transcript> {
+        self.get_json(&format!("/v1/agents/{id}/transcript?after={after}"))
+            .await
     }
 
     /// The agent's terminal: a snapshot, then output as it comes.

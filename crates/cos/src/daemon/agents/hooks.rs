@@ -71,6 +71,7 @@ impl Inner {
         if let Some(running) = live.terminals.get_mut(&id) {
             running.heard = true;
         }
+        self.note_transcript(&mut live, id, &hook)?;
         match hook.event.as_str() {
             "SessionStart" => {
                 let state = self.agents.get(id)?.map(|agent| agent.state);

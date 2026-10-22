@@ -16,6 +16,7 @@ mod approvals;
 mod hooks;
 #[cfg(test)]
 pub(crate) mod tests;
+mod transcripts;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -35,6 +36,7 @@ use cos_harness::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use super::transcript::{self, Transcript};
 use crate::home::CosHome;
 
 const DEFAULT_ROWS: u16 = 40;
@@ -123,7 +125,11 @@ impl AgentConfig {
             hook_command: format!("{} hook", crate::try_pty::shell_quote(&fake)),
             claude: fake,
             hook_socket: dir.join("hooks.sock"),
-            env: Vec::new(),
+            // The fake's transcripts stay in the test's folder.
+            env: vec![(
+                "COS_FAKE_CLAUDE_TRANSCRIPTS".into(),
+                dir.join("transcripts").display().to_string(),
+            )],
             approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: Duration::from_secs(2),
             shutdown_timeout: Duration::from_secs(2),
@@ -242,6 +248,8 @@ struct Live {
     waiting: HashMap<i64, hooks::Waiting>,
     /// Approval ids by the hook id of their waiting hook.
     hook_approvals: HashMap<u64, i64>,
+    /// Each agent's transcript, by agent id.
+    transcripts: HashMap<i64, transcripts::Note>,
     /// The daemon is stopping: no new agents.
     stopping: bool,
 }
@@ -464,6 +472,7 @@ impl AgentManager {
             )));
         }
         live.terminals.remove(&id);
+        live.transcripts.remove(&id);
         self.inner.agents.remove(id)?;
         Ok(())
     }
@@ -489,6 +498,21 @@ impl AgentManager {
                 cursor: [0, 0],
             },
         })
+    }
+
+    /// The agent's transcript as chat messages, those after `after` (see
+    /// [`transcript`]). Empty while Claude hasn't said where it is.
+    pub(crate) async fn transcript(&self, id: i64, after: usize) -> Result<Transcript, AgentError> {
+        let agent = self.inner.agent(id)?;
+        let Some(path) = agent.transcript_path else {
+            return Ok(Transcript::default());
+        };
+        let read = tokio::task::spawn_blocking(move || transcript::read(&path))
+            .await
+            .map_err(|error| AgentError::Failed(error.to_string()))?;
+        let transcript =
+            read.map_err(|error| AgentError::Failed(format!("could not read agent {id}'s transcript: {error}")))?;
+        Ok(transcript.after(after))
     }
 
     /// The terminal for someone who starts watching it.

@@ -347,6 +347,98 @@ async fn an_agent_runs_stops_and_resumes() {
 }
 
 #[tokio::test]
+async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
+    use crate::daemon::transcript::{MessageKind, Speaker};
+
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+    let agent = fixture.start_agent("hello").await;
+    let agent = fixture.until_idle_with(agent.id, "echo: hello").await;
+    let path = agent.transcript_path.clone().expect("the hooks gave a transcript path");
+    assert!(path.starts_with(fixture.dir.path()), "{}", path.display());
+
+    let transcript = client.transcript(agent.id, 0).await.unwrap();
+    let rows: Vec<(Speaker, MessageKind, Option<&str>)> = transcript
+        .messages
+        .iter()
+        .map(|message| (message.role, message.kind, message.text.as_deref()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (Speaker::User, MessageKind::Text, Some("hello")),
+            (Speaker::Assistant, MessageKind::Text, Some("echo: hello")),
+        ]
+    );
+    assert_eq!(transcript.next, 2);
+
+    // A multi-line message is pasted, and a tool call has its result folded in.
+    fixture.manager.send_message(agent.id, "first\nsecond").await.unwrap();
+    fixture.until_idle_with(agent.id, "echo: first\nsecond").await;
+    client.say(agent.id, "ask:Bash ls".into()).await.unwrap();
+    let approval = fixture.pending_approval(agent.id).await;
+    client
+        .answer_approval(approval.id, false, None)
+        .await
+        .unwrap();
+    until("the denied call's reply", || async {
+        let transcript = client.transcript(agent.id, 2).await.ok()?;
+        (transcript.next == 7).then_some(transcript)
+    })
+    .await;
+    let later = client.transcript(agent.id, 2).await.unwrap();
+    assert_eq!(later.messages.first().map(|message| message.n), Some(3));
+    assert_eq!(later.messages[0].text.as_deref(), Some("first\nsecond"));
+    assert_eq!(later.messages[2].text.as_deref(), Some("ask:Bash ls"));
+    let call = later.messages[3].tool.as_ref().expect("a tool row");
+    assert_eq!((call.name.as_str(), call.summary.as_str(), call.is_error), ("Bash", "ls", true));
+
+    // Logged once a second at most, and only when the file grew.
+    until("agent.transcript up to 7", || async {
+        fixture
+            .log
+            .after(0, 1000)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|event| event.kind == kind::AGENT_TRANSCRIPT)
+            .filter(|event| event.data == json!({ "agent_id": agent.id, "next": 7 }))
+    })
+    .await;
+    let logged: Vec<_> = fixture
+        .log
+        .after(0, 1000)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == kind::AGENT_TRANSCRIPT)
+        .collect();
+    for pair in logged.windows(2) {
+        let gap = pair[1].ts.duration_since(pair[0].ts);
+        assert!(gap.as_millis() >= 900, "{logged:?}");
+    }
+
+    // Unknown agent: 404. No transcript yet: empty.
+    assert_eq!(status(client.transcript(999, 0).await.unwrap_err()), 404);
+    let agents = Agents::new(fixture.store.clone(), fixture.log.clone());
+    let quiet = agents
+        .create(NewAgent {
+            workspace_id: fixture.workspace_id,
+            run_id: None,
+            role: Role::User,
+            title: None,
+            session_id: "quiet".into(),
+            model: None,
+            permission_mode: "default".into(),
+            user_settings: true,
+            rows: 40,
+            cols: 120,
+        })
+        .unwrap();
+    let empty = client.transcript(quiet.id, 0).await.unwrap();
+    assert_eq!((empty.messages.len(), empty.next), (0, 0));
+}
+
+#[tokio::test]
 async fn approvals_are_answered_through_cos() {
     let fixture = Fixture::start().await;
     let client = &fixture.client;
