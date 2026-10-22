@@ -3,7 +3,8 @@
 // newest first. Agents and runs are on the workspace page, which keeps the
 // sidebar short (docs/chief-of-staff.md, "App").
 
-import { ChevronRight, GitBranch, LayoutGrid, MoreHorizontal, Plus } from "lucide-react";
+import { ChevronRight, GitBranch, LayoutGrid, MoreHorizontal, Plus, Variable } from "lucide-react";
+import { envHint } from "../../api/env";
 import { type Project, type Workspace, workspaceName } from "../../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
 import { samePage } from "../../app/ui";
@@ -12,6 +13,7 @@ import {
   activityOf,
   currentRun,
   projectActivity,
+  projectEnvNames,
   projectOfPage,
   workspaceAgents,
   workspaceOfPage,
@@ -28,6 +30,7 @@ export function ProjectSection({ project }: { project: Project }) {
   const explicit = useUi((s) => s.expanded[project.id]);
   const inside = useCos((s) => projectOfPage(s, page) === project.id);
   const activity = useCos((s) => projectActivity(s, project));
+  const env = envHint(useCos((s) => projectEnvNames(s, project.id)));
   const open = explicit ?? inside;
   const selected = samePage(page, { kind: "chief", id: project.id });
   const workspaces = workspacesNewestFirst(project);
@@ -51,6 +54,12 @@ export function ProjectSection({ project }: { project: Project }) {
       label: "All workspaces",
       icon: LayoutGrid,
       onSelect: () => ui.navigate({ kind: "project", id: project.id }),
+    },
+    {
+      label: "Environment…",
+      icon: Variable,
+      detail: env ?? undefined,
+      onSelect: () => ui.navigate({ kind: "projectEnv", id: project.id }),
     },
     "separator",
     ...folderItems(cos, project.root),
@@ -78,7 +87,7 @@ export function ProjectSection({ project }: { project: Project }) {
         <button
           type="button"
           onClick={select}
-          title={`Chief of Staff for ${project.name}\n${project.root}`}
+          title={`Chief of Staff for ${project.name}\n${project.root}${env ? `\n${env}` : ""}`}
           className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <ChiefMark />

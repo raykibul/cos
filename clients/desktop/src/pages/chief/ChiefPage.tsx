@@ -13,14 +13,19 @@ import {
   Sparkles,
   Square,
   SquareTerminal,
+  UserRound,
+  Variable,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CLAUDE_CONFIG_DIR, envHint } from "../../api/env";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
 import { models, pluralize } from "../../domain/labels";
 import { type PendingMessage, conversationItems } from "../../domain/transcript";
 import {
   chiefRequests,
+  claudeAccount,
+  projectEnvNames,
   project as projectOf,
   spawnedAgents,
   staffAgent,
@@ -83,6 +88,9 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   const inbox = useCos((s) => s.inboxes[projectId]);
   const view = useCos((s) => ({ agents: s.agents, approvals: s.approvals, staffs: s.staffs }));
   const terminalOpen = useUi((s) => s.chiefTerminal);
+  const envNames = useCos((s) => projectEnvNames(s, projectId));
+  const account = useCos((s) => claudeAccount(s, projectId));
+  const env = envHint(envNames);
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const [jumps, setJumps] = useState(0);
@@ -169,6 +177,12 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
       icon: LayoutGrid,
       onSelect: () => ui.navigate({ kind: "project", id: projectId }),
     },
+    {
+      label: "Environment…",
+      icon: Variable,
+      detail: "Variables for this project's agents",
+      onSelect: () => ui.navigate({ kind: "projectEnv", id: projectId }),
+    },
     ...(staff?.worktree ? folderItems(cos, staff.worktree) : []),
   ];
 
@@ -181,18 +195,39 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         >
           <ChiefMark size="md" />
           <div data-tauri-drag-region className="min-w-0 flex-1">
-            <h1 className="truncate text-[13.5px] leading-tight font-semibold text-ink">
-              Chief of Staff
-              <span className="font-normal text-ink-3"> · {projectName}</span>
-            </h1>
-            <p
-              className="mt-0.5 flex items-center gap-1.5 truncate text-[12px] leading-tight text-ink-3"
-              role="status"
-            >
-              <StateDot label={label} className="size-1.5" />
-              {label.title}
-              {working > 0 ? <span>· {pluralize(working, "agent")} working</span> : null}
-            </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-[13.5px] leading-tight font-semibold text-ink">
+                Chief of Staff
+                <span className="font-normal text-ink-3"> · {projectName}</span>
+              </h1>
+              {account ? (
+                <span
+                  aria-label={`Claude account: ${account.account}`}
+                  title={`The Claude account this project's agents use, from ${CLAUDE_CONFIG_DIR}${account.inherited ? " for all projects" : ""}`}
+                  className="inline-flex h-[18px] min-w-0 shrink items-center gap-1 rounded-full bg-subtle px-1.5 font-mono text-[10.5px] text-ink-3"
+                >
+                  <UserRound className="size-2.5 shrink-0" strokeWidth={2} aria-hidden />
+                  <span className="truncate">{account.account}</span>
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] leading-tight text-ink-3">
+              <p className="flex shrink-0 items-center gap-1.5" role="status">
+                <StateDot label={label} className="size-1.5" />
+                {label.title}
+                {working > 0 ? <span>· {pluralize(working, "agent")} working</span> : null}
+              </p>
+              {env ? (
+                <button
+                  type="button"
+                  onClick={() => ui.navigate({ kind: "projectEnv", id: projectId })}
+                  title={`Environment for ${projectName}'s agents:\n${envNames.join("\n")}`}
+                  className="min-w-0 truncate rounded px-0.5 hover:bg-subtle hover:text-ink-2"
+                >
+                  · {env}
+                </button>
+              ) : null}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <Menu

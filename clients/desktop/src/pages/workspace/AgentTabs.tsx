@@ -4,12 +4,13 @@
 
 import { Maximize2, Play, Square } from "lucide-react";
 import { useState } from "react";
+import { sortedNames } from "../../api/env";
 import type { Agent, Approval } from "../../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../../app/context";
 import { agentLabel, canResume, isAlive } from "../../domain/labels";
 import { agentNeedsYou, pendingApproval } from "../../store/selectors";
 import { AgentTerminal } from "../../terminal/AgentTerminal";
-import { ApprovalBanner, TrustBanner } from "../../screens/AgentPage";
+import { ApprovalBanner, EnvNames, TrustBanner } from "../../screens/AgentPage";
 import { ChiefMark } from "../../screens/sidebar/ProjectSection";
 import { cx } from "../../ui/cx";
 import { relativeTime } from "../../ui/format";
@@ -56,7 +57,7 @@ export function AgentTabs({
               role="tab"
               aria-selected={active}
               onClick={() => setPicked(agent.id)}
-              title={`${agent.title}: ${label.title}`}
+              title={`${agent.title}: ${label.title}${agent.envNames.length ? `\nenv: ${sortedNames(agent.envNames).join(", ")}` : ""}`}
               className={cx(
                 "relative flex h-9 max-w-[240px] shrink-0 items-center gap-2 rounded-t-lg px-3 text-[13px] transition-colors",
                 active
@@ -133,6 +134,7 @@ function AgentPanel({
           </span>
         ) : null}
         <span>· {relativeTime(agent.lastActivityMs ?? agent.startedMs, now)}</span>
+        <EnvNames names={agent.envNames} />
         <div className="ml-auto flex items-center gap-1.5">
           {alive ? (
             <Button

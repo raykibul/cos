@@ -8,6 +8,7 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 import { useState } from "react";
+import { envHint, sortedNames } from "../api/env";
 import { type Agent, type Approval, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos } from "../app/context";
 import {
@@ -272,6 +273,23 @@ function Banner({
   );
 }
 
+/**
+ * `env: CLAUDE_CONFIG_DIR, +2`, with every name in the tooltip: what cos set
+ * for the agent at launch. Values are never shown here.
+ */
+export function EnvNames({ names }: { names: string[] }) {
+  const hint = envHint(names);
+  if (!hint) return null;
+  return (
+    <span
+      className="shrink-0 cursor-default"
+      title={`Environment set at launch:\n${sortedNames(names).join("\n")}`}
+    >
+      · {hint}
+    </span>
+  );
+}
+
 function AgentFooter({ agent, cwd }: { agent: Agent; cwd: string | null }) {
   const parts = [
     agent.role !== "user" ? agent.role : null,
@@ -283,6 +301,7 @@ function AgentFooter({ agent, cwd }: { agent: Agent; cwd: string | null }) {
   return (
     <div className="flex items-center gap-3 px-1 text-[12px] text-ink-3">
       <span className="shrink-0">{parts.join(" · ")}</span>
+      <EnvNames names={agent.envNames} />
       {cwd ? <PathText path={cwd} className="ml-auto truncate text-[11.5px] text-ink-3" /> : null}
     </div>
   );
