@@ -114,6 +114,29 @@ impl AppState {
         Ok(hosts.list())
     }
 
+    /// The devices on this Mac's tailnet. Always asked of this Mac's daemon,
+    /// whichever host is in use: the route answers on the socket only.
+    async fn tailnet_peers(&self, port: Option<u16>) -> CommandResult<Value> {
+        let path = match port {
+            Some(port) => format!("/v1/tailnet/peers?port={port}"),
+            None => "/v1/tailnet/peers".to_owned(),
+        };
+        let response = self.local.request("GET", &path, None).await.map_err(|error| {
+            if error.is_not_running() {
+                let socket = self.local.socket().map(Path::display);
+                BridgeError::not_running(match socket {
+                    Some(socket) => format!(
+                        "This Mac's cos daemon isn't running (no answer on {socket}), so it can't list your tailnet"
+                    ),
+                    None => "This Mac's cos daemon isn't running, so it can't list your tailnet".to_owned(),
+                })
+            } else {
+                error
+            }
+        })?;
+        peers_from(response)
+    }
+
     fn info(&self) -> Info {
         Info {
             daemon: self.local.info().unwrap_or(DaemonInfo {
@@ -134,6 +157,28 @@ fn bridge_for(local: &Bridge, host: &Host) -> Bridge {
 }
 
 type CommandResult<T> = Result<T, BridgeError>;
+
+/// The peers from the daemon's answer. Anything but a 2xx is an error; a
+/// 404 means a daemon older than the route.
+fn peers_from(response: Response) -> CommandResult<Value> {
+    let Response { status, body } = response;
+    if (200..300).contains(&status) {
+        return Ok(body.unwrap_or(Value::Null));
+    }
+    if status == 404 {
+        return Err(BridgeError::io(
+            "This Mac's cos daemon is too old to list your tailnet. Update cos and restart the daemon.",
+        ));
+    }
+    let message = body
+        .as_ref()
+        .and_then(|body| body.get("error")?.as_str())
+        .map_or_else(|| format!("the cos daemon answered {status}"), str::to_owned);
+    match body.as_ref().and_then(|body| body.get("code")?.as_str()) {
+        Some(code) => Err(BridgeError::refused(code, message)),
+        None => Err(BridgeError::io(message)),
+    }
+}
 
 /// `daemon_info`: this Mac's socket and home, and the host in use.
 #[derive(Debug, Serialize)]
@@ -207,6 +252,13 @@ pub(crate) fn host_remove(state: State<'_, AppState>, id: String) -> CommandResu
 #[tauri::command]
 pub(crate) fn host_select(state: State<'_, AppState>, id: String) -> CommandResult<HostList> {
     state.select_host(&id)
+}
+
+/// The devices on this Mac's tailnet (`GET /v1/tailnet/peers`), from this
+/// Mac's daemon even while another host is in use.
+#[tauri::command]
+pub(crate) async fn tailnet_peers(state: State<'_, AppState>, port: Option<u16>) -> CommandResult<Value> {
+    state.tailnet_peers(port).await
 }
 
 /// Closing an unknown or already closed stream does nothing.
@@ -375,6 +427,92 @@ mod tests {
         let id = state.keep(generation, handle);
         assert!(id > 0);
         assert!(state.streams().is_empty());
+    }
+
+    /// A daemon on a Unix socket that answers one request with `status` and
+    /// `body`, and hands back the request line it got.
+    fn one_shot_daemon(socket: &Path, status: &str, body: &str) -> std::thread::JoinHandle<String> {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+        let answer = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            // Read the headers, then answer.
+            let mut header = String::new();
+            while reader.read_line(&mut header).unwrap() > 2 {
+                header.clear();
+            }
+            reader.get_mut().write_all(answer.as_bytes()).unwrap();
+            line.trim_end().to_owned()
+        })
+    }
+
+    #[test]
+    fn tailnet_peers_asks_this_macs_socket_even_on_another_host() {
+        let scratch = crate::hosts::tests::Scratch::new();
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        let socket = scratch.0.join("cos.sock");
+        let peers = r#"{"peers":[{"id":"n1","name":"build-box","cos":"running"}],"self_name":"my-mac","reason":null}"#;
+        let daemon = one_shot_daemon(&socket, "200 OK", peers);
+
+        let state = AppState::new(Bridge::new(&socket), Hosts::load(None));
+        let studio = state.add_host("Studio", "studio").unwrap();
+        state.select_host(&studio.id).unwrap();
+        assert!(state.bridge().1.socket().is_none(), "requests now go to Studio");
+
+        let answer = tauri::async_runtime::block_on(state.tailnet_peers(Some(7701))).unwrap();
+        assert_eq!(answer, serde_json::from_str::<Value>(peers).unwrap());
+        assert_eq!(daemon.join().unwrap(), "GET /v1/tailnet/peers?port=7701 HTTP/1.1");
+    }
+
+    #[test]
+    fn tailnet_peers_says_when_this_macs_daemon_is_down() {
+        let state = state();
+        let error = tauri::async_runtime::block_on(state.tailnet_peers(None)).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NotRunning);
+        assert!(
+            error.message.starts_with("This Mac's cos daemon isn't running"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn tailnet_peers_turns_refusals_into_errors() {
+        let ok = peers_from(Response {
+            status: 200,
+            body: Some(serde_json::json!({"peers": []})),
+        });
+        assert_eq!(ok.unwrap(), serde_json::json!({"peers": []}));
+
+        let old = peers_from(Response {
+            status: 404,
+            body: Some(serde_json::json!({"error": "no route"})),
+        })
+        .unwrap_err();
+        assert_eq!(old.kind, ErrorKind::Io);
+        assert!(old.message.contains("too old"), "{}", old.message);
+
+        let refused = peers_from(Response {
+            status: 403,
+            body: Some(serde_json::json!({"error": "only on the host", "code": "host_only"})),
+        })
+        .unwrap_err();
+        assert_eq!(refused.message, "only on the host");
+        assert_eq!(refused.code.as_deref(), Some("host_only"));
+
+        let plain = peers_from(Response {
+            status: 500,
+            body: None,
+        })
+        .unwrap_err();
+        assert_eq!(plain.message, "the cos daemon answered 500");
     }
 
     #[test]

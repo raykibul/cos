@@ -11,6 +11,7 @@ fn main() {
         "host_add",
         "host_remove",
         "host_select",
+        "tailnet_peers",
         "set_waiting_count",
         "notify",
         "reveal_path",
