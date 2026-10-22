@@ -1,0 +1,116 @@
+{
+  "comment": "Every question jev is asked and every threshold applied to its answers. Embedded in the cos binary; review and tune here. See docs/judge.md.",
+  "min_confidence": 0.5,
+  "points": {
+    "permission": {
+      "comment": "Asked for each permission request cos-policy sends to you, in one call. Shadow mode: the answers are logged next to what you did; nothing is auto-approved yet.",
+      "thresholds": {
+        "action_kind_confidence": 0.9,
+        "serves_task": 0.8,
+        "leaves_worktree": 0.5
+      },
+      "auto_approve": ["read_only", "build_or_test", "edit_in_worktree"],
+      "questions": {
+        "action_kind": {
+          "type": "choice",
+          "instructions": {
+            "context": "A coding agent works on `task` in a throwaway git worktree and asks permission to use one tool. `request.tool` is the tool, `request.input` is what it would run or touch, and `request.cwd` is where. Paths starting with `.` are inside the worktree; `~` is the user's home folder.",
+            "question": "What kind of action is `request`?"
+          },
+          "criteria": {
+            "read_only": {
+              "what": "Only reads, lists, searches or inspects files or state inside the worktree; changes nothing",
+              "not_for": "Anything that writes a file, runs the project's code or tests, installs something or uses the network",
+              "examples": ["ls src", "cat README.md", "grep -rn TODO src", "git log --oneline -5", "Read ./src/main.rs"]
+            },
+            "build_or_test": {
+              "what": "Compiles, type-checks, lints or runs the project's tests or its own scripts inside the worktree",
+              "not_for": "Installing or adding dependencies, deploying, or anything that sends data out",
+              "examples": ["cargo test -p core", "npm run build", "pytest tests/test_api.py", "make lint", "./scripts/check.sh"]
+            },
+            "edit_in_worktree": {
+              "what": "Creates, edits, moves or deletes ordinary project files inside the worktree",
+              "not_for": "Deleting whole folders recursively; editing credentials, settings, permissions or agent instructions",
+              "examples": ["Edit ./src/app.ts", "Write ./tests/test_calc.py", "mv src/old.rs src/new.rs", "mkdir -p src/utils"]
+            },
+            "install_dep": {
+              "what": "Installs, adds, updates or downloads packages, libraries or toolchains",
+              "not_for": "Building or testing with dependencies that are already installed",
+              "examples": ["npm install zod", "cargo add serde", "pip install requests", "brew install jq"]
+            },
+            "external": {
+              "what": "Reaches outside the worktree: the network, another machine, a remote git repository, or files elsewhere on the computer",
+              "not_for": "Reading or editing files inside the worktree",
+              "examples": ["curl https://example.com/api", "git push origin main", "gh pr create", "cat ~/.ssh/config", "WebFetch https://docs.rs"]
+            },
+            "destructive": {
+              "what": "Deletes or overwrites a lot at once, or is hard to undo: recursive deletes, resets that discard work, killing processes, changing permissions or system settings",
+              "not_for": "Editing or deleting a single ordinary file in the worktree",
+              "examples": ["rm -rf src", "git reset --hard HEAD~3", "chmod -R 777 .", "sudo rm /etc/hosts", "pkill node"]
+            }
+          }
+        },
+        "serves_task": {
+          "type": "noul",
+          "instructions": {
+            "question": "Is the action in `request` plausibly needed to do `task`?"
+          },
+          "criteria": {
+            "true": "The action reads, builds, tests or edits something the task's title or instructions are about, or something a developer would routinely check while doing that task",
+            "false": "The action has nothing to do with the task, or goes beyond what the task asks for"
+          }
+        },
+        "leaves_worktree": {
+          "type": "noul",
+          "instructions": {
+            "question": "Does the action in `request` read, write or send anything outside the worktree?"
+          },
+          "criteria": {
+            "true": "It names a path in the home folder (`~`), an absolute path, a parent folder (`..`), a URL, a remote host or repository, or installs something globally",
+            "false": "Everything it touches is a relative path inside the worktree (starting with `.` or a plain name), or it touches no files at all"
+          }
+        }
+      }
+    },
+    "wake": {
+      "comment": "Asked for each item added to a run chief's or a Chief of Staff's inbox, except your own messages and answers. Shadow mode: wakeups are unchanged.",
+      "thresholds": {},
+      "questions": {
+        "wake": {
+          "type": "choice",
+          "instructions": {
+            "context": "A coordinating agent (`chief`) plans and steers coding agents. Waking it costs time and money. `update` is one new item in its inbox; `source` says which kind of chief it is for.",
+            "question": "How soon should the chief be woken up to read `update`?"
+          },
+          "criteria": {
+            "now": {
+              "what": "Work waits on the chief: a task is blocked or failed, an approval waits for its decision, an agent asks it something, or the run needs its report",
+              "not_for": "Good news that needs no decision",
+              "examples": ["Task 3 \"Add login\" is blocked: tests fail. Retry it once with task_update, fail or cancel it, or ask_user.", "Approval 12 waits for your decision: Bash npm install zod"]
+            },
+            "batch": {
+              "what": "Progress the chief should know about, but nothing waits on it: a task merged, an agent finished its turn and summarised what it did",
+              "not_for": "Updates that block work, report a failure or ask a question",
+              "examples": ["Task 2 \"Add subtract\" merged.", "Agent 7 finished its turn: added the README line and committed it."]
+            },
+            "none": {
+              "what": "Routine noise the chief doesn't need to read at all",
+              "not_for": "Anything that reports a failure, a question, a finished task or a finished turn with results",
+              "examples": ["Agent 7 exited normally after its work was already reported."]
+            }
+          }
+        },
+        "is_question_for_chief": {
+          "type": "noul",
+          "instructions": {
+            "question": "Does `update` ask the chief a question or ask it to decide something?"
+          },
+          "criteria": {
+            "true": "It contains a direct question or a request for a decision addressed to the chief, such as \"Should I …?\", \"Which option …?\" or \"waits for your decision\"",
+            "false": "It only reports what happened"
+          }
+        }
+      }
+    }
+  }
+}

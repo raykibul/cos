@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 cos-core = { path = "crates/cos-core" }
 cos-harness = { path = "crates/cos-harness" }
+cos-judge = { path = "crates/cos-judge" }
 cos-policy = { path = "crates/cos-policy" }
 
 anyhow = "1"
@@ -23,12 +24,16 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 jiff = { version = "0.2", features = ["serde"] }
 portable-pty = "0.9"
+# HTTPS for jev (cos-judge): rustls with ring, so the static musl builds
+# need no OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # Pinned to a release that has been out a few weeks; 3.x moves fast.
 rmcp = { version = "=3.4.1", default-features = false, features = ["server", "transport-io"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustix = { version = "1", features = ["process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
