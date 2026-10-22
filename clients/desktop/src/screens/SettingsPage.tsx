@@ -19,6 +19,7 @@ import { DeviceRow } from "./Devices";
 import { EnvironmentList } from "./Environment";
 import { envNote } from "../domain/env";
 import { HostAvatar } from "./Hosts";
+import { JudgeSettings } from "./JudgeSettings";
 import { TailnetDevices } from "./TailnetPeers";
 
 export function SettingsPage() {
@@ -33,6 +34,7 @@ export function SettingsPage() {
         </PageTitle>
         <MacsSection />
         <EnvironmentSection />
+        <JudgeSettings />
         <RemoteAccessSection />
       </PageBody>
     </>

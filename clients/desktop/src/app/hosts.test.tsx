@@ -229,7 +229,7 @@ describe("remote access page", () => {
     await pickHost(user, /^Studio/);
     await user.click(sidebar().getByRole("button", { name: "Settings" }));
     expect(main().getByText("Managed on Studio")).toBeInTheDocument();
-    expect(main().queryByRole("switch")).not.toBeInTheDocument();
+    expect(main().queryByRole("switch", { name: "Remote access" })).not.toBeInTheDocument();
     expect(bridge.daemons.get("h1")!.requests.some((r) => r.path === "/v1/tailnet")).toBe(false);
   });
 
