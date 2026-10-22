@@ -3,7 +3,8 @@ import Foundation
 /// Everything an app asks the daemon, as a protocol, so an app can run
 /// against an in-memory fake (screenshots, previews, view-model tests) as
 /// well as a real `CosClient`. Device and listener management are left
-/// out: they only work on the host's own socket.
+/// out: they only work on the host's own socket. The tailnet's peers are
+/// in.
 public protocol CosService: EventSource {
     // Status and events (EventSource): status(), stream(after:)
     func events(after: Int, limit: Int) async throws -> [LoggedEvent]
@@ -45,6 +46,9 @@ public protocol CosService: EventSource {
     // Environment
     func globalEnv() async throws -> EnvVars
     func projectEnv(projectId: Int) async throws -> ProjectEnv
+
+    // The tailnet: approved devices may list it too.
+    func tailnetPeers(port: Int?) async throws -> TailnetPeers
 }
 
 extension CosClient: CosService {}
