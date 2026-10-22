@@ -125,7 +125,7 @@ describe("add a Mac", () => {
     await user.click(sidebar().getByRole("button", { name: /^Mac:/ }));
     await user.click(screen.getByRole("menuitem", { name: "Add a Mac…" }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText("cos remote on")).toBeInTheDocument();
+    expect(within(dialog).getByText("cos daemon install")).toBeInTheDocument();
 
     await user.type(within(dialog).getByRole("textbox", { name: "Address" }), "http://mini");
     await user.click(within(dialog).getByRole("button", { name: "Add and connect" }));

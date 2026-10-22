@@ -78,7 +78,7 @@ describe("the tailnet in the Add a Mac sheet", () => {
     expect(dialog().getByRole("textbox", { name: "Address" })).toHaveValue("100.101.102.115:7700");
     expect(dialog().getByRole("textbox", { name: "Name" })).toHaveValue("build-box");
     expect(tailnet().getByText(/build-box isn't running cos/)).toHaveTextContent(
-      "Run cos remote on on that Mac first.",
+      "Install cos there and run cos daemon install first.",
     );
     expect(tailnet().getByRole("listitem", { name: "build-box" })).toHaveAttribute(
       "aria-current",

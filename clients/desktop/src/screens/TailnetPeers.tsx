@@ -372,8 +372,8 @@ export function TailnetPicker({
       </div>
       {hint ? (
         <p className="px-1 text-[12.5px] leading-snug text-ink-2">
-          {hint.name} isn&apos;t running cos where this Mac can reach it. Run{" "}
-          <Code>cos remote on</Code> on that Mac first.
+          {hint.name} isn&apos;t running cos where this Mac can reach it. Install cos there and run{" "}
+          <Code>cos daemon install</Code> first.
         </p>
       ) : null}
       <ErrorText>{error}</ErrorText>

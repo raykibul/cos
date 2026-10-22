@@ -230,8 +230,17 @@ async fn daemon_lifecycle_is_logged_and_cleaned_up() {
     let dir = tempfile::tempdir().unwrap();
     let home = CosHome::new(dir.path().join("home"));
 
+    // Remote access is on by default, so the tailnet listener logs its own
+    // events alongside; this test is about the daemon's.
+    let daemon_events = |events: Vec<LoggedEvent>| -> Vec<LoggedEvent> {
+        events
+            .into_iter()
+            .filter(|event| event.kind.starts_with("daemon."))
+            .collect()
+    };
+
     let (stop, task) = start_daemon(&home).await;
-    let events = Client::new(home.socket()).events(0, 10).await.unwrap();
+    let events = daemon_events(Client::new(home.socket()).events(0, 10).await.unwrap());
     assert_eq!(kinds(&events), [kind::DAEMON_STARTED]);
 
     stop.send("test".into()).unwrap();
@@ -240,7 +249,7 @@ async fn daemon_lifecycle_is_logged_and_cleaned_up() {
 
     // The log is on disk, and a restart continues it.
     let (stop, task) = start_daemon(&home).await;
-    let events = Client::new(home.socket()).events(0, 10).await.unwrap();
+    let events = daemon_events(Client::new(home.socket()).events(0, 10).await.unwrap());
     assert_eq!(
         kinds(&events),
         [kind::DAEMON_STARTED, kind::DAEMON_STOPPED, kind::DAEMON_STARTED]
@@ -450,12 +459,13 @@ async fn devices_are_managed_over_the_socket() {
 }
 
 #[tokio::test]
-async fn remote_access_is_off_by_default_and_rejects_port_zero() {
+async fn remote_access_is_on_by_default_and_rejects_port_zero() {
     let server = TestServer::start();
     let client = server.client();
 
     let status = client.status().await.unwrap().tailnet.unwrap();
-    assert_eq!((status.enabled, status.state), (false, ListenerState::Off));
+    assert!(status.enabled);
+    assert_ne!(status.state, ListenerState::Off);
 
     let (code, message) = daemon_error(client.configure_tailnet(true, Some(0)).await.unwrap_err());
     assert_eq!(code, 400);

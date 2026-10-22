@@ -91,9 +91,9 @@ function MacsSection() {
         </ul>
       </Card>
       <p className="mt-2 px-1 text-[12.5px] leading-snug text-ink-3">
-        Another Mac is reached over Tailscale. On it, run{" "}
-        <code className="font-mono text-[12px] text-ink-2">cos remote on</code>, then approve this
-        Mac there the first time it connects.
+        Another machine is reached over Tailscale. Install cos on it and run{" "}
+        <code className="font-mono text-[12px] text-ink-2">cos daemon install</code>, then approve
+        this Mac there the first time it connects.
       </p>
     </section>
   );

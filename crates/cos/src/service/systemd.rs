@@ -43,6 +43,16 @@ pub(crate) fn unit_path() -> anyhow::Result<PathBuf> {
 /// and notes for you, such as lingering being off.
 pub(crate) fn install(home: &CosHome) -> anyhow::Result<(PathBuf, Vec<String>)> {
     check_available()?;
+    let mut notes = Vec::new();
+    let user = user_name();
+    // Lingering keeps the daemon running with nobody logged in, and starts it
+    // at boot. Many systems let you turn it on for yourself without sudo.
+    if linger(&user) == Some(false) && enable_linger(&user) {
+        notes.push(format!(
+            "turned on lingering for {user}: the daemon keeps running after you log out, and starts at boot"
+        ));
+        wait_for_user_bus();
+    }
     // Fails early, before writing anything, when there's no user manager to
     // talk to (a `su` shell, say).
     systemctl(&["show-environment"])?;
@@ -59,8 +69,6 @@ pub(crate) fn install(home: &CosHome) -> anyhow::Result<(PathBuf, Vec<String>)> 
     // new binary or environment.
     systemctl(&["restart", UNIT])?;
 
-    let mut notes = Vec::new();
-    let user = user_name();
     if linger(&user) == Some(false) {
         notes.push(format!(
             "lingering is off for {user}, so systemd stops the daemon when your last login session \
@@ -68,6 +76,32 @@ pub(crate) fn install(home: &CosHome) -> anyhow::Result<(PathBuf, Vec<String>)> 
         ));
     }
     Ok((unit, notes))
+}
+
+/// `loginctl enable-linger` for yourself, without a password prompt.
+/// Returns whether it worked; polkit refuses it on some systems, and then
+/// it takes sudo.
+fn enable_linger(user: &str) -> bool {
+    Command::new("loginctl")
+        .args(["enable-linger", "--no-ask-password", user])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Once lingering is turned on, systemd starts the user's manager in the
+/// background; waits up to 5 s for its bus, when the shell has no session
+/// to find it by.
+fn wait_for_user_bus() {
+    if std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|dir| !dir.is_empty()) {
+        return;
+    }
+    let bus = PathBuf::from(format!("/run/user/{}/bus", rustix::process::getuid().as_raw()));
+    for _ in 0..50 {
+        if bus.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// Stops and disables the unit and removes its file. Returns false if it
@@ -155,9 +189,16 @@ fn specifiers(text: &str) -> String {
 }
 
 fn systemctl(args: &[&str]) -> anyhow::Result<()> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+    let bus = user_bus_env(
+        runtime_dir.as_deref(),
+        rustix::process::getuid().as_raw(),
+        |path| path.exists(),
+    );
     let output = Command::new("systemctl")
         .arg("--user")
         .args(args)
+        .envs(bus)
         .output()
         .context("could not run systemctl")?;
     if output.status.success() {
@@ -165,13 +206,39 @@ fn systemctl(args: &[&str]) -> anyhow::Result<()> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     if stderr.contains("Failed to connect to bus") || stderr.contains("XDG_RUNTIME_DIR") {
+        let user = user_name();
         bail!(
-            "`systemctl --user {}` can't reach your user's systemd ({stderr}). Log in as this user \
-             directly, over SSH for example, rather than with `su` or `sudo -u`, and try again",
+            "`systemctl --user {}` can't reach your user's systemd ({stderr}). This shell has no \
+             login session, as with AWS Session Manager, `su` or `sudo -u`. Run `sudo loginctl \
+             enable-linger {user}`, which starts {user}'s systemd and keeps the daemon running \
+             after you log out, then try again",
             args.join(" ")
         );
     }
     bail!("`systemctl --user {}` failed: {stderr}", args.join(" "))
+}
+
+/// Where to find the user's systemd when the shell doesn't say. Shells
+/// without a login session (AWS Session Manager, `su`, `sudo -u`) have no
+/// `XDG_RUNTIME_DIR`, yet the user's manager may be running anyway, because
+/// lingering is on; its bus is then at `/run/user/<uid>/bus`.
+fn user_bus_env(
+    runtime_dir: Option<&std::ffi::OsStr>,
+    uid: u32,
+    exists: impl Fn(&Path) -> bool,
+) -> Vec<(&'static str, String)> {
+    if runtime_dir.is_some_and(|dir| !dir.is_empty()) {
+        return Vec::new();
+    }
+    let dir = format!("/run/user/{uid}");
+    let bus = format!("{dir}/bus");
+    if !exists(Path::new(&bus)) {
+        return Vec::new();
+    }
+    vec![
+        ("XDG_RUNTIME_DIR", dir),
+        ("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={bus}")),
+    ]
 }
 
 fn user_name() -> String {
@@ -280,6 +347,27 @@ mod tests {
             unit.contains("StandardOutput=append:/tmp/100%% \"cos\"/logs/daemon.log"),
             "{unit}"
         );
+    }
+
+    #[test]
+    fn finds_the_users_bus_when_the_shell_has_no_session() {
+        let runtime = std::ffi::OsStr::new("/run/user/1000");
+        // The shell knows its session: leave it alone.
+        assert!(user_bus_env(Some(runtime), 1000, |_| true).is_empty());
+        // No session, but the user's systemd runs (lingering).
+        assert_eq!(
+            user_bus_env(None, 1001, |path| path == Path::new("/run/user/1001/bus")),
+            vec![
+                ("XDG_RUNTIME_DIR", "/run/user/1001".to_owned()),
+                (
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "unix:path=/run/user/1001/bus".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(user_bus_env(Some(std::ffi::OsStr::new("")), 7, |_| true).len(), 2);
+        // No session and no user systemd: nothing to point at.
+        assert!(user_bus_env(None, 1001, |_| false).is_empty());
     }
 
     #[test]

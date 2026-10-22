@@ -61,23 +61,25 @@ Workers push nothing. cos merges into a workspace branch in the clone. `cos work
 ## 6. The daemon as a service
 
 ```sh
-cos daemon install             # writes ~/.config/systemd/user/cos.service, enables and starts it
-sudo loginctl enable-linger $USER
+cos daemon install             # turns lingering on, writes ~/.config/systemd/user/cos.service, enables and starts it
 cos status
 ```
 
-- **Lingering.** Without it, systemd stops your user's services when your last SSH session ends, so the daemon would stop when you log out. `cos daemon install` warns you when lingering is off. With it on, the daemon also starts at boot.
-- **Where to run `install`.** Run it from a normal SSH login. In a `su` or `sudo -u` shell there's no user systemd to talk to, and `install` says so.
+- **Lingering.** Without it, systemd stops your user's services when your last SSH session ends, so the daemon would stop when you log out. With it on, the daemon keeps running and starts at boot. `cos daemon install` turns it on for you when the system allows that without a password. If not, it says so: run `sudo loginctl enable-linger $USER`, then `cos daemon install` again.
+- **Shells without a login session.** AWS Session Manager, `su` and `sudo -u` shells have no `XDG_RUNTIME_DIR`. `install` finds your user's systemd anyway once lingering is on.
 - **Settings it records.** The unit records your `PATH`, so the daemon finds `claude`, `git` and `tailscale`. It also records `COS_HOME`, `CLAUDE_CONFIG_DIR`, `COS_RUN_MODEL` and the other `COS_*` settings, if they're set. Run `cos daemon install` again after changing any of them.
 - **Logs.** They go to `~/.cos/logs/daemon.log`. `systemctl --user status cos` shows the service itself.
 - **Removing it.** `cos daemon uninstall` stops the daemon and removes the unit.
 
 ## 7. Remote access
 
+Remote access is on by default, so the daemon listens on Tailscale as soon as it starts. Check it:
+
 ```sh
-cos remote on
 cos remote status              # "listening on 100.x.y.z:7700, …" and the tailnet owner devices must match
 ```
+
+`cos remote off` turns it off, and `cos remote on` back on.
 
 If it isn't listening, `cos remote status` says why: Tailscale not installed or not running, logged out, or a tagged machine. The daemon tries again every 30 s.
 

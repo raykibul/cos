@@ -155,7 +155,7 @@ Allowed-file globs are relative to the repo root and anchored there. `*` and `?`
 **Limits.** `WorkerLimiter::default()` allows 3 workers per workspace and 6 in total. A worker takes a workspace slot first and then an overall one, so a worker queued behind its own workspace's cap never holds a slot another workspace could use.
 ## Remote access
 
-Your other devices (the iPhone app, another Mac, `cos --host`) reach the daemon over Tailscale. It is **off by default**: `cos remote on` turns it on, `cos remote off` turns it off. The setting is stored in the database (`settings` table, key `tailnet`), so it survives restarts and needs no launchd change, and the daemon applies it live.
+Your other devices (the iPhone app, another Mac, `cos --host`) reach the daemon over Tailscale. It is **on by default**, so a new daemon is reachable as soon as Tailscale is up: `cos remote off` turns it off, `cos remote on` turns it back on. Only devices logged in as your Tailscale user, and approved on this machine, get in. The setting is stored in the database (`settings` table, key `tailnet`), so it survives restarts and needs no launchd change, and the daemon applies it live.
 
 ```
 cos remote on            # listen on port 7700

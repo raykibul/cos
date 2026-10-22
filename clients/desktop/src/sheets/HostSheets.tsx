@@ -110,8 +110,8 @@ export function AddHostSheet() {
         </p>
       </div>
       <div className="rounded-lg bg-subtle px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-2">
-        On that Mac, run <Code>cos remote on</Code> first. When this Mac first connects, approve it
-        there with <Code>cos devices approve</Code> or in its cos app.
+        On that machine, install cos and run <Code>cos daemon install</Code> first. When this Mac
+        first connects, approve it there with <Code>cos devices approve</Code> or in its cos app.
       </div>
       <ErrorText>{error}</ErrorText>
     </Dialog>

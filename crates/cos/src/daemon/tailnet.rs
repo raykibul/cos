@@ -1,6 +1,7 @@
 //! The tailnet listener: the daemon's API on TCP port 7700 of this machine's
-//! tailnet addresses, for your other devices. It is off until you turn it on
-//! (`cos remote on`), and the setting survives restarts. It never binds
+//! tailnet addresses, for your other devices. It is on by default, so a fresh
+//! daemon is reachable from your devices as soon as Tailscale is up; `cos
+//! remote off` turns it off, and the setting survives restarts. It never binds
 //! `0.0.0.0`, only the addresses Tailscale gives this machine.
 //!
 //! Every request over it is checked by a [`Guard`]: `tailscale whois` must
@@ -35,7 +36,8 @@ const SETTING: &str = "tailnet";
 /// How long open connections get once a listener is being replaced.
 const LISTENER_GRACE: Duration = Duration::from_secs(5);
 
-/// The persisted switch. Off by default.
+/// The persisted switch. On by default: only devices logged in as your
+/// Tailscale user, and approved on this machine, get in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TailnetSettings {
     pub enabled: bool,
@@ -46,7 +48,7 @@ pub(crate) struct TailnetSettings {
 impl Default for TailnetSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             port: DEFAULT_PORT,
         }
     }
@@ -154,13 +156,17 @@ pub(crate) struct Tailnet {
 }
 
 impl Tailnet {
-    /// Loads the saved settings. An unreadable setting counts as off.
+    /// Loads the saved settings, on by default. An unreadable setting counts
+    /// as off: it was saved by someone, who may have meant off.
     pub(crate) fn load(store: Arc<Store>, log: EventLog) -> Self {
         let settings = match store.setting::<TailnetSettings>(SETTING) {
             Ok(settings) => settings.unwrap_or_default(),
             Err(error) => {
-                tracing::warn!(%error, "ignoring the saved tailnet setting");
-                TailnetSettings::default()
+                tracing::warn!(%error, "ignoring the saved tailnet setting; remote access stays off");
+                TailnetSettings {
+                    enabled: false,
+                    ..TailnetSettings::default()
+                }
             }
         };
         Self {
@@ -789,9 +795,9 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_to_off_on_port_7700() {
-        let settings: TailnetSettings = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+    fn settings_default_to_on_at_port_7700() {
+        let settings: TailnetSettings = serde_json::from_str(r#"{"enabled":false}"#).unwrap();
         assert_eq!(settings.port, 7700);
-        assert!(!TailnetSettings::default().enabled);
+        assert!(TailnetSettings::default().enabled);
     }
 }
