@@ -38,12 +38,18 @@ const shots = [
   ["chief-terminal", "page=chief:1&terminal"],
   ["sidebar-expanded", "page=workspace:3"],
   ["waiting", "page=waiting"],
+  [
+    "waiting-login",
+    "page=waiting",
+    (page) => page.getByRole("heading", { name: "Claude logins" }).scrollIntoViewIfNeeded(),
+  ],
   ["events", "page=events"],
   ["project", "page=project:1"],
   ["workspace", "page=workspace:3"],
   ["agent-working", "page=agent:7"],
   ["agent-approval", "page=agent:8"],
   ["agent-trust", "page=agent:9"],
+  ["agent-login", "page=agent:11"],
   ["run-running", "page=run:10"],
   ["run-plan", "page=run:11"],
   ["run-done", "page=run:7"],
@@ -108,8 +114,8 @@ const shots = [
     "sheet-env-refused",
     "page=projectEnv:1&dialog=envVar:1",
     async (page) => {
-      await page.getByRole("dialog").getByLabel("Name", { exact: true }).fill("COS_HOOK_SOCKET");
-      await page.getByRole("dialog").getByLabel("Value", { exact: true }).fill("/tmp/hooks.sock");
+      await page.getByRole("dialog").getByLabel("Name", { exact: true }).fill("CLAUDECODE");
+      await page.getByRole("dialog").getByLabel("Value", { exact: true }).fill("1");
       await page.getByRole("button", { name: "Add variable" }).click();
       await page.getByRole("alert").waitFor();
     },
