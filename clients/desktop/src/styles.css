@@ -318,11 +318,18 @@
   font-weight: 620;
 }
 
-/* ghostty-web draws on a canvas inside this box. */
+/* ghostty-web draws on a canvas inside this box. It makes the box
+   contenteditable to take keys, so WebKit would draw its own blinking text
+   caret down the left edge; the terminal draws its own cursor instead. */
 .terminal-host {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  caret-color: transparent;
+  outline: none;
+}
+.terminal-host * {
+  caret-color: transparent;
 }
 .terminal-host canvas {
   display: block;
