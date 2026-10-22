@@ -1,5 +1,6 @@
-//! `cos remote …` (the tailnet listener) and `cos devices …` (which tailnet
-//! devices may use it). Both only work against the local daemon.
+//! `cos remote …` (the tailnet listener, and the other devices on the
+//! tailnet) and `cos devices …` (which tailnet devices may use it). Both only
+//! work against the local daemon.
 
 use std::process::ExitCode;
 
@@ -9,6 +10,7 @@ use cos_core::{Device, DeviceState};
 use jiff::tz::TimeZone;
 
 use crate::client::Client;
+use crate::daemon::peers::{CosState, PeersPage};
 use crate::daemon::tailnet::{ListenerState, TailnetStatus};
 use crate::home::CosHome;
 
@@ -24,6 +26,12 @@ pub(crate) enum RemoteCommand {
     },
     /// Stop listening on the tailnet. The Unix socket is unaffected.
     Off,
+    /// List the other devices on your tailnet and which of them run cos.
+    Peers {
+        /// The port cos listens on over there. Defaults to this daemon's.
+        #[arg(long)]
+        port: Option<u16>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -53,6 +61,17 @@ pub(crate) async fn remote(home: &CosHome, command: Option<RemoteCommand>) -> an
         RemoteCommand::Status => client.tailnet().await?,
         RemoteCommand::On { port } => client.configure_tailnet(true, port).await?,
         RemoteCommand::Off => client.configure_tailnet(false, None).await?,
+        RemoteCommand::Peers { port } => {
+            let page = client.tailnet_peers(port).await?;
+            for line in describe_peers(&page, &TimeZone::system()) {
+                println!("{line}");
+            }
+            return Ok(if page.reason.is_none() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
+        }
     };
     for line in describe(&status) {
         println!("{line}");
@@ -141,6 +160,61 @@ pub(crate) fn describe(status: &TailnetStatus) -> Vec<String> {
     lines
 }
 
+/// Lines for `cos remote peers`: one per device, those running cos marked
+/// with `*`.
+pub(crate) fn describe_peers(page: &PeersPage, tz: &TimeZone) -> Vec<String> {
+    if let Some(reason) = &page.reason {
+        return vec![format!("can't list tailnet devices: {reason}")];
+    }
+    if page.peers.is_empty() {
+        return vec!["No other devices on your tailnet.".into()];
+    }
+    let name_width = page
+        .peers
+        .iter()
+        .map(|peer| peer.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let os_width = page
+        .peers
+        .iter()
+        .map(|peer| peer.os.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    if let Some(name) = &page.self_name {
+        lines.push(format!("Other devices on {name}'s tailnet (* runs cos):"));
+    }
+    for peer in &page.peers {
+        let mark = if peer.cos == CosState::Running { '*' } else { ' ' };
+        let state = match peer.cos {
+            CosState::Running => format!("cos at {}", peer.address),
+            CosState::NotRunning => format!("online, no cos at {}", peer.address),
+            CosState::Unknown if !peer.online => match peer.last_seen_ms {
+                Some(ms) => {
+                    let seen = jiff::Timestamp::from_millisecond(ms)
+                        .map(|at| at.to_zoned(tz.clone()).strftime("%b %d %H:%M").to_string())
+                        .unwrap_or_default();
+                    format!("offline, last seen {seen}")
+                }
+                None => "offline".into(),
+            },
+            CosState::Unknown if peer.tagged => "online, tagged device".into(),
+            CosState::Unknown if !peer.mine => "online, another Tailscale user".into(),
+            CosState::Unknown => "online".into(),
+        };
+        lines.push(
+            format!(
+                "{mark} {:<name_width$}  {:<os_width$}  {state}",
+                peer.name, peer.os
+            )
+            .trim_end()
+            .to_owned(),
+        );
+    }
+    lines
+}
+
 fn print_device(device: &Device) {
     let state = match device.state {
         DeviceState::Pending => format!("pending: approve with `cos devices approve {}`", device.id),
@@ -187,6 +261,7 @@ fn find_device<'a>(devices: &'a [Device], key: &str) -> anyhow::Result<&'a Devic
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::peers::TailnetPeer;
 
     fn status(state: ListenerState) -> TailnetStatus {
         TailnetStatus {
@@ -222,5 +297,87 @@ mod tests {
         let lines = describe(&unavailable);
         assert!(lines[0].contains("not listening"));
         assert_eq!(lines[1], "  Tailscale is not logged in");
+    }
+
+    fn peer(name: &str, os: &str, cos: CosState) -> TailnetPeer {
+        TailnetPeer {
+            id: format!("n{name}"),
+            name: name.into(),
+            hostname: name.into(),
+            dns_name: format!("{name}.tail0000.ts.net"),
+            os: os.into(),
+            ips: vec!["100.100.2.2".parse().unwrap()],
+            online: true,
+            last_seen_ms: None,
+            mine: true,
+            tagged: false,
+            cos,
+            address: "100.100.2.2:7700".into(),
+        }
+    }
+
+    #[test]
+    fn describes_peers_with_cos_marked() {
+        let page = PeersPage {
+            peers: vec![
+                peer("build-box", "linux", CosState::Running),
+                peer("studio", "macOS", CosState::NotRunning),
+                TailnetPeer {
+                    tagged: true,
+                    mine: false,
+                    ..peer("ci", "linux", CosState::Unknown)
+                },
+                TailnetPeer {
+                    mine: false,
+                    ..peer("friend", "windows", CosState::Unknown)
+                },
+                TailnetPeer {
+                    online: false,
+                    last_seen_ms: Some(1_792_596_501_100),
+                    ..peer("phone", "iOS", CosState::Unknown)
+                },
+                TailnetPeer {
+                    online: false,
+                    ..peer("old", "android", CosState::Unknown)
+                },
+            ],
+            self_name: Some("my-mac".into()),
+            reason: None,
+        };
+
+        assert_eq!(
+            describe_peers(&page, &TimeZone::UTC),
+            [
+                "Other devices on my-mac's tailnet (* runs cos):",
+                "* build-box  linux    cos at 100.100.2.2:7700",
+                "  studio     macOS    online, no cos at 100.100.2.2:7700",
+                "  ci         linux    online, tagged device",
+                "  friend     windows  online, another Tailscale user",
+                "  phone      iOS      offline, last seen Oct 21 15:28",
+                "  old        android  offline",
+            ]
+        );
+    }
+
+    #[test]
+    fn describes_an_empty_tailnet_and_a_missing_tailscale() {
+        let empty = PeersPage {
+            peers: Vec::new(),
+            self_name: Some("my-mac".into()),
+            reason: None,
+        };
+        assert_eq!(
+            describe_peers(&empty, &TimeZone::UTC),
+            ["No other devices on your tailnet."]
+        );
+        let down = PeersPage {
+            peers: Vec::new(),
+            self_name: None,
+            reason: Some("Tailscale is not logged in".into()),
+        };
+        assert_eq!(
+            describe_peers(&down, &TimeZone::UTC),
+            ["can't list tailnet devices: Tailscale is not logged in"]
+        );
     }
 }
