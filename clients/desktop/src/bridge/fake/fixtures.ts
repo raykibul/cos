@@ -1,8 +1,11 @@
 // Canned daemon data in the daemon's own JSON (snake_case), shaped as in
 // docs/daemon.md, docs/agents-api.md and docs/orchestration.md:
 //
-// - two projects: cos (lisbon, porto, madrid, oslo) and opal-app (nairobi, kyoto)
+// - two projects: cos (lisbon, porto, madrid, oslo) and opal-app (nairobi, kyoto),
+//   with branches `<project>/<city>`; porto and kyoto have no title
 // - your agents in every state, and each run's chief, workers and reviewers
+// - cos's Chief of Staff (agent 40), which started agents 7 and 8, with a
+//   conversation (fake/staff.ts); opal-app's chief hasn't started
 // - a pending approval routed to you and one routed to a chief, plus decided ones
 // - a run in each state: 10 running (tasks in every state), 11 plan waiting,
 //   12 planning (with a question), 13 reporting, 7 done (with a report),
@@ -13,7 +16,8 @@ export type Raw = Record<string, unknown>;
 
 export interface FakeAgent extends Raw {
   id: number;
-  workspace_id: number;
+  /** Null for a Chief of Staff, which works in its own worktree. */
+  workspace_id: number | null;
   run_id: number | null;
   task_id: number | null;
   role: string;
@@ -49,7 +53,7 @@ export function makeFixtures(now = Date.now()): Fixtures {
     projectId: number,
     project: string,
     name: string,
-    title: string,
+    title: string | null,
     base: "origin" | "head",
     commit: string,
     ago: number,
@@ -58,7 +62,8 @@ export function makeFixtures(now = Date.now()): Fixtures {
     project_id: projectId,
     name,
     title,
-    branch: `cos/${name}`,
+    city: name,
+    branch: `${project}/${name}`,
     path: `${home}/worktrees/${project}-${projectId}/${name}`,
     base,
     base_ref: base === "origin" ? (projectId === 1 ? "origin/main" : "origin/master") : "HEAD",
@@ -82,7 +87,7 @@ export function makeFixtures(now = Date.now()): Fixtures {
       1,
       "cos",
       "porto",
-      "porto",
+      null,
       "head",
       "9b0d2c4f3f2c9a1e5b7d4c8f0a6e2b9d1c3f5a7e",
       70_000,
@@ -122,7 +127,7 @@ export function makeFixtures(now = Date.now()): Fixtures {
       2,
       "opal-app",
       "kyoto",
-      "kyoto",
+      null,
       "head",
       "e9b0d2c4f3f2c9a1e5b7d4c8f0a6e2b9d1c3f5a7",
       9_000,
@@ -166,6 +171,7 @@ export function makeFixtures(now = Date.now()): Fixtures {
       lastMessage?: string | null;
       approval?: number | null;
       cwd?: string;
+      spawnedBy?: number;
     } = {},
   ): FakeAgent => {
     const exited = state === "exited" || state === "interrupted";
@@ -194,6 +200,8 @@ export function makeFixtures(now = Date.now()): Fixtures {
       last_message: options.lastMessage ?? null,
       pending_approval_id: options.approval ?? null,
       ...(options.cwd ? { cwd: options.cwd } : {}),
+      spawned_by: options.spawnedBy ?? null,
+      transcript_path: `/Users/me/.claude/projects/session-${id}.jsonl`,
     };
   };
 
@@ -202,15 +210,18 @@ export function makeFixtures(now = Date.now()): Fixtures {
 
   const agents: FakeAgent[] = [
     // Yours.
+    // Started by cos's Chief of Staff.
     agent(8, 3, "Add left-pad to the formatter", "waiting_approval", {
-      started: 300,
+      started: 880,
       active: 20,
       approval: 12,
+      spawnedBy: 40,
     }),
     agent(7, 3, "Fix login bug", "working", {
       model: "opus",
       started: 900,
       active: 3,
+      spawnedBy: 40,
       lastMessage:
         "Sessions were expiring after 5 minutes because TTL_MS used minutes where it meant hours. I fixed the constant and added a test.",
     }),
@@ -913,7 +924,7 @@ pub fn is_expired(&self, now: Instant) -> bool {
         workspace_id: 8,
         project_id: 2,
         name: "nairobi",
-        branch: "cos/nairobi",
+        branch: "opal-app/nairobi",
         path: `${home}/worktrees/opal-app-2/nairobi`,
         base: "origin",
       },
@@ -925,7 +936,7 @@ pub fn is_expired(&self, now: Instant) -> bool {
         workspace_id: 9,
         project_id: 2,
         name: "kyoto",
-        branch: "cos/kyoto",
+        branch: "opal-app/kyoto",
         path: `${home}/worktrees/opal-app-2/kyoto`,
         base: "head",
       },
