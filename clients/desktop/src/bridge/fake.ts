@@ -1139,6 +1139,16 @@ export class FakeDaemon {
 
   /** Keystrokes: echo printable ones into the input box; Return submits. */
   private typed(agent: FakeAgent, text: string): void {
+    // Return on the login screen stands in for logging in through the browser.
+    if (agent.state === "needs_login" && text.includes("\r")) {
+      this.fixtures.screens[agent.id] = {
+        prompt: "",
+        transcript: "blank",
+        footer: { kind: "idle" },
+      };
+      this.setAgentState(agent, "idle");
+      return;
+    }
     for (const stream of this.terminals.values()) {
       if (stream.agentId !== agent.id || !stream.screen?.input) continue;
       // Drop bracketed-paste markers and other escape sequences.

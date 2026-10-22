@@ -21,6 +21,13 @@ export function staffLabel(state: AgentState | null): StateLabel {
         busy: false,
         attention: true,
       };
+    case "needs_login":
+      return {
+        title: "Waiting for you to log in to Claude",
+        tone: "accent",
+        busy: false,
+        attention: true,
+      };
     case "exited":
     case "interrupted":
       return {

@@ -10,7 +10,7 @@ import { useApp, useCanChange, useCos, useNow } from "../../app/context";
 import { agentLabel, canResume, isAlive } from "../../domain/labels";
 import { agentNeedsYou, pendingApproval } from "../../store/selectors";
 import { AgentTerminal } from "../../terminal/AgentTerminal";
-import { ApprovalBanner, EnvNames, TrustBanner } from "../../screens/AgentPage";
+import { ApprovalBanner, EnvNames, LoginBanner, TrustBanner } from "../../screens/AgentPage";
 import { ChiefMark } from "../../screens/sidebar/ProjectSection";
 import { cx } from "../../ui/cx";
 import { relativeTime } from "../../ui/format";
@@ -169,6 +169,7 @@ function AgentPanel({
           </Button>
         </div>
       </div>
+      {agent.state === "needs_login" ? <LoginBanner agent={agent} /> : null}
       {agent.state === "needs_trust" ? (
         <TrustBanner agent={agent} path={agent.cwd ?? path} />
       ) : null}

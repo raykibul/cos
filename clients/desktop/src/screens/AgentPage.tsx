@@ -1,9 +1,11 @@
 import {
   Bot,
+  KeyRound,
   MoreHorizontal,
   Play,
   ShieldQuestion,
   Square,
+  SquareTerminal,
   Trash2,
   UserRoundCheck,
 } from "lucide-react";
@@ -17,9 +19,11 @@ import {
   isWithChief,
   routeExplanation,
 } from "../domain/approvals";
+import { loginCommand } from "../domain/env";
 import { agentLabel, canResume, isAlive, permissionModeTitle } from "../domain/labels";
 import {
   agent as agentOf,
+  configDirOf,
   pendingApproval,
   project as projectOf,
   projectOfPage,
@@ -182,6 +186,7 @@ function AgentView({ agent }: { agent: Agent }) {
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 pb-4">
         {agent.state === "needs_trust" ? <TrustBanner agent={agent} path={cwd} /> : null}
+        {agent.state === "needs_login" ? <LoginBanner agent={agent} /> : null}
         {approval ? <ApprovalBanner approval={approval} /> : null}
         <AgentTerminal key={agent.id} agentId={agent.id} alive={alive} className="flex-1" />
         <AgentFooter agent={agent} cwd={cwd} />
@@ -216,6 +221,44 @@ export function TrustBanner({ agent, path }: { agent: Agent; path: string | null
         Trust folder
       </Button>
     </Banner>
+  );
+}
+
+/**
+ * Claude shows its login screen: nobody has logged into the agent's
+ * CLAUDE_CONFIG_DIR. Logging in, in its terminal, lets it carry on. With
+ * `onOpen` it offers to open the terminal; without, the terminal is below.
+ */
+export function LoginBanner({ agent, onOpen }: { agent: Agent; onOpen?: () => void }) {
+  return (
+    <Banner icon={KeyRound} tone="accent">
+      <div className="min-w-0 flex-1">
+        <p className="text-[13.5px] font-medium text-ink">Claude needs you to log in</p>
+        <LoginHint agent={agent} here={!onOpen} />
+      </div>
+      {onOpen ? (
+        <Button variant="accent" icon={SquareTerminal} onClick={onOpen}>
+          Open terminal
+        </Button>
+      ) : null}
+    </Banner>
+  );
+}
+
+/** "Open its terminal and log in, or run `CLAUDE_CONFIG_DIR=… claude` once." */
+export function LoginHint({ agent, here = false }: { agent: Agent; here?: boolean }) {
+  const dir = useCos((s) => configDirOf(s, agent));
+  return (
+    <p className="mt-0.5 text-[12.5px] leading-snug text-ink-2">
+      {here ? "Log in in the terminal below" : "Open its terminal and log in"}, or run{" "}
+      <code
+        className="rounded bg-subtle px-1 py-px font-mono text-[12px] text-ink select-all"
+        title={dir ? `The account in ${dir} isn't logged in yet` : undefined}
+      >
+        {loginCommand(dir)}
+      </code>{" "}
+      once.
+    </p>
   );
 }
 

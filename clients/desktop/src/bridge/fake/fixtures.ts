@@ -226,6 +226,12 @@ export function makeFixtures(now = Date.now()): Fixtures {
         "Sessions were expiring after 5 minutes because TTL_MS used minutes where it meant hours. I fixed the constant and added a test.",
     }),
     agent(9, 4, "Try the new parser", "needs_trust", { model: null, started: 40, active: 40 }),
+    // cos's agents use ~/.claude-personal, which nobody has logged into yet.
+    agent(11, 4, "Check the docs for broken links", "needs_login", {
+      model: null,
+      started: 25,
+      active: 25,
+    }),
     agent(6, 4, "Write the release notes", "idle", {
       model: "haiku",
       started: 3600,
@@ -796,6 +802,7 @@ pub fn is_expired(&self, now: Instant) -> bool {
       footer: { kind: "working", verb: "Running tests", seconds: 42 },
     },
     9: { prompt: "", transcript: "blank", footer: { kind: "trust" } },
+    11: { prompt: "", transcript: "blank", footer: { kind: "login" } },
     6: {
       prompt: "Write the release notes for 0.2.0 from the git log",
       transcript: "notes",

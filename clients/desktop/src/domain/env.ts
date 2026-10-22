@@ -8,6 +8,20 @@ export function accountHint(projectId: number | null): string {
     : "Which Claude account this project's agents use";
 }
 
+/**
+ * What logs a config dir in from a shell: `CLAUDE_CONFIG_DIR=~/.claude-personal claude`
+ * (the shell expands the `~`), or plain `claude` when cos sets no dir.
+ */
+export function loginCommand(configDir: string | null): string {
+  if (!configDir) return "claude";
+  // A leading ~/ stays outside quotes, so the shell still expands it.
+  const home = configDir.startsWith("~/") ? "~/" : "";
+  const rest = configDir.slice(home.length);
+  const quoted =
+    rest === "" || /^[A-Za-z0-9_./+-]+$/.test(rest) ? rest : `'${rest.replaceAll("'", `'\\''`)}'`;
+  return `CLAUDE_CONFIG_DIR=${home}${quoted} claude`;
+}
+
 /** Who gets a scope's variables, and when a change applies. */
 export function envNote(projectName: string | null): string {
   const who =

@@ -1,4 +1,4 @@
-import { ShieldQuestion } from "lucide-react";
+import { KeyRound, ShieldQuestion, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 import { useApp, useCanChange } from "../../app/context";
 import { approvalDetail } from "../../domain/approvals";
@@ -7,7 +7,7 @@ import { ApprovalButtons } from "../../screens/shared";
 import { Button } from "../../ui/kit";
 
 /**
- * Approvals and trust dialogs of the agents the chief started (and its
+ * Approvals, trust dialogs and login screens of the agents the chief started (and its
  * own), answerable without leaving the conversation.
  */
 export function WaitingStrip({
@@ -31,7 +31,7 @@ export function WaitingStrip({
       <ul className="max-h-[188px] divide-y divide-accent/12 overflow-y-auto">
         {requests.map((request) => (
           <Request
-            key={`${request.agent.id}-${request.approval?.id ?? "trust"}`}
+            key={`${request.agent.id}-${request.approval?.id ?? request.agent.state}`}
             request={request}
             isChief={request.agent.id === chiefAgentId}
           />
@@ -46,6 +46,7 @@ function Request({ request, isChief }: { request: ChiefRequest; isChief: boolean
   const canChange = useCanChange();
   const [busy, setBusy] = useState(false);
   const { agent, approval } = request;
+  const login = !approval && agent.state === "needs_login";
   return (
     <li className="flex items-center gap-3 px-4 py-2">
       <div className="min-w-0 flex-1">
@@ -69,6 +70,11 @@ function Request({ request, isChief }: { request: ChiefRequest; isChief: boolean
               </span>
               {approvalDetail(approval)}
             </>
+          ) : login ? (
+            <span className="flex items-center gap-1 font-sans text-ink-3">
+              <KeyRound className="size-3.5 text-accent" strokeWidth={1.8} />
+              needs a Claude login: log in in its terminal
+            </span>
           ) : (
             <span className="flex items-center gap-1 font-sans text-ink-3">
               <ShieldQuestion className="size-3.5 text-accent" strokeWidth={1.8} />
@@ -79,6 +85,15 @@ function Request({ request, isChief }: { request: ChiefRequest; isChief: boolean
       </div>
       {approval ? (
         <ApprovalButtons approval={approval} size="sm" />
+      ) : login ? (
+        <Button
+          size="sm"
+          variant="accent"
+          icon={SquareTerminal}
+          onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
+        >
+          Open terminal
+        </Button>
       ) : (
         <Button
           size="sm"

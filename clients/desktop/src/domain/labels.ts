@@ -23,6 +23,8 @@ export function agentLabel(state: AgentState): StateLabel {
       return { title: "Starting", tone: "neutral", busy: true, attention: false };
     case "needs_trust":
       return { title: "Needs trust", tone: "accent", busy: false, attention: true };
+    case "needs_login":
+      return { title: "Needs Claude login", tone: "accent", busy: false, attention: true };
     case "working":
       return { title: "Working", tone: "blue", busy: true, attention: false };
     case "waiting_approval":

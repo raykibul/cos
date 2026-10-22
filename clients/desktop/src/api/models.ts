@@ -151,6 +151,8 @@ export function decodeProject(value: unknown): Project {
 export type AgentState =
   | "starting"
   | "needs_trust"
+  /** Claude shows its login screen: the agent's CLAUDE_CONFIG_DIR isn't logged in. */
+  | "needs_login"
   | "working"
   | "waiting_approval"
   | "idle"

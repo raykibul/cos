@@ -263,7 +263,8 @@ export class FakeStaffDesk {
       branch: `${name}/chief`,
       working_agents: spawned.filter((a) => a.state === "working" || a.state === "starting").length,
       waiting_on_you: spawned.filter(
-        (a) => a.state === "waiting_approval" || a.state === "needs_trust",
+        (a) =>
+          a.state === "waiting_approval" || a.state === "needs_trust" || a.state === "needs_login",
       ).length,
     };
   }

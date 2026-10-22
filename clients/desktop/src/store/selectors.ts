@@ -63,6 +63,11 @@ export function trustAgents(s: DaemonState): Agent[] {
   return s.agents.filter((a) => a.state === "needs_trust");
 }
 
+/** Agents on Claude's login screen: their CLAUDE_CONFIG_DIR isn't logged in. */
+export function loginAgents(s: DaemonState): Agent[] {
+  return s.agents.filter((a) => a.state === "needs_login");
+}
+
 /** Runs whose plan waits for you, oldest first. */
 export function plansAwaitingApproval(s: DaemonState): Run[] {
   return s.runs
@@ -77,22 +82,23 @@ export function pendingDevices(s: DaemonState): Device[] {
 
 /**
  * Everything blocked on you: approvals routed to you (not to a chief),
- * agents on the trust dialog, chiefs' open questions, plans to approve, and
+ * agents on the trust dialog or the login screen, chiefs' open questions, plans to approve, and
  * devices asking to reach this Mac.
  */
 export function waitingCount(s: DaemonState): number {
   return (
     approvalsForYou(s).length +
     trustAgents(s).length +
+    loginAgents(s).length +
     s.questions.length +
     plansAwaitingApproval(s).length +
     pendingDevices(s).length
   );
 }
 
-/** Whether an agent waits on you: the trust dialog, or an approval routed to you. */
+/** Whether an agent waits on you: the trust dialog, the login screen, or an approval routed to you. */
 export function agentNeedsYou(s: DaemonState, a: Agent): boolean {
-  if (a.state === "needs_trust") return true;
+  if (a.state === "needs_trust" || a.state === "needs_login") return true;
   const approval = pendingApproval(s, a.id);
   if (approval) return isForYou(approval);
   return a.state === "waiting_approval";
@@ -186,7 +192,7 @@ export function spawnedAgents(
 /** Something one of the chief's agents (or the chief) waits on you for. */
 export interface ChiefRequest {
   agent: Agent;
-  /** Its approval routed to you; none for the trust dialog. */
+  /** Its approval routed to you; none for the trust dialog or the login screen (see `agent.state`). */
   approval: Approval | undefined;
 }
 
@@ -203,7 +209,8 @@ export function chiefRequests(
   for (const a of agents) {
     const approval = pendingApproval(s, a.id);
     if (approval && isForYou(approval)) requests.push({ agent: a, approval });
-    else if (a.state === "needs_trust") requests.push({ agent: a, approval: undefined });
+    else if (a.state === "needs_trust" || a.state === "needs_login")
+      requests.push({ agent: a, approval: undefined });
   }
   return requests.sort(
     (x, y) =>
@@ -271,6 +278,26 @@ export function projectOfPage(s: DaemonState, page: Page): number | null {
 /** A project's own variable names, CLAUDE_CONFIG_DIR first. */
 export function projectEnvNames(s: DaemonState, projectId: number): string[] {
   return sortedNames(Object.keys(s.projectEnvs[projectId]?.variables ?? {}));
+}
+
+/** The project an agent runs for: its workspace's, or the one whose Chief of Staff it is. */
+export function projectOfAgent(s: DaemonState, a: Agent): number | null {
+  const ws = workspace(s, a.workspaceId);
+  if (ws) return ws.projectId;
+  for (const [project, staff] of Object.entries(s.staffs)) {
+    if (staff.agentId === a.id) return Number(project);
+  }
+  return null;
+}
+
+/**
+ * The CLAUDE_CONFIG_DIR cos gives an agent's project, as stored (`~/…`), or
+ * null when cos sets none (the daemon's own, or Claude's default, applies).
+ */
+export function configDirOf(s: DaemonState, a: Agent): string | null {
+  const project = projectOfAgent(s, a);
+  const env = project !== null ? s.projectEnvs[project]?.effective : s.globalEnv;
+  return env?.[CLAUDE_CONFIG_DIR] ?? null;
 }
 
 /** The Claude account a project's agents use, from CLAUDE_CONFIG_DIR, its own or inherited. */

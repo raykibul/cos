@@ -37,6 +37,8 @@ function box(lines: string[], width: number, color: string): string[] {
 export type Footer =
   | { kind: "dialog"; command: string; description: string }
   | { kind: "trust" }
+  /** Claude's first-run login screen, for a config dir nobody has logged into. */
+  | { kind: "login" }
   | { kind: "working"; verb: string; seconds: number }
   | { kind: "idle" }
   | { kind: "exited" };
@@ -171,6 +173,27 @@ export function renderScreen(spec: ScreenSpec): Screen {
         orange,
       ),
       `   ${gray}Enter to confirm · Esc to exit${reset}`,
+    );
+  } else if (spec.footer.kind === "login") {
+    lines.push(
+      ...box(
+        [
+          `${orange}✻${reset} Welcome to ${bold}Claude Code${reset}`,
+          "",
+          "Claude Code can be used with your Claude subscription or billed",
+          "based on API usage through your Console account.",
+          "",
+          "Select login method:",
+          "",
+          `${blue}❯${reset} ${blue}1. Claude account with subscription${reset}`,
+          `     ${gray}Pro, Max, Team, or Enterprise${reset}`,
+          "",
+          "  2. Anthropic Console account",
+          `     ${gray}API usage billing${reset}`,
+        ],
+        Math.min(width, 72),
+        orange,
+      ),
     );
   } else {
     lines.push(

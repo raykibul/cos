@@ -1,4 +1,11 @@
-import { CheckCircle2, ClipboardList, ShieldQuestion, TerminalSquare } from "lucide-react";
+import {
+  CheckCircle2,
+  ClipboardList,
+  KeyRound,
+  ShieldQuestion,
+  SquareTerminal,
+  TerminalSquare,
+} from "lucide-react";
 import { useState } from "react";
 import { type Agent, type Approval, type Run, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
@@ -7,6 +14,7 @@ import { pluralize } from "../domain/labels";
 import {
   agent as agentOf,
   approvalsForYou,
+  loginAgents,
   pendingDevices,
   plansAwaitingApproval,
   trustAgents,
@@ -16,12 +24,14 @@ import {
 import { relativeTime } from "../ui/format";
 import { Button, EmptyState, PathText, SectionTitle } from "../ui/kit";
 import { PageBody, PageHeader, PageTitle } from "../ui/Page";
+import { LoginHint } from "./AgentPage";
 import { DeviceRequestCard } from "./Devices";
 import { ApprovalButtons, QuestionCard } from "./shared";
 
 /**
  * Everything blocked on you, oldest first: plans to approve, chiefs'
- * questions, permission requests routed to you, and trust dialogs. Requests
+ * questions, permission requests routed to you, trust dialogs and Claude
+ * login screens. Requests
  * routed to a chief aren't here; they're on their agent and in their run's
  * activity.
  */
@@ -30,6 +40,7 @@ export function WaitingPage() {
   const questions = useCos((s) => s.questions);
   const approvals = useCos(approvalsForYou);
   const trusting = useCos(trustAgents);
+  const logins = useCos(loginAgents);
   const devices = useCos(pendingDevices);
   const count = useCos(waitingCount);
 
@@ -97,6 +108,17 @@ export function WaitingPage() {
             <div className="flex flex-col gap-3">
               {trusting.map((agent) => (
                 <TrustCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {logins.length > 0 ? (
+          <section className="mb-8">
+            <SectionTitle>Claude logins</SectionTitle>
+            <div className="flex flex-col gap-3">
+              {logins.map((agent) => (
+                <LoginCard key={agent.id} agent={agent} />
               ))}
             </div>
           </section>
@@ -228,6 +250,34 @@ function TrustCard({ agent }: { agent: Agent }) {
           }}
         >
           Trust folder
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+/** An agent on Claude's login screen: its CLAUDE_CONFIG_DIR isn't logged in. */
+function LoginCard({ agent }: { agent: Agent }) {
+  const { ui } = useApp();
+  return (
+    <article className="rounded-xl border border-line bg-surface p-4 shadow-card">
+      <Meta
+        agent={agent}
+        workspaceId={agent.workspaceId}
+        since={agent.lastActivityMs ?? agent.startedMs}
+      />
+      <div className="mt-2.5 flex items-center gap-4">
+        <KeyRound className="size-5 shrink-0 text-accent" strokeWidth={1.7} />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13.5px] font-medium text-ink">Claude needs you to log in</p>
+          <LoginHint agent={agent} />
+        </div>
+        <Button
+          variant="accent"
+          icon={SquareTerminal}
+          onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
+        >
+          Open terminal
         </Button>
       </div>
     </article>
