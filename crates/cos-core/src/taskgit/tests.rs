@@ -80,13 +80,15 @@ impl Fixture {
             id: 4,
             project_id: 1,
             name: "lisbon".into(),
-            title: "lisbon".into(),
+            city: "lisbon".into(),
+            title: None,
             branch: "cos/lisbon".into(),
             path,
             base: Base::Head,
             base_ref: "main".into(),
             base_commit,
             created_at: Timestamp::now(),
+            staff: false,
         };
         let tasks = TaskWorktrees::new(root.join("tasks"));
         Self {

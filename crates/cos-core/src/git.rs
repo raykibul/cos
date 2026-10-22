@@ -108,6 +108,14 @@ pub(crate) async fn add_worktree(
         .map(drop)
 }
 
+/// Checks out an existing branch in a new worktree at `path`.
+pub(crate) async fn add_worktree_on(root: &Path, path: &Path, branch: &str) -> Result<(), GitError> {
+    let path = path.to_string_lossy();
+    git(root, &["worktree", "add", "--quiet", &path, branch])
+        .await
+        .map(drop)
+}
+
 /// True if the checkout has changes `git worktree remove` would lose,
 /// including untracked files.
 pub(crate) async fn has_uncommitted_changes(path: &Path) -> Result<bool, GitError> {

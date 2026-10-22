@@ -113,7 +113,7 @@ pub fn render_board(board: &Board) -> String {
     out.push('\n');
 
     let workspace = match &board.workspace {
-        Some(workspace) => format!("{} (`{}`)", workspace.title, workspace.branch),
+        Some(workspace) => format!("{} (`{}`)", workspace.label(), workspace.branch),
         None => format!("#{} (removed)", run.workspace_id),
     };
     let _ = writeln!(out, "- Workspace: {workspace}");

@@ -203,6 +203,7 @@ impl Runs {
         let workspace = self
             .store
             .workspace(new.workspace_id)?
+            .filter(|workspace| !workspace.staff)
             .ok_or_else(|| RunError::NotFound(format!("there is no workspace {}", new.workspace_id)))?;
 
         let mut conn = self.store.lock();
@@ -210,7 +211,9 @@ impl Runs {
         if let Some(busy) = storage::unfinished_run_in(&tx, workspace.id)? {
             return Err(RunError::Conflict(format!(
                 "workspace {} already has run {} ({}); cancel it or let it finish first",
-                workspace.title, busy.id, busy.state
+                workspace.label(),
+                busy.id,
+                busy.state
             )));
         }
         let now = storage::now();

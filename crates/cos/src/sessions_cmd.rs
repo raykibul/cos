@@ -137,7 +137,7 @@ fn place(projects: &[Project], cwd: &Path) -> Option<Place> {
             return Some(Place {
                 project_id: project.id,
                 workspace_id: Some(workspace.id),
-                label: format!("workspace {} of project {}", workspace.title, project.name),
+                label: format!("workspace {} of project {}", workspace.label(), project.name),
             });
         }
     }

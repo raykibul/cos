@@ -88,7 +88,10 @@ pub(crate) async fn agent(home: &CosHome, command: AgentCommand) -> anyhow::Resu
             let agent = client.start_agent(workspace.id, &request).await?;
             println!(
                 "Started agent #{} \"{}\" in {} (session {})",
-                agent.id, agent.title, workspace.title, agent.session_id
+                agent.id,
+                agent.title,
+                workspace.label(),
+                agent.session_id
             );
             println!("  watch it with `cos agent attach {}`", agent.id);
         }

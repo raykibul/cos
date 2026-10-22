@@ -240,7 +240,7 @@ impl Client {
         read_json(self.send(Method::POST, &path, Some(&body)).await?).await
     }
 
-    pub(crate) async fn rename_workspace(&self, id: i64, title: String) -> anyhow::Result<Workspace> {
+    pub(crate) async fn rename_workspace(&self, id: i64, title: Option<String>) -> anyhow::Result<Workspace> {
         let path = format!("/v1/workspaces/{id}");
         read_json(
             self.send(Method::PATCH, &path, Some(&RenameWorkspace { title }))

@@ -25,22 +25,23 @@ pub(crate) enum ProjectCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum WorkspaceCommand {
-    /// Create a workspace: a new worktree and `cos/<city>` branch for a project.
+    /// Create a workspace: a new worktree and `<project>/<city>` branch for a project.
     New {
         /// Project id or name.
         project: String,
         /// What to start from.
         #[arg(long, value_enum, default_value_t = From::Origin)]
         from: From,
-        /// A title. Defaults to the workspace's city name.
+        /// A title. Without one, the workspace goes by its city.
         #[arg(long)]
         title: Option<String>,
     },
-    /// Give a workspace a new title.
+    /// Give a workspace a new title, or clear it.
     Rename {
-        /// Workspace id or name.
+        /// Workspace id, name or title.
         workspace: String,
-        title: String,
+        /// Leave out to clear the title.
+        title: Option<String>,
     },
     /// Delete a workspace's folder. Refuses if it has uncommitted changes; the branch is kept.
     Remove {
@@ -108,7 +109,7 @@ pub(crate) async fn workspace(home: &CosHome, command: WorkspaceCommand) -> anyh
             let workspace = client.create_workspace(project.id, base, title).await?;
             println!(
                 "Created workspace {} (#{}) on {} from {} {}",
-                workspace.title,
+                describe(&workspace),
                 workspace.id,
                 workspace.branch,
                 workspace.base_ref,
@@ -119,14 +120,18 @@ pub(crate) async fn workspace(home: &CosHome, command: WorkspaceCommand) -> anyh
         WorkspaceCommand::Rename { workspace, title } => {
             let workspace = find_workspace(&client.projects().await?, &workspace)?.clone();
             let renamed = client.rename_workspace(workspace.id, title).await?;
-            println!("Renamed {} to {}", workspace.name, renamed.title);
+            match &renamed.title {
+                Some(title) => println!("Renamed {} to \"{title}\"", workspace.name),
+                None => println!("Cleared the title of {}", workspace.name),
+            }
         }
         WorkspaceCommand::Remove { workspace } => {
             let workspace = find_workspace(&client.projects().await?, &workspace)?.clone();
             client.remove_workspace(workspace.id).await?;
             println!(
                 "Removed workspace {}. Its branch {} is kept.",
-                workspace.title, workspace.branch
+                describe(&workspace),
+                workspace.branch
             );
         }
     }
@@ -146,10 +151,9 @@ fn print_project(project: &Project) {
         println!("    no workspaces yet: cos workspace new {}", project.name);
     }
     for workspace in &project.workspaces {
-        let title = if workspace.title == workspace.name {
-            String::new()
-        } else {
-            format!(" \"{}\"", workspace.title)
+        let title = match &workspace.title {
+            Some(title) if *title != workspace.name => format!(" \"{title}\""),
+            _ => String::new(),
         };
         println!(
             "    #{} {}{title}  {}  from {} {}",
@@ -163,8 +167,16 @@ fn print_project(project: &Project) {
     }
 }
 
+/// A workspace as people see it: its city, and its title if it has one.
+fn describe(workspace: &Workspace) -> String {
+    match &workspace.title {
+        Some(title) if *title != workspace.name => format!("\"{title}\" ({})", workspace.name),
+        _ => workspace.name.clone(),
+    }
+}
+
 /// A project by id or name.
-fn find_project<'a>(projects: &'a [Project], key: &str) -> anyhow::Result<&'a Project> {
+pub(crate) fn find_project<'a>(projects: &'a [Project], key: &str) -> anyhow::Result<&'a Project> {
     let matches: Vec<&Project> = projects
         .iter()
         .filter(|project| project.id.to_string() == key || project.name == key)
@@ -182,7 +194,9 @@ pub(crate) fn find_workspace<'a>(projects: &'a [Project], key: &str) -> anyhow::
         .iter()
         .flat_map(|project| &project.workspaces)
         .filter(|workspace| {
-            workspace.id.to_string() == key || workspace.name == key || workspace.title == key
+            workspace.id.to_string() == key
+                || workspace.name == key
+                || workspace.title.as_deref() == Some(key)
         })
         .collect();
     match matches.as_slice() {

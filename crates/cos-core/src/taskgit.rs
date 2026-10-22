@@ -47,11 +47,11 @@ pub struct TaskWorktree {
     pub task_id: i64,
     /// The workspace's worktree. Merges happen there.
     pub workspace: PathBuf,
-    /// The branch task branches merge into: `cos/<workspace name>`.
+    /// The branch task branches merge into: the workspace's branch.
     pub workspace_branch: String,
     /// The task's own worktree, where the worker runs.
     pub path: PathBuf,
-    /// `cos/<workspace name>-t<task id>-<slug>`.
+    /// `<workspace branch>-t<task id>-<slug>`.
     pub branch: String,
     /// The workspace branch's commit when the task started. Scope checks and
     /// diffs are measured from here.
@@ -100,7 +100,7 @@ impl TaskWorktrees {
     }
 
     /// Creates a worktree for the task at the tip of the workspace branch, on
-    /// a new branch `cos/<workspace name>-t<task id>-<slug of title>`, in
+    /// a new branch `<workspace branch>-t<task id>-<slug of title>`, in
     /// `<dir>/<workspace name>-<workspace id>/t<task id>-<slug>`. A taken name
     /// gets `-2`, `-3`, … Uncommitted changes in the workspace are not copied.
     pub async fn create(
@@ -127,7 +127,7 @@ impl TaskWorktrees {
         let stem = format!("t{task_id}-{}", slug(title));
         let mut free = None;
         for name in candidate_names(&stem) {
-            let branch = task_branch(&workspace.name, &name);
+            let branch = task_branch(&workspace.branch, &name);
             if !folder.join(&name).exists() && !git::branch_exists(&workspace.path, &branch).await {
                 free = Some((name, branch));
                 break;
@@ -395,10 +395,10 @@ fn merge_message(task_id: i64, title: &str) -> String {
     }
 }
 
-fn task_branch(workspace_name: &str, name: &str) -> String {
-    // Not `cos/<workspace>/…`: git can't have both a branch `cos/lisbon` and
-    // branches under `cos/lisbon/`.
-    format!("cos/{workspace_name}-{name}")
+fn task_branch(workspace_branch: &str, name: &str) -> String {
+    // Not `<workspace branch>/…`: git can't have both a branch `app/lisbon` and
+    // branches under `app/lisbon/`.
+    format!("{workspace_branch}-{name}")
 }
 
 fn candidate_names(stem: &str) -> impl Iterator<Item = String> + '_ {

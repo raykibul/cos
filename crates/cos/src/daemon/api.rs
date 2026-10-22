@@ -77,9 +77,11 @@ pub(crate) struct NewWorkspace {
     pub title: Option<String>,
 }
 
+/// Body of `PATCH /v1/workspaces/{id}`. A null or empty title clears it.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct RenameWorkspace {
-    pub title: String,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Clone)]
@@ -240,7 +242,9 @@ async fn rename_workspace(
 ) -> Result<Json<Workspace>, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::not_found("there is no such workspace"))?;
     let Json(body) = body?;
-    Ok(Json(state.projects.rename_workspace(id, &body.title).await?))
+    Ok(Json(
+        state.projects.rename_workspace(id, body.title.as_deref()).await?,
+    ))
 }
 
 async fn remove_workspace(
@@ -248,6 +252,8 @@ async fn remove_workspace(
     id: Result<Path<i64>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::not_found("there is no such workspace"))?;
+    // The Chief of Staff's worktree goes only with its project.
+    state.projects.listed_workspace(id)?;
     // Refused while an agent runs there.
     state.agents.remove_workspace(id).await?;
     Ok(StatusCode::NO_CONTENT)

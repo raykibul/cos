@@ -224,6 +224,71 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX questions_by_state ON questions (state, id);
 ",
+    "
+    -- The Chief of Staff. Workspace titles become optional (NULL: clients
+    -- show the city), and the chief's own worktree is a workspace row of kind
+    -- 'staff', which listings leave out. SQLite can't drop NOT NULL, so the
+    -- table is rebuilt; migrations run with foreign keys off for this.
+    CREATE TABLE workspaces_new (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id  INTEGER NOT NULL REFERENCES projects (id),
+        kind        TEXT    NOT NULL DEFAULT 'workspace' CHECK (kind IN ('workspace', 'staff')),
+        name        TEXT    NOT NULL,
+        title       TEXT,
+        branch      TEXT    NOT NULL,
+        path        TEXT    NOT NULL UNIQUE,
+        base        TEXT    NOT NULL CHECK (base IN ('origin', 'head')),
+        base_ref    TEXT    NOT NULL,
+        base_commit TEXT    NOT NULL,
+        created_ms  INTEGER NOT NULL,
+        UNIQUE (project_id, name)
+    );
+    INSERT INTO workspaces_new (id, project_id, name, title, branch, path, base, base_ref, base_commit, created_ms)
+        SELECT id, project_id, name, title, branch, path, base, base_ref, base_commit, created_ms FROM workspaces;
+    DROP TABLE workspaces;
+    ALTER TABLE workspaces_new RENAME TO workspaces;
+    -- The agent that started this one (the Chief of Staff), and Claude's
+    -- transcript file, from the hooks.
+    ALTER TABLE agents ADD COLUMN spawned_by INTEGER;
+    ALTER TABLE agents ADD COLUMN transcript_path TEXT;
+    CREATE INDEX agents_by_spawner ON agents (spawned_by);
+    -- The Chief of Staff that started a run.
+    ALTER TABLE runs ADD COLUMN spawned_by INTEGER;
+    -- One Chief of Staff per project. agent_id has no foreign key: agents are
+    -- forgotten with their workspace.
+    CREATE TABLE staff (
+        project_id INTEGER PRIMARY KEY REFERENCES projects (id),
+        agent_id   INTEGER,
+        model      TEXT,
+        brief      TEXT    NOT NULL DEFAULT '',
+        updated_ms INTEGER NOT NULL
+    );
+    -- One batch of updates typed into a Chief of Staff.
+    CREATE TABLE staff_wakeups (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        agent_id   INTEGER NOT NULL,
+        items      INTEGER NOT NULL,
+        bytes      INTEGER NOT NULL,
+        created_ms INTEGER NOT NULL
+    );
+    CREATE INDEX staff_wakeups_by_project ON staff_wakeups (project_id, created_ms);
+    -- What a Chief of Staff should hear: your messages and its agents' and
+    -- runs' news. Waiting until delivered_ms is set; updates are delivered in
+    -- a wakeup, your messages one at a time.
+    CREATE TABLE staff_inbox (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id   INTEGER NOT NULL,
+        kind         TEXT    NOT NULL,
+        agent_id     INTEGER,
+        run_id       INTEGER,
+        text         TEXT    NOT NULL,
+        created_ms   INTEGER NOT NULL,
+        wakeup_id    INTEGER REFERENCES staff_wakeups (id),
+        delivered_ms INTEGER
+    );
+    CREATE INDEX staff_inbox_waiting ON staff_inbox (project_id, delivered_ms, id);
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -361,13 +426,32 @@ fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             known: MIGRATIONS.len(),
         });
     }
-    let tx = conn.transaction()?;
-    for migration in &MIGRATIONS[applied..] {
-        tx.execute_batch(migration)?;
+    if applied == MIGRATIONS.len() {
+        return Ok(());
     }
-    tx.pragma_update(None, "user_version", MIGRATIONS.len() as i64)?;
-    tx.commit()?;
-    Ok(())
+    // Off while migrating, so a migration can rebuild a table others refer
+    // to (dropping it with foreign keys on would cascade). It can't change
+    // inside a transaction, and every key is checked before committing.
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| {
+        let tx = conn.transaction()?;
+        for migration in &MIGRATIONS[applied..] {
+            tx.execute_batch(migration)?;
+        }
+        let broken: i64 = tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+        if broken > 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+                Some(format!("{broken} rows break a foreign key after migrating")),
+            ));
+        }
+        tx.pragma_update(None, "user_version", MIGRATIONS.len() as i64)?;
+        tx.commit()
+    })();
+    conn.pragma_update(None, "foreign_keys", true)?;
+    Ok(result?)
 }
 
 /// Reads one `events` row. A row that can't be decoded is reported as
@@ -515,6 +599,61 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(tables, ["devices", "settings"]);
+    }
+
+    #[test]
+    fn rebuilding_workspaces_keeps_their_agents_and_frees_the_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cos.db");
+        {
+            // As the release before the Chief of Staff left it.
+            let mut conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "foreign_keys", true).unwrap();
+            let tx = conn.transaction().unwrap();
+            for migration in &MIGRATIONS[..8] {
+                tx.execute_batch(migration).unwrap();
+            }
+            tx.pragma_update(None, "user_version", 8).unwrap();
+            tx.execute_batch(
+                "INSERT INTO projects (root, name, base_branch, created_ms) VALUES ('/r', 'r', 'main', 0);
+                 INSERT INTO workspaces (project_id, name, title, branch, path, base, base_ref, base_commit, created_ms)
+                     VALUES (1, 'lisbon', 'Login fix', 'cos/lisbon', '/w/lisbon', 'head', 'main', 'abc', 0);
+                 INSERT INTO agents (workspace_id, role, title, session_id, state, permission_mode, user_settings,
+                     term_rows, term_cols, started_ms, last_activity_ms)
+                     VALUES (1, 'user', 'a', 's', 'exited', 'default', 1, 40, 120, 0, 0);
+                 INSERT INTO approvals (agent_id, workspace_id, tool_name, tool_input, summary, state, created_ms)
+                     VALUES (1, 1, 'Bash', '{}', 'Bash ls', 'settled', 0);",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let conn = store.lock();
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!((count("agents"), count("approvals")), (1, 1));
+        let (title, kind): (Option<String>, String) = conn
+            .query_row("SELECT title, kind FROM workspaces WHERE id = 1", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (title.as_deref(), kind.as_str()),
+            (Some("Login fix"), "workspace")
+        );
+        conn.execute("UPDATE workspaces SET title = NULL WHERE id = 1", [])
+            .unwrap();
+        let foreign_keys: bool = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert!(foreign_keys);
+        // The cascade still points at the rebuilt table.
+        conn.execute("DELETE FROM workspaces WHERE id = 1", []).unwrap();
+        assert_eq!((count("agents"), count("approvals")), (0, 0));
     }
 
     #[test]

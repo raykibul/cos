@@ -150,8 +150,10 @@ async fn origin_workspace_starts_from_a_fresh_fetch() {
     assert_eq!(workspace.base_commit, latest);
     assert_eq!(workspace.base_ref, "origin/trunk");
     assert!(workspace.path.join("second.txt").exists());
-    assert_eq!(workspace.branch, format!("cos/{}", workspace.name));
-    assert_eq!(workspace.title, workspace.name);
+    assert_eq!(workspace.branch, format!("repo/{}", workspace.name));
+    assert_eq!(workspace.title, None);
+    assert_eq!(workspace.city, workspace.name);
+    assert_eq!(workspace.label(), workspace.name);
     assert!(CITIES.contains(&workspace.name.as_str()));
     assert_eq!(
         workspace.path,
@@ -188,7 +190,7 @@ async fn head_workspace_has_unpushed_commits_but_not_uncommitted_files() {
 
     assert_eq!(workspace.base_commit, local);
     assert_eq!(workspace.base_ref, "trunk");
-    assert_eq!(workspace.title, "Try the thing");
+    assert_eq!(workspace.title.as_deref(), Some("Try the thing"));
     assert!(workspace.path.join("local.txt").exists());
     assert!(!workspace.path.join("scratch.txt").exists());
 }
@@ -247,7 +249,7 @@ async fn failed_fetch_creates_nothing() {
 async fn names_skip_branches_that_already_exist() {
     let fixture = Fixture::new();
     let project = fixture.add_repo().await;
-    git(&fixture.repo(), &["branch", "cos/lisbon"]);
+    git(&fixture.repo(), &["branch", "repo/lisbon"]);
 
     let first = fixture
         .projects
@@ -349,7 +351,7 @@ async fn a_project_is_removed_only_without_workspaces_and_the_repo_stays() {
 }
 
 #[tokio::test]
-async fn renaming_trims_and_rejects_empty_titles() {
+async fn renaming_trims_and_an_empty_title_clears_it() {
     let fixture = Fixture::new();
     let project = fixture.add_repo().await;
     let workspace = fixture
@@ -360,25 +362,150 @@ async fn renaming_trims_and_rejects_empty_titles() {
 
     let renamed = fixture
         .projects
-        .rename_workspace(workspace.id, "  Login fix ")
+        .rename_workspace(workspace.id, Some("  Login fix "))
         .await
         .unwrap();
-    let empty = fixture
-        .projects
-        .rename_workspace(workspace.id, "   ")
-        .await
-        .unwrap_err();
+    assert_eq!(renamed.title.as_deref(), Some("Login fix"));
+    assert_eq!(
+        fixture.projects.get(project.id).await.unwrap().workspaces[0]
+            .title
+            .as_deref(),
+        Some("Login fix")
+    );
 
-    assert_eq!(renamed.title, "Login fix");
+    let cleared = fixture
+        .projects
+        .rename_workspace(workspace.id, Some("   "))
+        .await
+        .unwrap();
+    assert_eq!(cleared.title, None);
+    assert_eq!(cleared.label(), workspace.name);
     assert_eq!(
         fixture.projects.get(project.id).await.unwrap().workspaces[0].title,
-        "Login fix"
+        None
     );
-    assert!(matches!(empty, ProjectError::Invalid(_)), "{empty}");
     assert_eq!(
         fixture.event_kinds().last().map(String::as_str),
         Some(kind::WORKSPACE_RENAMED)
     );
+}
+
+#[tokio::test]
+async fn names_skip_folders_that_already_exist() {
+    let fixture = Fixture::new();
+    let project = fixture.add_repo().await;
+    let folder = fixture
+        .dir
+        .path()
+        .join("worktrees")
+        .join(format!("repo-{}", project.id));
+    std::fs::create_dir_all(folder.join("oslo")).unwrap();
+
+    let workspace = fixture
+        .projects
+        .create_workspace_from(project.id, Base::Head, None, "oslo")
+        .await
+        .unwrap();
+
+    assert_eq!(workspace.name, "oslo-v1");
+    assert_eq!(workspace.branch, "repo/oslo-v1");
+    assert_eq!(workspace.path, folder.join("oslo-v1"));
+}
+
+#[tokio::test]
+async fn branches_start_with_the_project_slug() {
+    let fixture = Fixture::new();
+    let root = fixture.dir.path();
+    git(root, &["init", "-q", "-b", "main", "My App_2"]);
+    let repo = root.join("My App_2");
+    commit_file(&repo, "a.txt");
+    let (project, _) = fixture.projects.add(&repo).await.unwrap();
+
+    let workspace = fixture
+        .projects
+        .create_workspace_from(project.id, Base::Head, None, "lisbon")
+        .await
+        .unwrap();
+
+    assert_eq!(workspace.branch, "my-app-2/lisbon");
+    assert_eq!(workspace.city, "lisbon");
+}
+
+#[tokio::test]
+async fn a_branch_named_like_the_slug_is_refused_clearly() {
+    let fixture = Fixture::new();
+    let project = fixture.add_repo().await;
+    git(&fixture.repo(), &["branch", "repo"]);
+
+    let error = fixture
+        .projects
+        .create_workspace(project.id, Base::Head, None)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ProjectError::Conflict(_)), "{error}");
+    assert!(error.to_string().contains("a branch named repo"), "{error}");
+}
+
+#[test]
+fn slugs_are_git_safe() {
+    assert_eq!(slug("topflexi"), "topflexi");
+    assert_eq!(slug("My App"), "my-app");
+    assert_eq!(slug("--Ünïcode__ & stuff--"), "n-code-stuff");
+    assert_eq!(slug("a..b//c"), "a-b-c");
+    assert_eq!(slug("***"), "project");
+}
+
+#[tokio::test]
+async fn the_staff_worktree_is_made_once_from_head_and_never_listed() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let local = commit_file(&repo, "local.txt");
+    let project = fixture.add_repo().await;
+    let (path, branch) = fixture.projects.staff_location(project.id).unwrap();
+
+    let staff = fixture.projects.staff_workspace(project.id).await.unwrap();
+    let again = fixture.projects.staff_workspace(project.id).await.unwrap();
+
+    assert!(staff.staff);
+    assert_eq!(again.id, staff.id);
+    assert_eq!((staff.path.clone(), staff.branch.clone()), (path, branch));
+    assert_eq!(staff.branch, "repo/chief");
+    assert_eq!(staff.base_commit, local);
+    assert!(staff.path.join("local.txt").exists());
+    assert!(
+        fixture
+            .projects
+            .get(project.id)
+            .await
+            .unwrap()
+            .workspaces
+            .is_empty()
+    );
+    assert!(fixture.projects.listed_workspace(staff.id).is_err());
+    assert!(
+        fixture
+            .projects
+            .rename_workspace(staff.id, Some("x"))
+            .await
+            .is_err()
+    );
+    // Not logged as a workspace.
+    assert_eq!(fixture.event_kinds(), [kind::PROJECT_ADDED]);
+
+    // A folder deleted by hand comes back on its branch.
+    std::fs::remove_dir_all(&staff.path).unwrap();
+    let back = fixture.projects.staff_workspace(project.id).await.unwrap();
+    assert_eq!(back.id, staff.id);
+    assert!(back.path.join("local.txt").exists());
+    assert_eq!(
+        git(&back.path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "repo/chief"
+    );
+
+    // Removing the worktree lets the project go.
+    fixture.projects.remove_workspace(staff.id).await.unwrap();
+    fixture.projects.remove(project.id).await.unwrap();
 }
 
 #[test]

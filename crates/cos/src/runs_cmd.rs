@@ -93,7 +93,7 @@ pub(crate) async fn start(home: &CosHome, args: RunArgs) -> anyhow::Result<ExitC
     println!(
         "Started run {} in workspace {} ({}): {}",
         run.id,
-        workspace.title,
+        workspace.label(),
         workspace.branch,
         preview(&run.goal)
     );
@@ -121,7 +121,10 @@ pub(crate) async fn list(home: &CosHome) -> anyhow::Result<ExitCode> {
         let run = &summary.run;
         let workspace = all_workspaces(&projects)
             .find(|workspace| workspace.id == run.workspace_id)
-            .map_or_else(|| format!("#{} (removed)", run.workspace_id), |w| w.title.clone());
+            .map_or_else(
+                || format!("#{} (removed)", run.workspace_id),
+                |w| w.label().to_owned(),
+            );
         println!(
             "#{:<4} {:<22} {:<12} {}",
             run.id,

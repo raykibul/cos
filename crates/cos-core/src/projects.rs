@@ -38,10 +38,16 @@ pub struct Project {
 pub struct Workspace {
     pub id: i64,
     pub project_id: i64,
-    /// A city name, unique within the project. Also the folder name.
+    /// A city name with `-vN` if needed, unique within the project. Also the
+    /// folder name.
     pub name: String,
-    /// What people call it. Starts as the name.
-    pub title: String,
+    /// The last segment of the branch, which clients show when there's no
+    /// title. The same as `name`.
+    #[serde(default)]
+    pub city: String,
+    /// What people call it, if anyone named it.
+    pub title: Option<String>,
+    /// `<project slug>/<city>`; `cos/<city>` for workspaces from before.
     pub branch: String,
     pub path: PathBuf,
     pub base: Base,
@@ -49,6 +55,16 @@ pub struct Workspace {
     pub base_ref: String,
     pub base_commit: String,
     pub created_at: Timestamp,
+    /// The Chief of Staff's own worktree, which isn't listed as a workspace.
+    #[serde(skip)]
+    pub staff: bool,
+}
+
+impl Workspace {
+    /// The title, or the city when it has none: what to show people.
+    pub fn label(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// Where a new workspace starts.
@@ -181,7 +197,7 @@ impl Projects {
         Ok(())
     }
 
-    /// Creates a worktree for the project on a new `cos/<city>` branch.
+    /// Creates a worktree for the project on a new `<project slug>/<city>` branch.
     pub async fn create_workspace(
         &self,
         project_id: i64,
@@ -234,16 +250,14 @@ impl Projects {
             ),
         };
 
-        let folder = self.worktrees.join(format!("{}-{}", project.name, project.id));
-        std::fs::create_dir_all(&folder).map_err(|error| {
-            ProjectError::Invalid(format!("could not create {}: {error}", folder.display()))
-        })?;
+        let folder = self.folder(&project)?;
+        let prefix = branch_prefix(&project, root).await?;
 
         let mut free_name = None;
         for name in candidate_names(city) {
             let taken = self.store.workspace_name_taken(project_id, &name)?
                 || folder.join(&name).exists()
-                || git::branch_exists(root, &branch_for(&name)).await;
+                || git::branch_exists(root, &format!("{prefix}/{name}")).await;
             if !taken {
                 free_name = Some(name);
                 break;
@@ -252,13 +266,14 @@ impl Projects {
         let name = free_name.ok_or_else(|| {
             ProjectError::Conflict(format!("every name based on {city} is taken; try again"))
         })?;
-        let branch = branch_for(&name);
+        let branch = format!("{prefix}/{name}");
         let path = folder.join(&name);
 
         git::add_worktree(root, &path, &branch, &base_commit).await?;
         let new = NewWorkspace {
             project_id,
-            title: clean_title(title).unwrap_or_else(|| name.clone()),
+            staff: false,
+            title: clean_title(title),
             name,
             branch,
             path: path.clone(),
@@ -282,6 +297,8 @@ impl Projects {
                 "workspace_id": workspace.id,
                 "project_id": project_id,
                 "name": workspace.name,
+                "city": workspace.city,
+                "title": workspace.title,
                 "branch": workspace.branch,
                 "path": workspace.path,
                 "base": workspace.base,
@@ -290,11 +307,81 @@ impl Projects {
         Ok(workspace)
     }
 
-    pub async fn rename_workspace(&self, id: i64, title: &str) -> Result<Workspace, ProjectError> {
-        let title =
-            clean_title(Some(title)).ok_or_else(|| ProjectError::Invalid("a title can't be empty".into()))?;
-        let workspace = self.workspace(id)?;
-        self.store.rename_workspace(id, &title)?;
+    /// The Chief of Staff's worktree for the project: `<project slug>/chief`
+    /// from the main checkout's `HEAD` (no fetch), in `<folder>/chief`.
+    /// Created the first time, and again if its folder was deleted. It is a
+    /// workspace row with `staff` set, so listings leave it out.
+    pub async fn staff_workspace(&self, project_id: i64) -> Result<Workspace, ProjectError> {
+        let _one_at_a_time = self.creating.lock().await;
+        let project = self.project(project_id)?;
+        let root = &project.root;
+        if !root.is_dir() {
+            return Err(ProjectError::Invalid(format!(
+                "{} is missing; was the repo moved?",
+                root.display()
+            )));
+        }
+        if let Some(workspace) = self.store.staff_workspace(project_id)? {
+            if !workspace.path.is_dir() {
+                git::prune_worktrees(root).await?;
+                if git::branch_exists(root, &workspace.branch).await {
+                    git::add_worktree_on(root, &workspace.path, &workspace.branch).await?;
+                } else {
+                    let head = git::commit_of(root, "HEAD").await?;
+                    git::add_worktree(root, &workspace.path, &workspace.branch, &head).await?;
+                }
+            }
+            return Ok(workspace);
+        }
+        let path = self.folder(&project)?.join(STAFF_NAME);
+        let branch = format!("{}/{STAFF_NAME}", branch_prefix(&project, root).await?);
+        let base_ref = git::current_branch(root).await?;
+        let base_commit = git::commit_of(root, "HEAD").await?;
+        if path.is_dir() {
+            // Left behind by a database that was reset; git still knows it.
+        } else if git::branch_exists(root, &branch).await {
+            git::prune_worktrees(root).await?;
+            git::add_worktree_on(root, &path, &branch).await?;
+        } else {
+            git::add_worktree(root, &path, &branch, &base_commit).await?;
+        }
+        let new = NewWorkspace {
+            project_id,
+            staff: true,
+            name: STAFF_NAME.into(),
+            title: None,
+            branch,
+            path,
+            base: Base::Head,
+            base_ref,
+            base_commit,
+        };
+        Ok(self.store.insert_workspace(new)?)
+    }
+
+    /// The Chief of Staff's worktree, if it was ever made.
+    pub fn existing_staff_workspace(&self, project_id: i64) -> Result<Option<Workspace>, ProjectError> {
+        Ok(self.store.staff_workspace(project_id)?)
+    }
+
+    /// Where the Chief of Staff's worktree is, or will be, and its branch.
+    pub fn staff_location(&self, project_id: i64) -> Result<(PathBuf, String), ProjectError> {
+        if let Some(workspace) = self.store.staff_workspace(project_id)? {
+            return Ok((workspace.path, workspace.branch));
+        }
+        let project = self.project(project_id)?;
+        let path = self
+            .worktrees
+            .join(format!("{}-{}", project.name, project.id))
+            .join(STAFF_NAME);
+        Ok((path, format!("{}/{STAFF_NAME}", slug(&project.name))))
+    }
+
+    /// Gives a workspace a title, or clears it with `None` or an empty one.
+    pub async fn rename_workspace(&self, id: i64, title: Option<&str>) -> Result<Workspace, ProjectError> {
+        let title = clean_title(title);
+        let workspace = self.listed_workspace(id)?;
+        self.store.rename_workspace(id, title.as_deref())?;
         self.log.append(
             kind::WORKSPACE_RENAMED,
             None,
@@ -313,7 +400,7 @@ impl Projects {
             if git::has_uncommitted_changes(&workspace.path).await? {
                 return Err(ProjectError::Conflict(format!(
                     "{} has uncommitted changes in {}. Commit or discard them first; its branch {} is kept either way.",
-                    workspace.title,
+                    workspace.label(),
                     workspace.path.display(),
                     workspace.branch
                 )));
@@ -325,6 +412,9 @@ impl Projects {
         }
 
         self.store.delete_workspace(id)?;
+        if workspace.staff {
+            return Ok(());
+        }
         self.log.append(
             kind::WORKSPACE_REMOVED,
             None,
@@ -344,15 +434,65 @@ impl Projects {
             .ok_or_else(|| ProjectError::NotFound(format!("there is no project {id}")))
     }
 
+    /// A workspace, or the Chief of Staff's worktree.
     pub fn workspace(&self, id: i64) -> Result<Workspace, ProjectError> {
         self.store
             .workspace(id)?
             .ok_or_else(|| ProjectError::NotFound(format!("there is no workspace {id}")))
     }
+
+    /// A workspace people see: not the Chief of Staff's worktree.
+    pub fn listed_workspace(&self, id: i64) -> Result<Workspace, ProjectError> {
+        self.workspace(id)
+            .ok()
+            .filter(|workspace| !workspace.staff)
+            .ok_or_else(|| ProjectError::NotFound(format!("there is no workspace {id}")))
+    }
+
+    /// `<cos home>/worktrees/<project name>-<id>`, created if needed.
+    fn folder(&self, project: &Project) -> Result<PathBuf, ProjectError> {
+        let folder = self.worktrees.join(format!("{}-{}", project.name, project.id));
+        std::fs::create_dir_all(&folder).map_err(|error| {
+            ProjectError::Invalid(format!("could not create {}: {error}", folder.display()))
+        })?;
+        Ok(folder)
+    }
 }
 
-fn branch_for(name: &str) -> String {
-    format!("cos/{name}")
+/// The folder and branch name of the Chief of Staff's worktree.
+const STAFF_NAME: &str = "chief";
+
+/// A project's name as a git-safe branch prefix: lowercase, every run of
+/// characters other than `[a-z0-9]` made one `-`, no `-` at either end.
+pub fn slug(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "project".into()
+    } else {
+        slug.into()
+    }
+}
+
+/// The prefix of the project's workspace branches. Git can't hold a branch
+/// `x` and branches under `x/` at once, so a branch named like the slug is
+/// refused with a message rather than a git error.
+async fn branch_prefix(project: &Project, root: &Path) -> Result<String, ProjectError> {
+    let prefix = slug(&project.name);
+    if git::branch_exists(root, &prefix).await {
+        return Err(ProjectError::Conflict(format!(
+            "{} has a branch named {prefix}, so cos can't make branches under {prefix}/; rename that branch",
+            project.name
+        )));
+    }
+    Ok(prefix)
 }
 
 fn candidate_names(city: &str) -> impl Iterator<Item = String> + '_ {
@@ -369,8 +509,9 @@ fn clean_title(title: Option<&str>) -> Option<String> {
 
 struct NewWorkspace {
     project_id: i64,
+    staff: bool,
     name: String,
-    title: String,
+    title: Option<String>,
     branch: String,
     path: PathBuf,
     base: Base,
@@ -380,7 +521,7 @@ struct NewWorkspace {
 
 const PROJECT_COLUMNS: &str = "id, root, name, base_branch, created_ms";
 const WORKSPACE_COLUMNS: &str =
-    "id, project_id, name, title, branch, path, base, base_ref, base_commit, created_ms";
+    "id, project_id, name, title, branch, path, base, base_ref, base_commit, created_ms, kind";
 
 impl Store {
     /// Returns the project id and whether the row is new.
@@ -414,7 +555,9 @@ impl Store {
             .query_map([], read_project)?
             .collect::<Result<Vec<_>, _>>()?;
         let workspaces = conn
-            .prepare_cached(&format!("SELECT {WORKSPACE_COLUMNS} FROM workspaces ORDER BY id"))?
+            .prepare_cached(&format!(
+                "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE kind = 'workspace' ORDER BY id"
+            ))?
             .query_map([], read_workspace)?
             .collect::<Result<Vec<_>, _>>()?;
         for workspace in workspaces {
@@ -436,15 +579,23 @@ impl Store {
         };
         project.workspaces = conn
             .prepare_cached(&format!(
-                "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE project_id = ?1 ORDER BY id"
+                "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE project_id = ?1 AND kind = 'workspace' ORDER BY id"
             ))?
             .query_map([id], read_workspace)?
             .collect::<Result<_, _>>()?;
         Ok(Some(project))
     }
 
+    /// Deletes the project and its Chief of Staff's books. Its staff
+    /// worktree must be gone already.
     fn delete_project(&self, id: i64) -> Result<(), StoreError> {
-        self.lock().execute("DELETE FROM projects WHERE id = ?1", [id])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM staff_inbox WHERE project_id = ?1", [id])?;
+        tx.execute("DELETE FROM staff_wakeups WHERE project_id = ?1", [id])?;
+        tx.execute("DELETE FROM staff WHERE project_id = ?1", [id])?;
+        tx.execute("DELETE FROM projects WHERE id = ?1", [id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -455,6 +606,16 @@ impl Store {
                 "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE id = ?1"
             ))?
             .query_row([id], read_workspace)
+            .optional()?)
+    }
+
+    fn staff_workspace(&self, project_id: i64) -> Result<Option<Workspace>, StoreError> {
+        Ok(self
+            .lock()
+            .prepare_cached(&format!(
+                "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE project_id = ?1 AND kind = 'staff'"
+            ))?
+            .query_row([project_id], read_workspace)
             .optional()?)
     }
 
@@ -470,8 +631,8 @@ impl Store {
         let conn = self.lock();
         let created_ms = now_ms();
         conn.execute(
-            "INSERT INTO workspaces (project_id, name, title, branch, path, base, base_ref, base_commit, created_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO workspaces (project_id, name, title, branch, path, base, base_ref, base_commit, created_ms, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 new.project_id,
                 new.name,
@@ -482,11 +643,13 @@ impl Store {
                 new.base_ref,
                 new.base_commit,
                 created_ms,
+                if new.staff { "staff" } else { "workspace" },
             ],
         )?;
         Ok(Workspace {
             id: conn.last_insert_rowid(),
             project_id: new.project_id,
+            city: new.name.clone(),
             name: new.name,
             title: new.title,
             branch: new.branch,
@@ -495,10 +658,11 @@ impl Store {
             base_ref: new.base_ref,
             base_commit: new.base_commit,
             created_at: timestamp(created_ms).expect("the current time is in range"),
+            staff: new.staff,
         })
     }
 
-    fn rename_workspace(&self, id: i64, title: &str) -> Result<(), StoreError> {
+    fn rename_workspace(&self, id: i64, title: Option<&str>) -> Result<(), StoreError> {
         self.lock().execute(
             "UPDATE workspaces SET title = ?2 WHERE id = ?1",
             params![id, title],
@@ -537,10 +701,12 @@ fn read_workspace(row: &Row<'_>) -> rusqlite::Result<Workspace> {
             ));
         }
     };
+    let name: String = row.get(2)?;
     Ok(Workspace {
         id: row.get(0)?,
         project_id: row.get(1)?,
-        name: row.get(2)?,
+        city: name.clone(),
+        name,
         title: row.get(3)?,
         branch: row.get(4)?,
         path: PathBuf::from(row.get::<_, String>(5)?),
@@ -548,6 +714,7 @@ fn read_workspace(row: &Row<'_>) -> rusqlite::Result<Workspace> {
         base_ref: row.get(7)?,
         base_commit: row.get(8)?,
         created_at: timestamp(row.get(9)?)?,
+        staff: row.get_ref(10)?.as_str()? == "staff",
     })
 }
 

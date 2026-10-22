@@ -136,6 +136,8 @@ async fn start_agent(
 ) -> Result<(StatusCode, Json<Agent>), ApiError> {
     let Path(workspace_id) = id.map_err(|_| ApiError::not_found("there is no such workspace"))?;
     let Json(body) = body?;
+    // The Chief of Staff's worktree is its own.
+    state.projects.listed_workspace(workspace_id)?;
     let agent = state.agents.start_agent(workspace_id, Role::User, None, &body)?;
     Ok((StatusCode::CREATED, Json(agent)))
 }

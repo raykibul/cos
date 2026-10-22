@@ -320,7 +320,7 @@ async fn projects_and_workspaces_over_the_socket() {
         .create_workspace(project.id, Base::Head, Some("First try".into()))
         .await
         .unwrap();
-    assert_eq!(workspace.title, "First try");
+    assert_eq!(workspace.title.as_deref(), Some("First try"));
     assert!(workspace.path.join("README").exists());
 
     // No origin remote: 400 with a message for the user.
@@ -334,10 +334,10 @@ async fn projects_and_workspaces_over_the_socket() {
     assert!(message.contains("no origin remote"), "{message}");
 
     let renamed = client
-        .rename_workspace(workspace.id, "Login fix".into())
+        .rename_workspace(workspace.id, Some("Login fix".into()))
         .await
         .unwrap();
-    assert_eq!(renamed.title, "Login fix");
+    assert_eq!(renamed.title.as_deref(), Some("Login fix"));
     assert_eq!(client.projects().await.unwrap()[0].workspaces, vec![renamed]);
 
     // Unsaved work and a project that still has workspaces: 409.
