@@ -1,4 +1,4 @@
-// Settings: the Macs this app talks to, the environment variables every
+// Settings: the machines this app talks to, the environment variables every
 // project's agents get, and remote access to this one (the tailnet listener
 // and the devices that tried it). Remote access is managed only on the Mac
 // itself: its routes answer on the socket alone.
@@ -28,7 +28,7 @@ export function SettingsPage() {
         <span className="text-ink-2">Settings</span>
       </PageHeader>
       <PageBody>
-        <PageTitle subtitle="The Macs this app talks to, what agents get in their environment, and who may reach this Mac.">
+        <PageTitle subtitle="The machines this app talks to, what agents get in their environment, and who may reach this Mac.">
           Settings
         </PageTitle>
         <MacsSection />
@@ -50,14 +50,14 @@ function MacsSection() {
       <SectionTitle
         actions={
           <Button size="sm" icon={Plus} onClick={() => ui.open({ kind: "addHost" })}>
-            Add a Mac…
+            Add a machine…
           </Button>
         }
       >
-        Macs
+        Machines
       </SectionTitle>
       <Card>
-        <ul className="divide-y divide-line" aria-label="Macs">
+        <ul className="divide-y divide-line" aria-label="Machines">
           {list.map((host) => (
             <li key={host.id} className="flex items-center gap-3 px-4 py-3" aria-label={host.name}>
               <HostAvatar name={host.name} />
@@ -80,6 +80,14 @@ function MacsSection() {
                   Switch
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Rename ${host.name}`}
+                onClick={() => ui.open({ kind: "renameHost", hostId: host.id })}
+              >
+                Rename
+              </Button>
               {host.address ? (
                 <Button
                   size="sm"
@@ -121,7 +129,7 @@ function EnvironmentSection() {
       />
       <p className="mt-2 px-1 text-[12.5px] leading-snug text-ink-3">
         {envNote(null)} A project's own values are under Environment in its ⋯ menu
-        {isThisMac(host) ? "" : `, and these belong to ${host?.name ?? "that Mac"}'s daemon`}.
+        {isThisMac(host) ? "" : `, and these belong to ${host?.name ?? "that machine"}'s daemon`}.
       </p>
     </section>
   );
@@ -139,9 +147,9 @@ function RemoteAccessSection() {
   if (!isThisMac(host)) {
     body = (
       <Card>
-        <EmptyState icon={Globe} title={`Managed on ${host?.name ?? "that Mac"}`}>
-          Who may reach a Mac is decided on that Mac. Switch to This Mac to manage remote access to
-          it.
+        <EmptyState icon={Globe} title={`Managed on ${host?.name ?? "that machine"}`}>
+          Who may reach a machine is decided on that machine. Switch to This Mac to manage remote
+          access to it.
           <div className="mt-4">
             <Button size="sm" onClick={() => switchHost(THIS_MAC)}>
               Switch to This Mac

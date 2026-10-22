@@ -136,7 +136,7 @@ export function refusalCopy(code: string, host: string): RefusalCopy {
     case "wrong_user":
       return {
         title: "Signed in to Tailscale as someone else",
-        body: `${host} only lets in devices logged in to Tailscale as the same person who owns it. Log this Mac in to Tailscale as that user, or pick another Mac.`,
+        body: `${host} only lets in devices logged in to Tailscale as the same person who owns it. Log this Mac in to Tailscale as that user, or pick another machine.`,
         waits: false,
       };
     case "tagged_device":

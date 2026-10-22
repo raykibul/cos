@@ -1,5 +1,5 @@
 // The devices on this Mac's tailnet: a row for each, with whether cos runs
-// there. The "Add a Mac" sheet lists them above its fields (Connect for a
+// there. The "Add a machine" sheet lists them above its fields (Connect for a
 // Mac running cos, a click to fill the form for the others), and Settings
 // shows them read-only. They always come from This Mac's daemon.
 
@@ -240,7 +240,7 @@ function OthersToggle({
 }
 
 /**
- * The "On your tailnet" list in the Add a Mac sheet. A Mac running cos gets
+ * The "On your tailnet" list in the Add a machine sheet. A Mac running cos gets
  * Connect (add it, then switch to it); clicking any other row of yours fills
  * the form with its name and address.
  */

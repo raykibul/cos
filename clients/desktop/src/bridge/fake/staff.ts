@@ -2,7 +2,8 @@
 // project. cos's (agent 40) has a conversation in which it started agents 7
 // and 8; opal-app's hasn't started. Messaging a chief appends to its
 // transcript and logs `agent.transcript`, and with simulation on it answers
-// a moment later.
+// a moment later. A paused chief keeps its updates waiting until it's
+// resumed. Transcripts carry how full each chief's context is.
 
 import type { DaemonResponse } from "../types";
 import type { FakeAgent, Raw } from "./fixtures";
@@ -57,7 +58,13 @@ const update = `[cos · 2 updates]
 - Agent 7 (Fix login bug) finished a turn: Sessions were expiring after 5 minutes because TTL_MS used minutes where it meant hours. I fixed the constant and added a test.
 - Agent 8 (Add left-pad to the formatter) is waiting for your approval: npm install left-pad --save`;
 
-export function makeStaff(now: number) {
+/** A chief's window, as the daemon reads it from the model. */
+const WINDOW = 200_000;
+
+export function makeStaff(
+  now: number,
+  options: { paused?: boolean; contextPercent?: number } = {},
+) {
   const ms = (agoSeconds: number) => now - agoSeconds * 1000;
   let n = 0;
   const text = (role: string, ago: number, body: string): Raw => ({
@@ -157,10 +164,18 @@ export function makeStaff(now: number) {
         agent_id: 40,
         model: "opus",
         brief: "Ship 0.2: login fix, left-pad, release notes.",
+        paused: options.paused ?? false,
+        updates_waiting: options.paused ? 3 : 0,
       },
-      { project_id: 2, agent_id: null, model: null, brief: "" },
+      { project_id: 2, agent_id: null, model: null, brief: "", paused: false, updates_waiting: 0 },
     ] as Raw[],
     transcripts: { 40: transcript } as Record<number, Raw[]>,
+    contexts: {
+      40: {
+        used_tokens: Math.round((WINDOW * (options.contextPercent ?? 42)) / 100) + 123,
+        window_tokens: WINDOW,
+      },
+    } as Record<number, Raw>,
     inboxes: { 1: inbox } as Record<number, Raw[]>,
   };
 }
@@ -182,6 +197,8 @@ export class FakeStaffDesk {
   readonly staffs: Raw[];
   readonly transcripts: Record<number, Raw[]>;
   readonly inboxes: Record<number, Raw[]>;
+  /** `{used_tokens, window_tokens}` by agent id. */
+  readonly contexts: Record<number, Raw>;
 
   constructor(
     private readonly host: StaffHost,
@@ -190,6 +207,7 @@ export class FakeStaffDesk {
     this.staffs = fixtures.staffs;
     this.transcripts = fixtures.transcripts;
     this.inboxes = fixtures.inboxes;
+    this.contexts = fixtures.contexts;
   }
 
   /** The answer, or null when the route isn't the desk's. */
@@ -208,6 +226,7 @@ export class FakeStaffDesk {
       return ok({
         messages: all.filter((m) => (m.n as number) > after),
         next: last ? (last.n as number) : 0,
+        context: this.contexts[id] ?? null,
       });
     }
     p = path.match(/^\/v1\/projects\/(\d+)\/staff(?:\/([a-z]+))?$/);
@@ -218,6 +237,14 @@ export class FakeStaffDesk {
     if (!action && method === "GET") return ok(this.json(staff));
     if (!action && method === "PUT") {
       if ("model" in b) staff.model = typeof b.model === "string" && b.model ? b.model : null;
+      if (typeof b.paused === "boolean" && b.paused !== staff.paused) {
+        staff.paused = b.paused;
+        // Resumed: what waited goes in with the next wakeup.
+        if (!b.paused && (staff.updates_waiting as number) > 0) {
+          staff.updates_waiting = 0;
+          this.host.log("staff.inbox", { project_id: projectId, count: 0 });
+        }
+      }
       this.host.log("staff.changed", { project_id: projectId });
       return ok(this.json(staff));
     }
@@ -242,7 +269,14 @@ export class FakeStaffDesk {
     if (!project) throw new StaffError(404, `no project ${projectId}`);
     let staff = this.staffs.find((s) => s.project_id === projectId);
     if (!staff) {
-      staff = { project_id: projectId, agent_id: null, model: null, brief: "" };
+      staff = {
+        project_id: projectId,
+        agent_id: null,
+        model: null,
+        brief: "",
+        paused: false,
+        updates_waiting: 0,
+      };
       this.staffs.push(staff);
     }
     return staff;
@@ -266,6 +300,8 @@ export class FakeStaffDesk {
         (a) =>
           a.state === "waiting_approval" || a.state === "needs_trust" || a.state === "needs_login",
       ).length,
+      paused: staff.paused === true,
+      updates_waiting: (staff.updates_waiting as number | undefined) ?? 0,
     };
   }
 
@@ -355,6 +391,9 @@ export class FakeStaffDesk {
       }),
     );
     host.later(2600, () => {
+      // Each exchange fills a little more of its context.
+      const context = (this.contexts[agent.id] ??= { used_tokens: 18_000, window_tokens: WINDOW });
+      context.used_tokens = Math.min(WINDOW, (context.used_tokens as number) + 2_400);
       this.append(agent, { role: "assistant", kind: "text", text: reply(text) });
       agent.last_message = reply(text);
       host.screens[agent.id] = { prompt: text, transcript: "notes", footer: { kind: "idle" } };

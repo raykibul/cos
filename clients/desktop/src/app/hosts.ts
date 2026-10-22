@@ -11,6 +11,6 @@ export function useSwitchHost(): (id: string) => void {
     if (id === (cos.get().host?.id ?? THIS_MAC)) return;
     ui.close();
     ui.navigate({ kind: "waiting" });
-    void ui.perform("Couldn't switch Mac", () => cos.switchHost(id));
+    void ui.perform("Couldn't switch machine", () => cos.switchHost(id));
   };
 }

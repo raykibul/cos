@@ -18,12 +18,31 @@ impl Client {
         project_id: i64,
         model: Option<String>,
     ) -> anyhow::Result<StaffView> {
-        let path = format!("/v1/projects/{project_id}/staff");
-        read_json(
-            self.send(Method::PUT, &path, Some(&StaffSettings { model }))
-                .await?,
+        self.configure_staff(
+            project_id,
+            &StaffSettings {
+                model: Some(model),
+                ..StaffSettings::default()
+            },
         )
         .await
+    }
+
+    /// Pauses or resumes its coordination.
+    pub(crate) async fn set_staff_paused(&self, project_id: i64, paused: bool) -> anyhow::Result<StaffView> {
+        self.configure_staff(
+            project_id,
+            &StaffSettings {
+                paused: Some(paused),
+                ..StaffSettings::default()
+            },
+        )
+        .await
+    }
+
+    async fn configure_staff(&self, project_id: i64, settings: &StaffSettings) -> anyhow::Result<StaffView> {
+        let path = format!("/v1/projects/{project_id}/staff");
+        read_json(self.send(Method::PUT, &path, Some(settings)).await?).await
     }
 
     pub(crate) async fn start_staff(&self, project_id: i64) -> anyhow::Result<StaffView> {

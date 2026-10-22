@@ -59,7 +59,7 @@ export function isBridgeError(value: unknown): value is BridgeError {
 /** This Mac's id in the host list. */
 export const THIS_MAC = "local";
 
-/** A Mac whose daemon the app can talk to. */
+/** A machine whose daemon the app can talk to: this Mac, or another machine over Tailscale. */
 export interface Host {
   id: string;
   name: string;
@@ -96,6 +96,12 @@ export interface Bridge {
   hostAdd(name: string, address: string): Promise<Host>;
   /** Forgets a host; removing the one in use switches to this Mac. */
   hostRemove(id: string): Promise<HostList>;
+  /**
+   * Renames a host, This Mac included (its id stays `local`). The name is
+   * trimmed, at most 60 characters and unique among the hosts; anything
+   * else is `bad_request`.
+   */
+  hostRename(id: string, name: string): Promise<HostList>;
   /** Switches host. Every stream closes. */
   hostSelect(id: string): Promise<HostList>;
   /**
