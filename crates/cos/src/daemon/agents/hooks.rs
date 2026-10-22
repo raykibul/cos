@@ -194,6 +194,17 @@ impl Inner {
         }
 
         let approval = self.agents.add_approval(new)?;
+        if judgement.route == ApprovalRoute::User {
+            // Nobody may be listening: jev is off, or the daemon has none.
+            let _ = self.asked.send(super::PermissionAsked {
+                approval_id: approval.id,
+                agent_id: id,
+                workspace_id,
+                summary: approval.summary.clone(),
+                request: judgement.request.clone(),
+                verdict: judgement.verdict.clone(),
+            });
+        }
         live.hook_approvals.insert(hook.id, approval.id);
         live.waiting.insert(
             approval.id,

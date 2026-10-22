@@ -69,7 +69,16 @@ pub(crate) fn describe() -> String {
 
 /// Installs the service and starts it, replacing any earlier install.
 pub(crate) fn install(home: &CosHome) -> anyhow::Result<Installed> {
-    match manager()? {
+    let manager = manager()?;
+    // Before the daemon starts, so it finds the key straight away.
+    let copied = copy_judge_key(home)?;
+    let mut installed = install_with(manager, home)?;
+    installed.notes.extend(copied);
+    Ok(installed)
+}
+
+fn install_with(manager: Manager, home: &CosHome) -> anyhow::Result<Installed> {
+    match manager {
         Manager::Launchd => Ok(Installed {
             file: launchd::install(home)?,
             restarts: "It starts again at every login.",
@@ -107,21 +116,44 @@ pub(crate) fn kind() -> &'static str {
     }
 }
 
+/// Copies jev's API key from this shell into `daemon.env` (mode 0600), when
+/// it's set. Secrets never go in the plist or the unit; the daemon reads
+/// `daemon.env` itself. Returns a note for the closing message.
+fn copy_judge_key(home: &CosHome) -> anyhow::Result<Option<String>> {
+    let Some(value) = std::env::var(cos_judge::KEY_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    home.prepare()?;
+    let path = crate::daemon_env::store(home, cos_judge::KEY_ENV, value.trim())?;
+    Ok(Some(format!(
+        "copied {} from this shell into {} (mode 0600), for jev",
+        cos_judge::KEY_ENV,
+        path.display()
+    )))
+}
+
+/// What [`passthrough_env`] passes, when set. Never a secret: those go in
+/// `daemon.env`.
+const PASSTHROUGH: [&str; 6] = [
+    CLAUDE_CONFIG_DIR,
+    crate::which::CLAUDE_BIN_ENV,
+    crate::tailscale::TAILSCALE_ENV,
+    crate::daemon::chief::MODEL_ENV,
+    crate::daemon::staff::MODEL_ENV,
+    crate::daemon::pipeline::RUN_MODEL_ENV,
+];
+
 /// The environment the daemon needs that a service manager wouldn't pass on:
 /// Claude's config dir, the `claude` and `tailscale` binaries, and the
 /// chiefs' and workers' models, those that are set.
 fn passthrough_env() -> Vec<(&'static str, String)> {
-    [
-        CLAUDE_CONFIG_DIR,
-        crate::which::CLAUDE_BIN_ENV,
-        crate::tailscale::TAILSCALE_ENV,
-        crate::daemon::chief::MODEL_ENV,
-        crate::daemon::staff::MODEL_ENV,
-        crate::daemon::pipeline::RUN_MODEL_ENV,
-    ]
-    .into_iter()
-    .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
-    .collect()
+    PASSTHROUGH
+        .into_iter()
+        .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
+        .collect()
 }
 
 /// Your `PATH`, so the daemon finds `claude`, `git`, `tailscale` and what
@@ -139,4 +171,14 @@ fn current_exe() -> anyhow::Result<PathBuf> {
 /// Whether `exe` sits in a Cargo build folder, which a rebuild replaces.
 pub(crate) fn is_build_output(exe: &Path) -> bool {
     exe.components().any(|part| part.as_os_str() == "target")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_jev_key_never_goes_in_the_plist_or_the_unit() {
+        assert!(!PASSTHROUGH.contains(&cos_judge::KEY_ENV));
+    }
 }

@@ -18,6 +18,7 @@ mod chief_cmd;
 mod client;
 mod commands;
 mod daemon;
+mod daemon_env;
 mod devices_cmd;
 mod env_cmd;
 mod home;

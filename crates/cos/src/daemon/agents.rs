@@ -76,6 +76,18 @@ pub(crate) enum AgentSignal {
     },
 }
 
+/// A permission request that went to you, as the approvals policy saw it.
+/// jev (see [`crate::daemon::judge`]) follows these in shadow mode.
+#[derive(Debug, Clone)]
+pub(crate) struct PermissionAsked {
+    pub approval_id: i64,
+    pub agent_id: i64,
+    pub workspace_id: i64,
+    pub summary: String,
+    pub request: cos_policy::ApprovalRequest,
+    pub verdict: cos_policy::Verdict,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AgentConfig {
     /// The `claude` binary. A bare name is looked up on the daemon's PATH
@@ -255,6 +267,8 @@ struct Inner {
     config: AgentConfig,
     live: Mutex<Live>,
     signals: broadcast::Sender<AgentSignal>,
+    /// Permission requests routed to you.
+    asked: broadcast::Sender<PermissionAsked>,
     /// Kept for its socket; dropping it stops the hooks.
     _hook_server: HookServer,
 }
@@ -323,6 +337,7 @@ impl AgentManager {
             config,
             live: Mutex::default(),
             signals: broadcast::channel(SIGNAL_BUFFER).0,
+            asked: broadcast::channel(SIGNAL_BUFFER).0,
             _hook_server: hook_server,
         });
         tokio::spawn(follow_hooks(Arc::downgrade(&inner), hook_events));
@@ -359,6 +374,11 @@ impl AgentManager {
     /// Every [`AgentSignal`] from now on.
     pub(crate) fn signals(&self) -> broadcast::Receiver<AgentSignal> {
         self.inner.signals.subscribe()
+    }
+
+    /// Every permission request routed to you from now on.
+    pub(crate) fn permission_requests(&self) -> broadcast::Receiver<PermissionAsked> {
+        self.inner.asked.subscribe()
     }
 
     /// Starts an agent in a workspace's folder, with `prompt` submitted

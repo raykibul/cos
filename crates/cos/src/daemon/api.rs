@@ -18,6 +18,7 @@
 //!   `docs/chief-of-staff.md`.
 //! - Environment variables for agents: [`super::env_api`], "Environment" in
 //!   `docs/daemon.md`.
+//! - jev in shadow mode: [`super::judge_api`], `docs/judge.md`.
 //!
 //! Errors are `{"error": "..."}` with a message meant for the user.
 
@@ -99,6 +100,8 @@ pub(crate) struct AppState {
     pub agents: super::agents::AgentManager,
     pub chief: super::chief::Chief,
     pub staff: super::staff::Staff,
+    /// jev, in shadow mode.
+    pub judge: super::judge::Judge,
     pub started_at: Timestamp,
     pub home: PathBuf,
     /// Flips to true when the daemon is stopping; open streams end then.
@@ -127,6 +130,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::chief_api::routes())
         .merge(super::staff_api::routes())
         .merge(super::env_api::routes())
+        .merge(super::judge_api::routes())
         .with_state(state)
 }
 

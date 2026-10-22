@@ -297,7 +297,9 @@ impl Judgments {
     pub fn decision(&self, id: i64) -> Result<Option<Decision>, StoreError> {
         let conn = self.store.lock();
         Ok(conn
-            .prepare_cached(&format!("SELECT {DECISION_COLUMNS} FROM judge_decisions WHERE id = ?1"))?
+            .prepare_cached(&format!(
+                "SELECT {DECISION_COLUMNS} FROM judge_decisions WHERE id = ?1"
+            ))?
             .query_row([id], read_decision)
             .optional()?)
     }
@@ -310,7 +312,10 @@ impl Judgments {
                 "SELECT {DECISION_COLUMNS} FROM judge_decisions
                  WHERE (?1 IS NULL OR point = ?1) ORDER BY id DESC LIMIT ?2"
             ))?
-            .query_map(params![point.map(DecisionPoint::as_str), limit as i64], read_decision)?
+            .query_map(
+                params![point.map(DecisionPoint::as_str), limit as i64],
+                read_decision,
+            )?
             .collect::<Result<_, _>>()?)
     }
 
@@ -350,11 +355,21 @@ impl Judgments {
                 ])
             },
         )?;
-        let [decisions, errors, no_opinion, answered, would_approve, agreed, disagreed, missed] =
-            counts.map(|count| count.max(0) as u64);
+        let [
+            decisions,
+            errors,
+            no_opinion,
+            answered,
+            would_approve,
+            agreed,
+            disagreed,
+            missed,
+        ] = counts.map(|count| count.max(0) as u64);
         let would = conn
             .prepare_cached("SELECT would, COUNT(*) FROM judge_decisions WHERE point = ?1 GROUP BY would")?
-            .query_map([name], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64)))?
+            .query_map([name], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?
             .collect::<Result<_, _>>()?;
         let disagreements = conn
             .prepare_cached(&format!(
@@ -451,7 +466,8 @@ impl From<Decision> for Example {
     }
 }
 
-const DECISION_COLUMNS: &str = "id, point, project_id, subject, approval_id, summary, input_hash, input, answers,
+const DECISION_COLUMNS: &str =
+    "id, point, project_id, subject, approval_id, summary, input_hash, input, answers,
     would, why, no_opinion, actual, actual_ms, latency_ms, error, model, created_ms";
 
 fn read_decision(row: &Row<'_>) -> rusqlite::Result<Decision> {

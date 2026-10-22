@@ -10,6 +10,8 @@ pub(crate) mod approvals_api;
 pub(crate) mod chief;
 pub(crate) mod chief_api;
 pub(crate) mod env_api;
+pub(crate) mod judge;
+pub(crate) mod judge_api;
 pub(crate) mod peers;
 pub(crate) mod pipeline;
 pub(crate) mod remote_api;
@@ -69,6 +71,9 @@ pub(crate) async fn run_with(
     let store = Store::open(&home.database())
         .with_context(|| format!("could not open {}", home.database().display()))?;
     let store = Arc::new(store);
+    // On Linux systemd loads it into our environment as well; on macOS
+    // launchd doesn't, so it's read here on both. jev looks for its key in it.
+    let _ = crate::daemon_env::load(home);
     let log = EventLog::new(store.clone());
     let projects = Arc::new(Projects::new(store.clone(), log.clone(), home.worktrees()));
     let devices = Arc::new(Devices::new(store.clone(), log.clone()));
@@ -88,6 +93,14 @@ pub(crate) async fn run_with(
         agents.clone(),
         home.root().to_path_buf(),
         chief::ChiefConfig::from_env(),
+    )?;
+    let judge = judge::Judge::start(
+        store.clone(),
+        log.clone(),
+        projects.clone(),
+        runs.clone(),
+        agents.clone(),
+        judge::JudgeConfig::for_home(home),
     )?;
     let staff = staff::Staff::start(
         store,
@@ -126,6 +139,7 @@ pub(crate) async fn run_with(
         agents: agents.clone(),
         chief,
         staff,
+        judge,
         started_at: Timestamp::now(),
         home: home.root().to_path_buf(),
         stopping: stopping.clone(),

@@ -295,6 +295,7 @@ dependencies = [
  "clap",
  "cos-core",
  "cos-harness",
+ "cos-judge",
  "cos-policy",
  "crossterm",
  "http-body-util",

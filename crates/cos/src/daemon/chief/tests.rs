@@ -90,8 +90,11 @@ impl Fixture {
         .unwrap();
         let socket = dir.path().join("cos.sock");
         let (stop, stopping) = watch::channel(false);
+        let judge =
+            crate::daemon::judge::Judge::off_for_tests(&store, &log, &projects, &runs, &manager, dir.path());
         let state = api::AppState {
             staff,
+            judge,
             log: log.clone(),
             projects: projects.clone(),
             devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),
