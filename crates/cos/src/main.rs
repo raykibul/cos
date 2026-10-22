@@ -129,6 +129,12 @@ enum Command {
     /// per-project switch and a test call.
     Judge(judge_cmd::JudgeArgs),
     /// Upgrade cos to the latest release, with the Mac app, and restart the daemon on it.
+    ///
+    /// Replaces this binary in place: it downloads the release's install.sh and runs it,
+    /// which checks the download against the release's SHA256SUMS. On macOS, a cos.app in
+    /// /Applications or ~/Applications is upgraded too, and reopened if it was running. If
+    /// the daemon's service runs this binary, it is restarted on the new version; with
+    /// agents at work, cos asks first.
     Upgrade(upgrade::UpgradeArgs),
     /// Run by a chief's or Chief of Staff's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
     #[command(hide = true)]

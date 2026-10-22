@@ -32,18 +32,14 @@ const RESTART_CHECKS: usize = 80;
 const RESTART_QUESTION: &str =
     "Restart the daemon now? Running agents are interrupted; Chiefs of Staff resume by themselves. [y/N]";
 
+/// `cos upgrade`'s options. Its help text is on `Command::Upgrade` in
+/// `main.rs`.
 #[derive(clap::Args, Debug, Default)]
-#[command(long_about = "Upgrade cos to the latest release (or --version's), in place.
-
-Downloads the release's install.sh and runs it, which checks the download against the \
-release's SHA256SUMS. On macOS, a cos.app in /Applications or ~/Applications is upgraded \
-too, and reopened if it was running. If the daemon's service runs this binary, it is \
-restarted on the new version; with agents at work, cos asks first.")]
 pub(crate) struct UpgradeArgs {
     /// Show the installed and the latest version, and change nothing.
     #[arg(long)]
     check: bool,
-    /// Install this release instead of the latest, such as v0.1.5. Older ones too.
+    /// Install this release instead of the latest, such as v0.1.5 (older ones too).
     #[arg(long, value_name = "vX.Y.Z")]
     version: Option<String>,
     /// Restart the daemon without asking, even with agents at work.
