@@ -27,15 +27,15 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        root = try container.decode(String.self, forKey: .root)
-        baseBranch = try container.decode(String.self, forKey: .baseBranch)
-        hasOrigin = try container.decode(Bool.self, forKey: .hasOrigin)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        // Tolerate a project sent without its workspaces.
-        workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.id(.id)
+        name = try c.decode(String.self, forKey: .name)
+        root = c.string(.root) ?? ""
+        baseBranch = c.string(.baseBranch) ?? "main"
+        hasOrigin = c.optional(Bool.self, .hasOrigin) ?? false
+        createdAt = c.optional(Date.self, .createdAt) ?? Date(timeIntervalSince1970: 0)
+        // Tolerate a project sent without its workspaces, or with an odd one.
+        workspaces = c.list(Workspace.self, .workspaces)
     }
 }
 
@@ -43,11 +43,15 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
 public struct Workspace: Codable, Equatable, Sendable, Identifiable {
     public var id: Int
     public var projectId: Int
-    /// A city name such as `lisbon`; also the folder and branch name.
+    /// A city name such as `lisbon`; also the folder name.
     public var name: String
-    /// Shown to people; starts as the name and can be renamed.
-    public var title: String
-    /// `cos/<name>`. Kept when the workspace is removed.
+    /// Optional, set by people. `nil` without one: show `displayName`.
+    public var title: String?
+    /// The city it's named after: the last segment of its branch, as in
+    /// `topflexi/lisbon`.
+    public var city: String
+    /// `<project slug>/<city>` (older workspaces: `cos/<name>`). Kept when
+    /// the workspace is removed.
     public var branch: String
     public var path: String
     public var base: WorkspaceBase
@@ -56,11 +60,15 @@ public struct Workspace: Codable, Equatable, Sendable, Identifiable {
     public var baseCommit: String
     public var createdAt: Date
 
-    public init(id: Int, projectId: Int, name: String, title: String, branch: String, path: String, base: WorkspaceBase, baseRef: String, baseCommit: String, createdAt: Date) {
+    public init(
+        id: Int, projectId: Int, name: String, title: String? = nil, city: String? = nil, branch: String, path: String = "",
+        base: WorkspaceBase = .origin, baseRef: String = "", baseCommit: String = "", createdAt: Date = Date(timeIntervalSince1970: 0)
+    ) {
         self.id = id
         self.projectId = projectId
         self.name = name
-        self.title = title
+        self.title = title.nilIfBlank
+        self.city = city.nilIfBlank ?? Self.city(ofBranch: branch) ?? name
         self.branch = branch
         self.path = path
         self.base = base
@@ -69,7 +77,49 @@ public struct Workspace: Codable, Equatable, Sendable, Identifiable {
         self.createdAt = createdAt
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, projectId, name, title, city, branch, path, base, baseRef, baseCommit, createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.id(.id)
+        projectId = c.int(.projectId) ?? 0
+        name = c.string(.name) ?? ""
+        title = c.string(.title).nilIfBlank?.trimmingCharacters(in: .whitespacesAndNewlines)
+        branch = c.string(.branch) ?? ""
+        city = c.string(.city).nilIfBlank ?? Self.city(ofBranch: branch) ?? (name.isEmpty ? "workspace \(id)" : name)
+        path = c.string(.path) ?? ""
+        base = c.optional(WorkspaceBase.self, .base) ?? .origin
+        baseRef = c.string(.baseRef) ?? ""
+        baseCommit = c.string(.baseCommit) ?? ""
+        createdAt = c.optional(Date.self, .createdAt) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(projectId, forKey: .projectId)
+        try c.encode(name, forKey: .name)
+        try c.encode(title, forKey: .title)
+        try c.encode(city, forKey: .city)
+        try c.encode(branch, forKey: .branch)
+        try c.encode(path, forKey: .path)
+        try c.encode(base, forKey: .base)
+        try c.encode(baseRef, forKey: .baseRef)
+        try c.encode(baseCommit, forKey: .baseCommit)
+        try c.encode(createdAt, forKey: .createdAt)
+    }
+
+    /// What every client shows: its title, else its city.
+    public var displayName: String { title ?? city }
+
     public var shortCommit: String { String(baseCommit.prefix(7)) }
+
+    /// The last segment of a branch: `topflexi/lisbon-v1` → `lisbon-v1`.
+    public static func city(ofBranch branch: String) -> String? {
+        branch.split(separator: "/").last.map(String.init)
+    }
 }
 
 /// Where a new workspace starts. A string rather than a closed enum, so a
@@ -90,6 +140,14 @@ public struct WorkspaceBase: RawRepresentable, Codable, Hashable, Sendable {
 /// `GET /v1/projects`.
 public struct ProjectsPage: Codable, Equatable, Sendable {
     public var projects: [Project]
+
+    public init(projects: [Project]) {
+        self.projects = projects
+    }
+
+    public init(from decoder: Decoder) throws {
+        projects = try decoder.container(keyedBy: CodingKeys.self).list(Project.self, .projects)
+    }
 }
 
 extension EventKind {

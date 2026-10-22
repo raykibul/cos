@@ -64,10 +64,15 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(parseRFC3339(text) == nil)
     }
 
-    @Test func badDateFailsDecoding() {
-        #expect(throws: DecodingError.self) {
-            try decode(LoggedEvent.self, #"{"seq":1,"ts":"soon","kind":"x","data":{}}"#)
-        }
+    @Test func aBadDateDoesNotLoseTheEvent() throws {
+        // Lenient: the event still counts for resuming the stream.
+        let event = try decode(LoggedEvent.self, #"{"seq":1,"ts":"soon","kind":"x","data":{}}"#)
+        #expect(event.seq == 1)
+        #expect(event.ts == Date(timeIntervalSince1970: 0))
+        // Without its seq it is refused, and a page skips it.
+        #expect(throws: DecodingError.self) { try decode(LoggedEvent.self, #"{"ts":"soon","kind":"x"}"#) }
+        let page = try decode(EventsPage.self, #"{"events":[{"kind":"x"},{"seq":4,"kind":"y"}]}"#)
+        #expect(page.events.map(\.seq) == [4])
     }
 
     @Test func compactData() throws {

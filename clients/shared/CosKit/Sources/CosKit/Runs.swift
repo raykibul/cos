@@ -51,9 +51,9 @@ public struct Run: Codable, Equatable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int.self, forKey: .id)
-        workspaceId = try c.decode(Int.self, forKey: .workspaceId)
-        goal = try c.decodeIfPresent(String.self, forKey: .goal) ?? ""
+        id = try c.id(.id)
+        workspaceId = c.int(.workspaceId) ?? 0
+        goal = c.string(.goal) ?? ""
         state = try c.decode(RunState.self, forKey: .state)
         preset = (try? c.decodeIfPresent(ApprovalPreset.self, forKey: .preset)) ?? .normal
         approvalCap = (try? c.decodeIfPresent(Int.self, forKey: .approvalCap)) ?? 20
@@ -443,7 +443,7 @@ public struct Board: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         run = try c.decode(Run.self, forKey: .run)
         workspace = try? c.decodeIfPresent(Workspace.self, forKey: .workspace)
-        tasks = (try c.decodeIfPresent([RunTask].self, forKey: .tasks) ?? []).sorted { $0.position < $1.position }
+        tasks = c.list(RunTask.self, .tasks).sorted { $0.position < $1.position }
         counts = (try? c.decodeIfPresent(TaskCounts.self, forKey: .counts)) ?? TaskCounts(tasks)
     }
 
@@ -476,6 +476,14 @@ public struct NewRun: Encodable, Equatable, Sendable {
 /// `GET /v1/runs`.
 public struct RunsPage: Codable, Equatable, Sendable {
     public var runs: [Run]
+
+    public init(runs: [Run]) {
+        self.runs = runs
+    }
+
+    public init(from decoder: Decoder) throws {
+        runs = try decoder.container(keyedBy: CodingKeys.self).list(Run.self, .runs)
+    }
 }
 
 /// Something the chief asked you (`ask_user`).
@@ -508,9 +516,9 @@ public struct Question: Codable, Equatable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int.self, forKey: .id)
-        runId = try? c.decodeIfPresent(Int.self, forKey: .runId)
-        agentId = try? c.decodeIfPresent(Int.self, forKey: .agentId)
+        id = try c.id(.id)
+        runId = c.int(.runId)
+        agentId = c.int(.agentId)
         question = try c.decode(String.self, forKey: .question)
         choices = (try? c.decodeIfPresent([String].self, forKey: .choices)) ?? []
         state = (try? c.decodeIfPresent(QuestionState.self, forKey: .state)) ?? .open
@@ -533,6 +541,14 @@ public struct QuestionState: RawRepresentable, Codable, Hashable, Sendable {
 /// `GET /v1/questions`.
 public struct QuestionsPage: Codable, Equatable, Sendable {
     public var questions: [Question]
+
+    public init(questions: [Question]) {
+        self.questions = questions
+    }
+
+    public init(from decoder: Decoder) throws {
+        questions = try decoder.container(keyedBy: CodingKeys.self).list(Question.self, .questions)
+    }
 }
 
 /// `GET /v1/runs/{id}/limits`: how much the chief may approve, and how much it has.
@@ -562,6 +578,7 @@ public struct RunLimits: Codable, Equatable, Sendable {
 /// `GET /v1/runs/{id}/report`.
 struct RunReport: Codable, Sendable {
     var markdown: String
+    var path: String?
 }
 
 // MARK: Approvals, as the orchestration contract extends them

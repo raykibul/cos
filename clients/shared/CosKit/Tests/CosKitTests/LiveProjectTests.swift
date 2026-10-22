@@ -73,7 +73,8 @@ struct LiveProjectTests {
         try commit(work, "unpushed.txt", "local only")
         let fromHead = try await client.createWorkspace(projectId: project.id, base: .head)
         #expect(fromHead.base == .head)
-        #expect(fromHead.title == fromHead.name)
+        #expect(fromHead.title == nil)
+        #expect(fromHead.displayName == fromHead.city)
         #expect(fromHead.baseCommit == (try git(work, "rev-parse", "HEAD")))
         #expect(fromHead.name != fromOrigin.name)
 
