@@ -84,6 +84,41 @@ const shots = [
   ["sheet-add-host-daemon-off", "daemon=off&dialog=addHost"],
   ["host-device-pending", "host=h1"],
   ["host-unreachable", "host=h2"],
+  ["env-project", "page=projectEnv:1"],
+  [
+    "env-project-shown",
+    "page=projectEnv:1",
+    (page) => page.getByRole("button", { name: "Show CLAUDE_CONFIG_DIR" }).click(),
+  ],
+  ["env-project-empty", "page=projectEnv:2"],
+  [
+    "sheet-env-edit",
+    "page=projectEnv:1",
+    (page) => page.getByRole("button", { name: "Edit CLAUDE_CONFIG_DIR" }).click(),
+  ],
+  [
+    "sheet-env-add",
+    "page=projectEnv:1&dialog=envVar:1",
+    async (page) => {
+      await page.getByRole("dialog").getByLabel("Name", { exact: true }).fill("GITHUB_TOKEN");
+      await page.getByRole("dialog").getByLabel("Value", { exact: true }).fill("ghp_example");
+    },
+  ],
+  [
+    "sheet-env-refused",
+    "page=projectEnv:1&dialog=envVar:1",
+    async (page) => {
+      await page.getByRole("dialog").getByLabel("Name", { exact: true }).fill("COS_HOOK_SOCKET");
+      await page.getByRole("dialog").getByLabel("Value", { exact: true }).fill("/tmp/hooks.sock");
+      await page.getByRole("button", { name: "Add variable" }).click();
+      await page.getByRole("alert").waitFor();
+    },
+  ],
+  [
+    "settings-env",
+    "page=settings",
+    (page) => page.getByRole("region", { name: "Environment" }).scrollIntoViewIfNeeded(),
+  ],
   ["remote-access", "page=settings"],
   [
     "remote-access-firewall",
