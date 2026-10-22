@@ -1,0 +1,164 @@
+# Builds cos for Linux (static musl, x86_64 and aarch64) and macOS (arm64
+# and x86_64) and publishes them as a GitHub Release, on a `v*` tag or by
+# hand for an existing tag. Asset names carry no version, so
+# https://github.com/raykibul/cos/releases/latest/download/cos-<target>.tar.gz
+# always names the newest build; install.sh and the npm package rely on it.
+# See docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release, such as v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+jobs:
+  version:
+    name: Check the tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - id: check
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG doesn't match the workspace version $version in Cargo.toml; bump it and tag again"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build static binaries (make linux, cargo-zigbuild in Docker)
+        run: make linux
+      - name: Check the x86_64 build runs and reports the tag's version
+        run: |
+          out="$(dist/cos-"$VERSION"-x86_64-unknown-linux-musl --version)"
+          echo "$out"
+          [ "$out" = "cos $VERSION" ]
+      - name: Package
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            sh scripts/package-release.sh "dist/cos-$VERSION-$target" "$target" out
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cos-linux
+          path: out/
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: Rust 1.99 for ${{ matrix.target }}
+        run: |
+          rustup toolchain install 1.99 --profile minimal --target "$TARGET"
+          rustup default 1.99
+      - name: Build
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: cargo build --release --locked -p cos --bin cos --target "$TARGET"
+      - name: Check it reports the tag's version
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          out="$(target/"$TARGET"/release/cos --version)"
+          echo "$out"
+          [ "$out" = "cos $VERSION" ]
+      - name: Package
+        run: sh scripts/package-release.sh "target/$TARGET/release/cos" "$TARGET" out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cos-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: out
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: out
+        run: |
+          sha256sum cos-*.tar.gz >SHA256SUMS
+          cat SHA256SUMS
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* --verify-tag --title "cos $TAG" --generate-notes
+          fi
+
+  npm:
+    name: Publish cos-agent to npm (only with an NPM_TOKEN secret)
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Skip without NPM_TOKEN
+        if: env.NPM_TOKEN == ''
+        run: echo "No NPM_TOKEN secret, so cos-agent isn't published."
+      - uses: actions/checkout@v7
+        if: env.NPM_TOKEN != ''
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v7
+        if: env.NPM_TOKEN != ''
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish
+        if: env.NPM_TOKEN != ''
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm test
+          if npm view "cos-agent@$VERSION" version >/dev/null 2>&1; then
+            echo "cos-agent@$VERSION is already on npm."
+          else
+            npm publish --access public
+          fi

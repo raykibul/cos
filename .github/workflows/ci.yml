@@ -1,0 +1,35 @@
+# Format, lint and tests, the same as `make lint` and `make test` (in the
+# cos-dev Docker image), plus the install scripts and the npm installer.
+# The desktop app (clients/desktop) isn't built here.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: cargo fmt --check and clippy
+        run: make lint
+      - name: cargo test
+        run: make test
+
+  installers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: make shellcheck
+      - name: npm installer tests
+        run: make npm-test
