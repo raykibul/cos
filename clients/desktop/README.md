@@ -80,3 +80,24 @@ build/Build/Products/Debug/CosSnapshots ../../.sandbox/snapshots
 ```
 
 Offscreen drawing leaves the sidebar's list blank, so the tool also draws the sidebar's table on its own (`*-sidebar.png`). Colours in its unselected rows, vibrancy and window chrome still don't show.
+
+## UI
+
+The Tauri app's web UI is in `src/`: React 19, strict TypeScript, Vite and Tailwind 4. Everything Node runs in Docker (`docker/node.Dockerfile`), from the repo root:
+
+```sh
+make ui-test        # Vitest
+make ui-lint        # ESLint and Prettier (make ui-format fixes formatting)
+make ui-typecheck
+make ui-build       # into dist/, which the shell bundles
+make ui-dev         # Vite on http://localhost:5173
+make ui-shots       # screenshots of every screen, light and dark, into .sandbox/desktop-shots
+```
+
+- `src/bridge/`: the `Bridge` interface from [docs/desktop.md](../../docs/desktop.md), `tauri.ts` over `invoke` and `Channel`, and `fake.ts`, a daemon in memory with canned projects, agents in every state, approvals, runs, questions, a report and terminals replaying a Claude Code screen. The fake is used when `window.__TAURI_INTERNALS__` is missing, so the UI runs in a plain browser. In the browser, `?daemon=off`, `?static` (no simulated activity), `?page=run:10`, `?dialog=newRun:3` and `?theme=dark` set it up.
+- `src/api/`: `DaemonClient`, a typed call for every route, and lenient decoding: unknown fields are ignored, unknown states kept, and list items that don't decode dropped.
+- `src/store/`: the daemon's state, fed by `follow_events`. Each event kind refetches what it changes, coalesced so a burst costs one request in flight and one after. A run's board, limits and report are fetched only while a page shows it. `attention.ts` calls `set_waiting_count` and `notify`.
+- `src/terminal/`: `TerminalSession` (no DOM) plays snapshots and output, sends keys in order and batched, and resizes the agent to fit, debounced. `engine.ts` is the only file that knows ghostty-web.
+- `src/screens/`, `src/sheets/`, `src/ui/`: the pages, the sheets and the building blocks.
+
+ghostty-web's WASM is emitted as `dist/assets/ghostty-vt-*.wasm` and loaded with `fetch` and `WebAssembly.compile`, so the shell's CSP needs `'wasm-unsafe-eval'` in `script-src`. If that file can't be fetched, ghostty-web falls back to a copy inlined in the JS as a `data:` URL, which also needs `data:` in `connect-src`.
