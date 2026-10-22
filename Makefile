@@ -31,6 +31,40 @@ build:
 try: build
 	./target/release/cos try $(ARGS) "$(PROMPT)"
 
+# Static Linux binaries (musl) for x86_64 and aarch64, cross-compiled in
+# Docker with cargo-zigbuild, into dist/ with tarballs and SHA256SUMS. See
+# docs/linux.md for running the daemon on a Linux server.
+LINUX_IMAGE := cos-linux:1.99
+LINUX_TARGETS := x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+SMOKE_IMAGES := amazonlinux:2023 debian:bookworm-slim
+
+.PHONY: linux-image linux linux-smoke
+
+linux-image:
+	docker build -q -t $(LINUX_IMAGE) -f docker/linux.Dockerfile docker >/dev/null
+
+linux: linux-image
+	docker run --rm -t \
+		-v "$(CURDIR)":/work -w /work \
+		-v cos-cargo-registry:/usr/local/cargo/registry \
+		-v cos-zig-cache:/root/.cache/cargo-zigbuild \
+		-e CARGO_TARGET_DIR=/work/target/linux \
+		$(LINUX_IMAGE) sh docker/linux-release.sh $(VERSION) $(LINUX_TARGETS)
+
+# Runs each binary in dist/ on stock distro images: the daemon, a project and
+# a workspace. The x86_64 one runs under Docker's amd64 emulation.
+linux-smoke:
+	@for target in $(LINUX_TARGETS); do \
+		case $$target in x86_64-*) platform=linux/amd64 ;; aarch64-*) platform=linux/arm64 ;; esac; \
+		for image in $(SMOKE_IMAGES); do \
+			echo "==> $$target on $$image ($$platform)"; \
+			docker run --rm --platform $$platform \
+				-v "$(CURDIR)/dist":/dist:ro -v "$(CURDIR)/docker":/smoke:ro \
+				$$image sh /smoke/linux-smoke.sh /dist/cos-$(VERSION)-$$target || exit 1; \
+		done; \
+	done
+
 # The desktop UI (clients/desktop). Every Node command runs in Docker:
 # node_modules lives in a volume (one per checkout) mounted over
 # clients/desktop/node_modules, so Linux binaries never land on the Mac.

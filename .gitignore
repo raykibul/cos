@@ -3,3 +3,5 @@
 /.sandbox
 .DS_Store
 /.claude/worktrees/
+# Linux release binaries from `make linux`.
+/dist
