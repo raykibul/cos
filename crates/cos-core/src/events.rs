@@ -53,6 +53,8 @@ pub mod kind {
     // The Chief of Staff; see `docs/chief-of-staff.md`.
     pub const STAFF_STARTED: &str = "staff.started";
     pub const STAFF_INBOX: &str = "staff.inbox";
+    pub const STAFF_CHANGED: &str = "staff.changed";
+    pub const STAFF_STOPPED: &str = "staff.stopped";
     pub const AGENT_TRANSCRIPT: &str = "agent.transcript";
 }
 

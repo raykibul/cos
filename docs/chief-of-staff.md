@@ -161,6 +161,7 @@ What the daemon side does differently from, or in addition to, the above. Detail
 - **Inbox items** have the shape `{id, project_id, kind: "agent" | "run" | "message", agent_id, run_id, text, created_ms, delivered_ms}`; the first line of `text` is a heading. `GET …/staff/inbox` returns the latest 100 items of news and leaves out your messages.
 - **`Staff.model`** is the model it runs: the project's, else `COS_STAFF_MODEL`; null means Claude's default.
 - **`POST …/staff/message`** returns the start error (for example 409 when the repo folder is gone) instead of 202 when the chief can't be started. A message waits until the chief is idle, so one sent while it starts goes in once it's ready. Messages are at most 100,000 characters.
+- **Two more events:** `staff.changed` `{project_id}` when its model or brief changes, and `staff.stopped` `{project_id, agent_id}` when its process ends.
 - **The wakeup header** is always `[cos · N updates]`, even for one.
 - **`workspace_create`** (and `new_workspace`) starts from `origin` when the project has one, else from `HEAD`.
 - **`agent_send`** to a stopped agent resumes it and waits up to a minute for it to be ready before typing.

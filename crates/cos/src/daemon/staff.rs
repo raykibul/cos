@@ -234,6 +234,7 @@ impl Staff {
             ));
         }
         inner.books.set_model(project.id, model.as_deref())?;
+        inner.log_changed(project.id)?;
         self.view(project.id).await
     }
 
@@ -358,13 +359,48 @@ impl Inner {
         }
     }
 
+    /// Logs `staff.stopped` when a Chief of Staff's process ends.
+    fn log_stopped(&self, agent_id: i64) {
+        let Ok(Some(project_id)) = self.books.project_of(agent_id) else {
+            return;
+        };
+        let logged = self.log.append(
+            kind::STAFF_STOPPED,
+            None,
+            json!({ "project_id": project_id, "agent_id": agent_id }),
+        );
+        if let Err(failure) = logged {
+            tracing::error!(error = %failure, project = project_id, "could not log staff.stopped");
+        }
+    }
+
+    /// Logs `staff.changed`: its model or brief changed.
+    fn log_changed(&self, project_id: i64) -> Result<(), ApiError> {
+        self.log
+            .append(kind::STAFF_CHANGED, None, json!({ "project_id": project_id }))?;
+        Ok(())
+    }
+
     fn on_signal(&self, signal: AgentSignal) {
         let (agent_id, news) = match signal {
             AgentSignal::TurnEnded { agent_id, message } => {
                 let message = message.unwrap_or_default();
                 (agent_id, ("finished a turn".to_owned(), message))
             }
-            AgentSignal::Exited { shutdown: true, .. } => return,
+            AgentSignal::Exited {
+                agent_id,
+                shutdown: true,
+                ..
+            } => {
+                if self
+                    .agents
+                    .get(agent_id)
+                    .is_ok_and(|agent| agent.role == Role::Staff)
+                {
+                    self.log_stopped(agent_id);
+                }
+                return;
+            }
             AgentSignal::Exited { agent_id, code, .. } => {
                 let code = code.map_or_else(|| "no exit code".into(), |code| format!("exit code {code}"));
                 (agent_id, (format!("exited ({code})"), String::new()))
@@ -373,6 +409,10 @@ impl Inner {
         let Ok(agent) = self.agents.get(agent_id) else {
             return;
         };
+        if agent.role == Role::Staff && news.0.starts_with("exited") {
+            self.log_stopped(agent.id);
+            return;
+        }
         let Some((project, _)) = self.spawner(&agent) else {
             return;
         };

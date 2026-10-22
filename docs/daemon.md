@@ -512,3 +512,5 @@ The project defaults to the one the current folder is in, else the only one.
 |---|---|
 | `staff.started` | `{project_id, agent_id}` |
 | `staff.inbox` | `{project_id, count}`: items waiting |
+| `staff.changed` | `{project_id}`: its model or brief changed |
+| `staff.stopped` | `{project_id, agent_id}`: its process ended (stopped, exited, or the daemon stopping) |

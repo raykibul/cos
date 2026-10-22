@@ -735,6 +735,13 @@ async fn a_project_goes_with_its_chief_of_staff_once_it_is_stopped() {
     assert_eq!(status(running), 409);
     fixture.client.stop_agent(staff.id).await.unwrap();
     fixture.until_state(staff.id, AgentState::Exited).await;
+    until("staff.stopped", || async {
+        fixture
+            .events(kind::STAFF_STOPPED)
+            .into_iter()
+            .find(|event| event.data == json!({ "project_id": fixture.project_id, "agent_id": staff.id }))
+    })
+    .await;
     fixture.client.remove_project(fixture.project_id).await.unwrap();
     assert!(!worktree.exists());
     assert!(fixture.client.projects().await.unwrap().is_empty());
@@ -752,6 +759,10 @@ async fn the_model_comes_from_the_project_else_the_daemon() {
         .await
         .unwrap();
     assert_eq!(set.model.as_deref(), Some("sonnet"));
+    assert_eq!(
+        fixture.events(kind::STAFF_CHANGED)[0].data,
+        json!({ "project_id": fixture.project_id })
+    );
     let staff = fixture.idle_staff().await;
     assert_eq!(staff.model.as_deref(), Some("sonnet"));
     let cleared = fixture

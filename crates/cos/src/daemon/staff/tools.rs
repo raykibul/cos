@@ -315,6 +315,7 @@ impl Staff {
     ) -> Result<String, ApiError> {
         let inner = &self.inner;
         let brief = inner.books.set_brief(project_id, &update.brief)?;
+        inner.log_changed(project_id)?;
         // The next start appends the new brief.
         let project = inner.projects.get(project_id).await?;
         let record = inner.books.record(project_id)?;
