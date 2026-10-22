@@ -1,13 +1,28 @@
 import Foundation
 
-/// Talks to the daemon's HTTP API on its Unix socket. Every call opens its
-/// own connection, so a client can be shared freely.
+/// Talks to the daemon's HTTP API, on its Unix socket or over the tailnet
+/// (TCP, plain HTTP inside WireGuard). Every call opens its own connection,
+/// so a client can be shared freely.
 public struct CosClient: Sendable {
-    public let socketPath: String
+    public let endpoint: CosEndpoint
 
     public init(socketPath: String = CosClient.defaultSocketPath()) {
-        self.socketPath = socketPath
+        endpoint = .unix(socketPath)
     }
+
+    public init(endpoint: CosEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    /// A daemon's tailnet listener, from what a person typed (`my-mac`,
+    /// `100.101.102.103:7700`, `[fd7a:115c:a1e0::1]`); see
+    /// `CosEndpoint.parse(address:)`.
+    public init(address: String) throws {
+        endpoint = try CosEndpoint.parse(address: address)
+    }
+
+    /// The socket's path, or `host:port` over TCP.
+    public var socketPath: String { endpoint.description }
 
     /// The daemon's home: `$COS_HOME` if set, otherwise `~/.cos`. This is the
     /// same rule the daemon uses, so a test daemon is found the same way.
@@ -149,10 +164,12 @@ public struct CosClient: Sendable {
         headers: [(String, String)] = [],
         json body: Data? = nil
     ) async throws -> (SocketConnection, HTTPResponse) {
-        let connection = SocketConnection(unixPath: socketPath)
+        let connection = SocketConnection(endpoint: endpoint)
         do {
             try await connection.open()
-            try await connection.send(httpRequest(method: method, path: path, headers: headers, json: body.map { Array($0) }))
+            try await connection.send(httpRequest(
+                method: method, path: path, host: endpoint.hostHeader, headers: headers, json: body.map { Array($0) }
+            ))
             let response = try await HTTPResponse(reader: connection)
             guard (200..<300).contains(response.head.status) else {
                 let body = (try? await response.readBody()) ?? []

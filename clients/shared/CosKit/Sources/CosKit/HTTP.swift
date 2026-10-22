@@ -10,8 +10,8 @@ protocol ByteReader: Sendable {
     func read() async throws -> [UInt8]?
 }
 
-func httpRequest(method: String, path: String, headers: [(String, String)] = [], json body: [UInt8]? = nil) -> [UInt8] {
-    var text = "\(method) \(path) HTTP/1.1\r\nHost: cos\r\n"
+func httpRequest(method: String, path: String, host: String = "cos", headers: [(String, String)] = [], json body: [UInt8]? = nil) -> [UInt8] {
+    var text = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\n"
     for (name, value) in headers {
         text += "\(name): \(value)\r\n"
     }
