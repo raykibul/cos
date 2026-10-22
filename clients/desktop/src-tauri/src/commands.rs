@@ -5,53 +5,147 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cos_bridge::{Bridge, BridgeError, DaemonInfo, EventMessage, Response, StreamHandle, TerminalMessage};
+use serde::Serialize;
 use serde_json::Value;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::hosts::{Host, HostList, Hosts};
 use crate::tray::Tray;
 
-/// The bridge and the streams the UI has open, by id.
-pub(crate) struct AppState {
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The bridge in use, numbered so a stream started just before a switch of
+/// host isn't kept afterwards.
+struct Current {
+    generation: u64,
     bridge: Bridge,
+}
+
+/// The hosts, the bridge to the one in use, and the streams the UI has open,
+/// by id.
+pub(crate) struct AppState {
+    /// This Mac's daemon, through its socket.
+    local: Bridge,
+    current: Mutex<Current>,
+    hosts: Mutex<Hosts>,
     next_id: AtomicU32,
     streams: Mutex<HashMap<u32, StreamHandle>>,
 }
 
 impl AppState {
-    pub(crate) fn new(bridge: Bridge) -> Self {
+    pub(crate) fn new(local: Bridge, hosts: Hosts) -> Self {
+        let bridge = bridge_for(&local, &hosts.current());
         Self {
-            bridge,
+            local,
+            current: Mutex::new(Current {
+                generation: 0,
+                bridge,
+            }),
+            hosts: Mutex::new(hosts),
             next_id: AtomicU32::new(1),
             streams: Mutex::default(),
         }
     }
 
-    fn keep(&self, handle: StreamHandle) -> u32 {
+    /// The bridge to the host in use, and its generation for [`Self::keep`].
+    fn bridge(&self) -> (u64, Bridge) {
+        let current = lock(&self.current);
+        (current.generation, current.bridge.clone())
+    }
+
+    /// Keeps a stream until `close_stream`. One started on a host that has
+    /// since been switched away from is closed at once; its id is still
+    /// valid to close.
+    fn keep(&self, generation: u64, handle: StreamHandle) -> u32 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.streams().insert(id, handle);
+        let current = lock(&self.current);
+        if current.generation == generation {
+            self.streams().insert(id, handle);
+        }
+        drop(current);
         id
     }
 
-    fn streams(&self) -> std::sync::MutexGuard<'_, HashMap<u32, StreamHandle>> {
-        self.streams.lock().unwrap_or_else(PoisonError::into_inner)
+    fn streams(&self) -> MutexGuard<'_, HashMap<u32, StreamHandle>> {
+        lock(&self.streams)
     }
 
     /// Closes every stream; dropping a handle closes it.
     pub(crate) fn close_all_streams(&self) {
         self.streams().clear();
     }
+
+    /// Points the bridge at `host` and closes every stream, which belonged
+    /// to the host before.
+    fn switch_to(&self, host: &Host) {
+        let mut current = lock(&self.current);
+        current.generation += 1;
+        current.bridge = bridge_for(&self.local, host);
+        self.close_all_streams();
+    }
+
+    fn list(&self) -> HostList {
+        lock(&self.hosts).list()
+    }
+
+    fn add_host(&self, name: &str, address: &str) -> CommandResult<Host> {
+        lock(&self.hosts).add(name, address)
+    }
+
+    fn remove_host(&self, id: &str) -> CommandResult<HostList> {
+        let mut hosts = lock(&self.hosts);
+        if hosts.remove(id)? {
+            self.switch_to(&hosts.current());
+        }
+        Ok(hosts.list())
+    }
+
+    fn select_host(&self, id: &str) -> CommandResult<HostList> {
+        let mut hosts = lock(&self.hosts);
+        let host = hosts.select(id)?;
+        self.switch_to(&host);
+        Ok(hosts.list())
+    }
+
+    fn info(&self) -> Info {
+        Info {
+            daemon: self.local.info().unwrap_or(DaemonInfo {
+                socket: PathBuf::new(),
+                home: PathBuf::new(),
+            }),
+            host: lock(&self.hosts).current(),
+        }
+    }
+}
+
+/// The bridge for `host`: this Mac's socket, or its address over TCP.
+fn bridge_for(local: &Bridge, host: &Host) -> Bridge {
+    match host.target() {
+        Some(target) => local.retarget(target),
+        None => local.clone(),
+    }
 }
 
 type CommandResult<T> = Result<T, BridgeError>;
 
+/// `daemon_info`: this Mac's socket and home, and the host in use.
+#[derive(Debug, Serialize)]
+pub(crate) struct Info {
+    #[serde(flatten)]
+    daemon: DaemonInfo,
+    host: Host,
+}
+
 #[tauri::command]
-pub(crate) fn daemon_info(state: State<'_, AppState>) -> DaemonInfo {
-    state.bridge.info()
+pub(crate) fn daemon_info(state: State<'_, AppState>) -> Info {
+    state.info()
 }
 
 #[tauri::command]
@@ -61,7 +155,8 @@ pub(crate) async fn daemon_request(
     path: String,
     body: Option<Value>,
 ) -> CommandResult<Response> {
-    state.bridge.request(&method, &path, body).await
+    let (_, bridge) = state.bridge();
+    bridge.request(&method, &path, body).await
 }
 
 // The stream commands are async so they run on Tauri's Tokio runtime, which
@@ -73,10 +168,9 @@ pub(crate) async fn follow_events(
     after: Option<u64>,
     on_message: Channel<EventMessage>,
 ) -> CommandResult<u32> {
-    let handle = state
-        .bridge
-        .follow_events(after, move |message| on_message.send(message).is_ok());
-    Ok(state.keep(handle))
+    let (generation, bridge) = state.bridge();
+    let handle = bridge.follow_events(after, move |message| on_message.send(message).is_ok());
+    Ok(state.keep(generation, handle))
 }
 
 #[tauri::command]
@@ -85,10 +179,34 @@ pub(crate) async fn attach_terminal(
     agent_id: i64,
     on_message: Channel<TerminalMessage>,
 ) -> CommandResult<u32> {
-    let handle = state
-        .bridge
-        .attach_terminal(agent_id, move |message| on_message.send(message).is_ok());
-    Ok(state.keep(handle))
+    let (generation, bridge) = state.bridge();
+    let handle = bridge.attach_terminal(agent_id, move |message| on_message.send(message).is_ok());
+    Ok(state.keep(generation, handle))
+}
+
+#[tauri::command]
+pub(crate) fn hosts_list(state: State<'_, AppState>) -> HostList {
+    state.list()
+}
+
+/// Saves a host; it doesn't switch to it.
+#[tauri::command]
+pub(crate) fn host_add(state: State<'_, AppState>, name: String, address: String) -> CommandResult<Host> {
+    state.add_host(&name, &address)
+}
+
+/// Forgets a host. Removing the one in use switches to this Mac and closes
+/// every stream.
+#[tauri::command]
+pub(crate) fn host_remove(state: State<'_, AppState>, id: String) -> CommandResult<HostList> {
+    state.remove_host(&id)
+}
+
+/// Switches to a host: every stream closes, and requests and new streams go
+/// to it.
+#[tauri::command]
+pub(crate) fn host_select(state: State<'_, AppState>, id: String) -> CommandResult<HostList> {
+    state.select_host(&id)
 }
 
 /// Closing an unknown or already closed stream does nothing.
@@ -196,5 +314,77 @@ mod tests {
     fn open_in_terminal_wants_a_folder() {
         let error = open_in_terminal("/etc/hosts".into()).unwrap_err();
         assert_eq!(error.kind, ErrorKind::BadRequest);
+    }
+
+    fn state() -> AppState {
+        AppState::new(Bridge::new("/nowhere/cos.sock"), Hosts::load(None))
+    }
+
+    /// Opens an event stream on the current host, as `follow_events` does.
+    fn follow(state: &AppState) -> u32 {
+        let (generation, bridge) = state.bridge();
+        let handle =
+            tauri::async_runtime::block_on(async { bridge.follow_events(None, |_: EventMessage| true) });
+        state.keep(generation, handle)
+    }
+
+    #[test]
+    fn selecting_a_host_closes_every_stream_and_retargets() {
+        let state = state();
+        let studio = state.add_host("Studio", "studio").unwrap();
+        // Adding doesn't switch.
+        assert_eq!(state.bridge().1.socket(), Some(Path::new("/nowhere/cos.sock")));
+        follow(&state);
+        follow(&state);
+        assert_eq!(state.streams().len(), 2);
+
+        let list = state.select_host(&studio.id).unwrap();
+        assert_eq!(list.current, studio.id);
+        assert!(state.streams().is_empty());
+        assert_eq!(
+            state.bridge().1.target(),
+            &cos_bridge::Target::Tcp("studio:7700".into())
+        );
+        let info = serde_json::to_value(state.info()).unwrap();
+        assert_eq!(
+            info,
+            serde_json::json!({
+                "socket": "/nowhere/cos.sock",
+                "home": "/nowhere",
+                "host": {"id": "h1", "name": "Studio", "address": "studio:7700"}
+            })
+        );
+
+        // Removing the host in use goes back to this Mac, closing streams.
+        follow(&state);
+        let list = state.remove_host(&studio.id).unwrap();
+        assert_eq!(list.current, crate::hosts::THIS_MAC);
+        assert!(state.streams().is_empty());
+        assert_eq!(state.bridge().1.socket(), Some(Path::new("/nowhere/cos.sock")));
+        assert_eq!(state.info().host.name, "This Mac");
+    }
+
+    #[test]
+    fn a_stream_started_before_a_switch_is_not_kept() {
+        let state = state();
+        let studio = state.add_host("Studio", "studio").unwrap();
+        let (generation, bridge) = state.bridge();
+        state.select_host(&studio.id).unwrap();
+        let handle =
+            tauri::async_runtime::block_on(async { bridge.follow_events(None, |_: EventMessage| true) });
+        let id = state.keep(generation, handle);
+        assert!(id > 0);
+        assert!(state.streams().is_empty());
+    }
+
+    #[test]
+    fn unknown_hosts_are_refused() {
+        let state = state();
+        assert_eq!(state.select_host("h7").unwrap_err().kind, ErrorKind::BadRequest);
+        assert_eq!(
+            state.remove_host("local").unwrap_err().kind,
+            ErrorKind::BadRequest
+        );
+        assert_eq!(state.list().hosts.len(), 1);
     }
 }
