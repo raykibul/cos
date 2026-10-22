@@ -13,6 +13,7 @@ pub(crate) mod pipeline;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
 pub(crate) mod tailnet;
+pub(crate) mod transcript;
 #[cfg(test)]
 mod tests;
 
