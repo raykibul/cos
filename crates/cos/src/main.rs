@@ -7,6 +7,7 @@
 //! `cos devices` manage that remote access. `cos agent`, `cos agents`,
 //! `cos approvals`, `cos allow` and `cos deny` drive the agents the daemon
 //! runs in terminals, and `cos staff` talks to a project's Chief of Staff.
+//! `cos env` sets the environment variables agents get, globally or per project.
 //! `cos try` runs one prompt through Claude Code without the daemon, and
 //! `cos sessions` lists the Claude sessions running on this machine. See
 //! `docs/proposal.md` for where this is going.
@@ -18,6 +19,7 @@ mod client;
 mod commands;
 mod daemon;
 mod devices_cmd;
+mod env_cmd;
 mod home;
 mod limits_cmd;
 mod mcp;
@@ -116,6 +118,8 @@ enum Command {
     Report(chief_cmd::ReportArgs),
     /// A project's Chief of Staff: show it, `say` something to it, or `attach` to its terminal.
     Staff(staff_cmd::StaffArgs),
+    /// The environment variables agents get, globally or per project: list, `set` or `unset` them.
+    Env(env_cmd::EnvArgs),
     /// Run by a chief's or Chief of Staff's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
     #[command(hide = true)]
     Mcp(mcp::McpArgs),
@@ -193,6 +197,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Say(args) => chief_cmd::say(&home, args).await,
         Command::Report(args) => chief_cmd::report(&home, args).await,
         Command::Staff(args) => staff_cmd::staff(&home, args).await,
+        Command::Env(args) => env_cmd::env(&home, args).await,
         Command::Mcp(args) => mcp::run(&home, args).await,
     }
 }
