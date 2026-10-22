@@ -22,6 +22,21 @@ const types = {
 };
 
 const shots = [
+  ["chief-conversation", "page=chief:1"],
+  [
+    "chief-rows-open",
+    "page=chief:1",
+    async (page) => {
+      await page.getByRole("button", { name: "2 updates from agents" }).click();
+      await page
+        .getByRole("button", { name: /Started an agent/ })
+        .first()
+        .click();
+    },
+  ],
+  ["chief-empty", "page=chief:2"],
+  ["chief-terminal", "page=chief:1&terminal"],
+  ["sidebar-expanded", "page=workspace:3"],
   ["waiting", "page=waiting"],
   ["events", "page=events"],
   ["project", "page=project:1"],
