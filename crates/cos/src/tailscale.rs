@@ -1,7 +1,7 @@
-//! The `tailscale` CLI: who this machine is on the tailnet
+//! The `tailscale` CLI: who this machine and its peers are on the tailnet
 //! (`tailscale status --json`) and who is behind a tailnet address
 //! (`tailscale whois --json`). The daemon uses it to bind its tailnet
-//! listener and to check every remote client.
+//! listener, to check every remote client and to list the other devices.
 //!
 //! The JSON isn't a documented contract, so parsing is lenient: unknown fields
 //! are ignored and only the few fields cos needs are required. The fixtures in
@@ -32,6 +32,8 @@ pub(crate) trait Tailscale: Send + Sync {
     /// The node behind a tailnet address, or `None` if Tailscale doesn't
     /// know it (not a tailnet address, or not a peer of this machine).
     fn whois(&self, addr: SocketAddr) -> BoxFuture<'_, Result<Option<Peer>, TailscaleError>>;
+    /// This machine and the other nodes on its tailnet.
+    fn peers(&self) -> BoxFuture<'_, Result<TailnetNodes, TailscaleError>>;
 }
 
 /// This machine on the tailnet.
@@ -62,6 +64,37 @@ pub(crate) struct Peer {
     pub user_id: i64,
     pub login_name: String,
     pub tagged: bool,
+}
+
+/// This machine and its peers, from one `tailscale status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TailnetNodes {
+    pub local: LocalNode,
+    /// Every other node Tailscale lists. Never this machine.
+    pub peers: Vec<PeerNode>,
+}
+
+/// Another node on the tailnet, from the `Peer` map of `tailscale status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PeerNode {
+    pub node_id: String,
+    /// The first label of the MagicDNS name, else the hostname.
+    pub name: String,
+    pub hostname: String,
+    /// MagicDNS name without the trailing dot; empty if there is none.
+    pub dns_name: String,
+    /// As Tailscale reports it: `macOS`, `linux`, `iOS`, `windows`, `android`…
+    pub os: String,
+    /// Its tailnet addresses, in Tailscale's order.
+    pub ips: Vec<IpAddr>,
+    pub online: bool,
+    /// When it was last online, if it is offline and Tailscale knows.
+    pub last_seen: Option<jiff::Timestamp>,
+    pub user_id: i64,
+    pub tagged: bool,
+    /// Logged in as the same Tailscale user as this machine, and not tagged:
+    /// only these can be approved as devices.
+    pub mine: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -101,6 +134,36 @@ struct StatusJson {
     self_node: Option<StatusNode>,
     #[serde(default)]
     user: Option<HashMap<String, UserJson>>,
+}
+
+/// Just the `Peer` map. Each entry is parsed on its own, so one odd peer
+/// doesn't hide the others.
+#[derive(Deserialize)]
+struct PeerMapJson {
+    #[serde(rename = "Peer", default)]
+    peer: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+struct PeerJson {
+    #[serde(rename = "ID", default)]
+    id: String,
+    #[serde(rename = "HostName", default)]
+    host_name: String,
+    #[serde(rename = "DNSName", default)]
+    dns_name: String,
+    #[serde(rename = "OS", default)]
+    os: String,
+    #[serde(rename = "UserID", default)]
+    user_id: i64,
+    #[serde(rename = "TailscaleIPs", default)]
+    tailscale_ips: Option<Vec<String>>,
+    #[serde(rename = "Tags", default)]
+    tags: Option<Vec<String>>,
+    #[serde(rename = "Online", default)]
+    online: Option<bool>,
+    #[serde(rename = "LastSeen", default)]
+    last_seen: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -190,13 +253,7 @@ pub(crate) fn parse_status(json: &[u8]) -> Result<LocalNode, TailscaleError> {
         .find(|user| user.id == node.user_id)
         .map(|user| user.login_name)
         .unwrap_or_default();
-    let ips = node
-        .tailscale_ips
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|ip| ip.parse().ok())
-        .filter(|ip| is_tailnet_ip(*ip))
-        .collect();
+    let ips = tailnet_ips(node.tailscale_ips);
     Ok(LocalNode {
         name: short_name(&node.dns_name).unwrap_or(node.host_name),
         node_id: node.id,
@@ -206,6 +263,58 @@ pub(crate) fn parse_status(json: &[u8]) -> Result<LocalNode, TailscaleError> {
         tagged: node.tags.is_some_and(|tags| !tags.is_empty()),
         ips,
     })
+}
+
+/// Parses `tailscale status --json` into this machine and its peers. Peers
+/// without an ID, and entries that aren't peer objects, are skipped.
+pub(crate) fn parse_peers(json: &[u8]) -> Result<TailnetNodes, TailscaleError> {
+    let local = parse_status(json)?;
+    let map: PeerMapJson = serde_json::from_slice(json).map_err(|error| TailscaleError::Unexpected {
+        command: "status".into(),
+        reason: error.to_string(),
+    })?;
+    let peers = map
+        .peer
+        .unwrap_or_default()
+        .into_values()
+        .filter_map(|value| serde_json::from_value::<PeerJson>(value).ok())
+        .filter(|peer| !peer.id.is_empty() && peer.id != local.node_id)
+        .map(|peer| peer_node(peer, &local))
+        .collect();
+    Ok(TailnetNodes { local, peers })
+}
+
+fn peer_node(peer: PeerJson, local: &LocalNode) -> PeerNode {
+    let tagged = peer.tags.is_some_and(|tags| !tags.is_empty());
+    let online = peer.online.unwrap_or(false);
+    let dns_name = peer.dns_name.trim_end_matches('.').to_owned();
+    // Tailscale's zero time (0001-01-01) means it doesn't know.
+    let last_seen = peer
+        .last_seen
+        .and_then(|text| text.parse::<jiff::Timestamp>().ok())
+        .filter(|at| !online && *at > jiff::Timestamp::UNIX_EPOCH);
+    PeerNode {
+        name: short_name(&dns_name).unwrap_or_else(|| peer.host_name.clone()),
+        node_id: peer.id,
+        hostname: peer.host_name,
+        dns_name,
+        os: peer.os,
+        ips: tailnet_ips(peer.tailscale_ips),
+        online,
+        last_seen,
+        user_id: peer.user_id,
+        tagged,
+        mine: !tagged && !local.tagged && peer.user_id == local.user_id,
+    }
+}
+
+/// The addresses in Tailscale's ranges, skipping anything else.
+fn tailnet_ips(ips: Option<Vec<String>>) -> Vec<IpAddr> {
+    ips.unwrap_or_default()
+        .iter()
+        .filter_map(|ip| ip.parse().ok())
+        .filter(|ip| is_tailnet_ip(*ip))
+        .collect()
 }
 
 /// Parses `tailscale whois --json` into the peer it describes.
@@ -328,23 +437,32 @@ impl TailscaleCli {
     }
 }
 
+impl TailscaleCli {
+    /// The output of `tailscale status --json`.
+    async fn status() -> Result<Vec<u8>, TailscaleError> {
+        match Self::run(&["status", "--json"]).await? {
+            Ok(stdout) => Ok(stdout),
+            // The CLI is there but the app or tailscaled isn't.
+            Err(message)
+                if message.contains("failed to connect") || message.contains("is Tailscale running") =>
+            {
+                Err(TailscaleError::NotRunning(message))
+            }
+            Err(message) => Err(TailscaleError::Failed {
+                command: "status --json".into(),
+                message,
+            }),
+        }
+    }
+}
+
 impl Tailscale for TailscaleCli {
     fn local(&self) -> BoxFuture<'_, Result<LocalNode, TailscaleError>> {
-        Box::pin(async {
-            match Self::run(&["status", "--json"]).await? {
-                Ok(stdout) => parse_status(&stdout),
-                // The CLI is there but the app or tailscaled isn't.
-                Err(message)
-                    if message.contains("failed to connect") || message.contains("is Tailscale running") =>
-                {
-                    Err(TailscaleError::NotRunning(message))
-                }
-                Err(message) => Err(TailscaleError::Failed {
-                    command: "status --json".into(),
-                    message,
-                }),
-            }
-        })
+        Box::pin(async { parse_status(&Self::status().await?) })
+    }
+
+    fn peers(&self) -> BoxFuture<'_, Result<TailnetNodes, TailscaleError>> {
+        Box::pin(async { parse_peers(&Self::status().await?) })
     }
 
     fn whois(&self, addr: SocketAddr) -> BoxFuture<'_, Result<Option<Peer>, TailscaleError>> {
@@ -428,6 +546,132 @@ mod tests {
 
         assert_eq!(local.ips, vec!["100.100.1.1".parse::<IpAddr>().unwrap()]);
         assert!(local.tagged);
+    }
+
+    fn peer_named<'a>(nodes: &'a TailnetNodes, name: &str) -> &'a PeerNode {
+        nodes
+            .peers
+            .iter()
+            .find(|peer| peer.name == name)
+            .unwrap_or_else(|| panic!("no peer {name} in {nodes:?}"))
+    }
+
+    #[test]
+    fn peers_lists_the_other_nodes() {
+        let nodes = parse_peers(STATUS.as_bytes()).unwrap();
+
+        assert_eq!(nodes.local.name, "my-mac");
+        assert_eq!(nodes.peers.len(), 2);
+        assert_eq!(
+            *peer_named(&nodes, "build-box"),
+            PeerNode {
+                node_id: "nPEER1stableIDCNTRL".into(),
+                name: "build-box".into(),
+                hostname: "build-box".into(),
+                dns_name: "build-box.tail0000.ts.net".into(),
+                os: "linux".into(),
+                ips: vec![
+                    "100.100.2.2".parse().unwrap(),
+                    "fd7a:115c:a1e0::2:2".parse().unwrap()
+                ],
+                online: true,
+                last_seen: None,
+                user_id: 1111111111111111,
+                tagged: false,
+                mine: true,
+            }
+        );
+        let laptop = peer_named(&nodes, "laptop");
+        assert_eq!(
+            (laptop.os.as_str(), laptop.online, laptop.mine),
+            ("iOS", false, true)
+        );
+        assert_eq!(laptop.last_seen, Some("2026-10-21T15:28:21.1Z".parse().unwrap()));
+    }
+
+    #[test]
+    fn peers_are_mine_only_for_the_same_untagged_user() {
+        let json = edited(STATUS, |v| {
+            let peers = v["Peer"].as_object_mut().unwrap();
+            let mut keys = peers.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            peers[&keys[0]]["Tags"] = json!(["tag:server"]);
+            peers[&keys[1]]["UserID"] = json!(42);
+        });
+
+        let nodes = parse_peers(&json).unwrap();
+
+        let tagged = peer_named(&nodes, "build-box");
+        assert!(tagged.tagged && !tagged.mine);
+        let other = peer_named(&nodes, "laptop");
+        assert!(!other.tagged && !other.mine);
+        assert_eq!(other.user_id, 42);
+
+        // A tagged host has no owner, so nothing is its.
+        let tagged_host = edited(STATUS, |v| v["Self"]["Tags"] = json!(["tag:ci"]));
+        assert!(
+            parse_peers(&tagged_host)
+                .unwrap()
+                .peers
+                .iter()
+                .all(|peer| !peer.mine)
+        );
+    }
+
+    #[test]
+    fn peers_are_lenient() {
+        // No Peer map at all, or a null one: no peers.
+        let none = edited(STATUS, |v| {
+            v.as_object_mut().unwrap().remove("Peer");
+        });
+        assert!(parse_peers(&none).unwrap().peers.is_empty());
+        let null = edited(STATUS, |v| v["Peer"] = Value::Null);
+        assert!(parse_peers(&null).unwrap().peers.is_empty());
+
+        let odd = edited(STATUS, |v| {
+            v["Peer"] = json!({
+                // Only an ID: everything else defaults.
+                "nodekey:a": {"ID": "nBARE"},
+                // Offline with Tailscale's zero time: last seen unknown.
+                "nodekey:b": {"ID": "nZERO", "HostName": "Old Box", "DNSName": "", "Online": false,
+                              "LastSeen": "0001-01-01T00:00:00Z", "UserID": 1111111111111111_i64,
+                              "TailscaleIPs": ["100.100.3.3", "10.0.0.1"]},
+                // Online peers have no last-seen time, whatever it says.
+                "nodekey:c": {"ID": "nON", "HostName": "on", "Online": true,
+                              "LastSeen": "2026-10-21T15:28:21Z"},
+                // Skipped: no ID, not an object, wrong types, this machine.
+                "nodekey:d": {"HostName": "anonymous"},
+                "nodekey:e": "nonsense",
+                "nodekey:f": {"ID": "nBAD", "Online": "yes"},
+                "nodekey:g": {"ID": "nSELFstableID1CNTRL", "HostName": "me again"}
+            });
+        });
+
+        let nodes = parse_peers(&odd).unwrap();
+
+        let mut ids: Vec<&str> = nodes.peers.iter().map(|peer| peer.node_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["nBARE", "nON", "nZERO"]);
+        let bare = nodes.peers.iter().find(|peer| peer.node_id == "nBARE").unwrap();
+        assert_eq!(
+            (bare.name.as_str(), bare.dns_name.as_str(), bare.online, bare.mine),
+            ("", "", false, false)
+        );
+        assert!(bare.ips.is_empty() && bare.last_seen.is_none());
+        let zero = peer_named(&nodes, "Old Box");
+        assert_eq!(zero.last_seen, None);
+        assert_eq!(zero.ips, vec!["100.100.3.3".parse::<IpAddr>().unwrap()]);
+        assert!(zero.mine);
+        assert_eq!(peer_named(&nodes, "on").last_seen, None);
+    }
+
+    #[test]
+    fn peers_need_tailscale_running() {
+        let stopped = edited(STATUS, |v| v["BackendState"] = json!("Stopped"));
+        assert!(matches!(
+            parse_peers(&stopped),
+            Err(TailscaleError::NotRunning(_))
+        ));
     }
 
     #[test]

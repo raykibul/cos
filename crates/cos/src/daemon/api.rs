@@ -92,6 +92,7 @@ pub(crate) struct AppState {
     pub projects: Arc<Projects>,
     pub devices: Arc<cos_core::Devices>,
     pub tailnet: super::tailnet::Tailnet,
+    pub peers: super::peers::Peers,
     pub runs: Arc<Runs>,
     pub agents: super::agents::AgentManager,
     pub chief: super::chief::Chief,

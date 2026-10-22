@@ -26,6 +26,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpStream, UnixStream};
 
 use crate::daemon::api::{AddProject, EventsPage, NewWorkspace, ProjectsPage, RenameWorkspace, Status};
+use crate::daemon::peers::PeersPage;
 use crate::daemon::remote_api::{ConfigureTailnet, DevicesPage};
 use crate::daemon::runs_api::{CancelRun, RunsPage, UpdateTask};
 use crate::daemon::tailnet::{DEFAULT_PORT, TailnetStatus};
@@ -152,6 +153,15 @@ impl Client {
     ) -> anyhow::Result<TailnetStatus> {
         let body = ConfigureTailnet { enabled, port };
         read_json(self.send(Method::PUT, "/v1/tailnet", Some(&body)).await?).await
+    }
+
+    /// The other devices on the tailnet, with cos probed on `port` (default:
+    /// the listener's port).
+    pub(crate) async fn tailnet_peers(&self, port: Option<u16>) -> anyhow::Result<PeersPage> {
+        match port {
+            Some(port) => self.get_json(&format!("/v1/tailnet/peers?port={port}")).await,
+            None => self.get_json("/v1/tailnet/peers").await,
+        }
     }
 
     async fn connect(&self) -> anyhow::Result<Box<dyn Stream>> {

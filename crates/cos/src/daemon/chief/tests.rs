@@ -95,6 +95,7 @@ impl Fixture {
             projects: projects.clone(),
             devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),
             tailnet: Tailnet::load(store.clone(), log.clone()),
+            peers: crate::daemon::peers::Peers::without_tailscale(),
             runs: runs.clone(),
             agents: manager.clone(),
             chief: chief.clone(),
