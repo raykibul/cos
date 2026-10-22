@@ -196,6 +196,45 @@ export function EmptyState({
   );
 }
 
+/** An on/off switch; it pulses while the change is on its way. */
+export function Switch({
+  on,
+  busy = false,
+  disabled,
+  label,
+  onChange,
+}: {
+  on: boolean;
+  busy?: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      aria-busy={busy}
+      disabled={disabled || busy}
+      onClick={() => onChange(!on)}
+      className={cx(
+        "relative inline-flex h-6 w-10 shrink-0 items-center rounded-full transition-colors disabled:opacity-60",
+        on ? "bg-tone-green" : "bg-line-strong",
+      )}
+    >
+      <span
+        className={cx(
+          "inline-block size-5 rounded-full bg-white shadow-sm transition-transform",
+          on ? "translate-x-[18px]" : "translate-x-0.5",
+          busy && "animate-pulse",
+        )}
+      />
+    </button>
+  );
+}
+
 export function Spinner({ className }: { className?: string }) {
   return <LoaderCircle className={cx("size-4 animate-spin text-ink-3", className)} aria-hidden />;
 }

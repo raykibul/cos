@@ -44,6 +44,11 @@ export function changesEnv(kind: string): boolean {
   return kind.startsWith("env.");
 }
 
+/** `judge.decided` (a new decision) and `judge.changed` (a project switched, the key reloaded). */
+export function changesJudge(kind: string): boolean {
+  return kind.startsWith("judge.");
+}
+
 /** The project a staff or env event is about. */
 export function projectOf(event: LoggedEvent): number | null {
   return optNum(event.data.project_id);

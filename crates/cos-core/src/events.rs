@@ -57,6 +57,8 @@ pub mod kind {
     pub const STAFF_STOPPED: &str = "staff.stopped";
     pub const AGENT_TRANSCRIPT: &str = "agent.transcript";
     pub const ENV_CHANGED: &str = "env.changed";
+    pub const JUDGE_DECIDED: &str = "judge.decided";
+    pub const JUDGE_CHANGED: &str = "judge.changed";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -313,6 +313,39 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     -- start clears it.
     ALTER TABLE staff ADD COLUMN stopped INTEGER NOT NULL DEFAULT 0;
 ",
+    "
+    -- jev (cos-judge), in shadow mode: which projects it may judge (off
+    -- unless a row says on), and every decision it made.
+    CREATE TABLE judge_projects (
+        project_id INTEGER PRIMARY KEY REFERENCES projects (id) ON DELETE CASCADE,
+        enabled    INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL
+    );
+    -- No foreign keys: decisions are labelled examples, kept after their
+    -- project, approval or inbox item is gone.
+    CREATE TABLE judge_decisions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        point       TEXT    NOT NULL,  -- 'permission' | 'wake'
+        project_id  INTEGER,
+        subject     TEXT    NOT NULL,  -- 'approval:12', 'inbox:5', 'staff_inbox:9'
+        approval_id INTEGER,
+        summary     TEXT    NOT NULL,  -- one line for people
+        input_hash  TEXT    NOT NULL,  -- SHA-256 of the trimmed input
+        input       TEXT    NOT NULL,  -- the trimmed input sent, as JSON
+        answers     TEXT,              -- jev's typed answers, NULL on error
+        would       TEXT    NOT NULL,  -- 'approve' | 'ask_you' | 'now' | 'batch' | 'none' | 'no_opinion'
+        why         TEXT,
+        no_opinion  INTEGER NOT NULL,
+        actual      TEXT,              -- what you did: 'allowed' | 'denied' | 'terminal' | 'expired'
+        actual_ms   INTEGER,
+        latency_ms  INTEGER NOT NULL,
+        error       TEXT,
+        model       TEXT,
+        created_ms  INTEGER NOT NULL
+    );
+    CREATE INDEX judge_decisions_by_point ON judge_decisions (point, id);
+    CREATE INDEX judge_decisions_by_approval ON judge_decisions (approval_id);
+",
 ];
 
 #[derive(Debug, thiserror::Error)]

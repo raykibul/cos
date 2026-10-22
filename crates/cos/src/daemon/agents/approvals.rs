@@ -38,6 +38,8 @@ pub(super) struct Judgement {
     /// Stored as the approval's `reason`: the policy's reason, and why it
     /// didn't go to the chief when its tier would have let it.
     pub reason: String,
+    /// The request as the policy classified it, for jev.
+    pub request: ApprovalRequest,
 }
 
 impl Inner {
@@ -62,6 +64,7 @@ impl Inner {
             run_id: agent.run_id,
             route,
             reason,
+            request,
         }
     }
 

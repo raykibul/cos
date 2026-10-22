@@ -5,6 +5,7 @@ pub(crate) mod agents;
 mod approvals;
 pub(crate) mod chief;
 mod env;
+mod judge;
 mod staff;
 
 pub(crate) use agents::TerminalMessage;

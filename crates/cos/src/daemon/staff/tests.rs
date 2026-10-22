@@ -245,6 +245,7 @@ fn serve_daemon(
     let socket = dir.join("cos.sock");
     let _ = std::fs::remove_file(&socket);
     let (stop, stopping) = watch::channel(false);
+    let judge = crate::daemon::judge::Judge::off_for_tests(store, log, projects, runs, manager, dir);
     let state = api::AppState {
         log: log.clone(),
         projects: projects.clone(),
@@ -255,6 +256,7 @@ fn serve_daemon(
         agents: manager.clone(),
         chief,
         staff: staff.clone(),
+        judge,
         started_at: Timestamp::now(),
         home: dir.to_path_buf(),
         stopping: stopping.clone(),

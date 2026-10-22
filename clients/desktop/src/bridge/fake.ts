@@ -18,6 +18,7 @@ import {
 } from "./fake/remote";
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
 import { FakeEnv, makeEnv } from "./fake/env";
+import { FakeJudge } from "./fake/judge";
 import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
 import type {
   Bridge,
@@ -136,6 +137,8 @@ export class FakeDaemon {
   readonly staffDesk: FakeStaffDesk;
   /** Environment variables for agents (fake/env.ts). */
   readonly env: FakeEnv;
+  /** jev in shadow mode (fake/judge.ts). */
+  readonly judge: FakeJudge;
 
   constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
@@ -165,6 +168,7 @@ export class FakeDaemon {
     this.fixtures.screens[staff.agent.id] = staff.screen;
     this.staffDesk = new FakeStaffDesk(this, staff);
     this.env = new FakeEnv(this, makeEnv());
+    this.judge = new FakeJudge(this, this.fixtures.now);
     for (const item of this.fixtures.history) {
       this.events.push({
         seq: this.events.length + 1,
@@ -296,6 +300,8 @@ export class FakeDaemon {
     if (staff) return staff;
     const env = this.env.route(method, path, b);
     if (env) return env;
+    const judge = this.judge.route(method, path, b);
+    if (judge) return judge;
 
     // Projects and workspaces.
     if (method === "GET" && path === "/v1/projects") {

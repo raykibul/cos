@@ -30,7 +30,7 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | `cos.db` | SQLite in WAL mode. The schema version is in `PRAGMA user_version`; migrations are in `crates/cos-core/src/store.rs`. |
 | `daemon.lock` | Holds the running daemon's pid. Its lock means only one daemon runs per home. |
 | `logs/daemon.log` | The daemon's stderr when launchd or systemd runs it. |
-| `daemon.env` | Optional, Linux only: `NAME=value` lines the systemd unit loads, for secrets such as `ANTHROPIC_API_KEY` that `install` never copies into the unit. Keep it mode 0600. |
+| `daemon.env` | Optional: `NAME=value` lines for secrets such as `ANTHROPIC_API_KEY` or jev's `TYPESAFEAI_API_KEY`, which `install` never copies into the plist or the unit. On Linux the systemd unit loads it into the daemon's environment (so agents get it too); on both macOS and Linux the daemon reads it itself at startup for its own lookups (jev's key), and refuses it if other users can read or write it. `cos daemon install` copies `TYPESAFEAI_API_KEY` from your shell into it. Keep it mode 0600. |
 | `tasks/` | Task worktrees (`tasks/<workspace>-<id>/t<task id>-<slug>`), one per task a run is working on. Removed once the task merges, or when it fails or is cancelled with no commits. |
 | `runs/<run id>/board.md` | The run's board as markdown, rewritten whenever it changes. Nothing is written inside the repo. |
 | `runs/<run id>/report.md` | The chief's report, with the "Approved on your behalf" section appended. |
@@ -502,6 +502,23 @@ The `cos-policy` crate decides who answers each permission request; the rules ar
 - **Limits:** `GET /v1/runs/{id}/limits` → `{preset, approval_cap, chief_approvals}`; `PUT` with `{preset?, approval_cap?}` changes them while the run isn't finished (400 over 1000, 404 unknown run, 409 finished). Nothing is re-checked retroactively: pending chief-routed approvals keep their route, and the new limits apply when the chief answers them.
 - **Expiry:** approvals of non-`user` agents are denied after `cos_policy::timeout::UNANSWERED_AFTER` (5 minutes) with `UNANSWERED_MESSAGE`, state `expired`, whoever they were routed to.
 - **Audit:** the `approval_audit` table holds a `cos_policy::AuditRecord` (as JSON) for every answer to a run agent's request given through cos: by rule, by the chief (allowed or denied), by timeout, and by you through the API or CLI. Answers typed in the terminal aren't recorded, since their outcome isn't known. `Runs::approvals_report_section(run_id)` renders "Approved on your behalf (N)" from it for the report.
+
+## jev (shadow mode)
+
+jev, the fast judgment layer, judges two decision points in shadow mode: permission requests routed to you, and items added to a run chief's or a Chief of Staff's inbox. It stores what it would have done next to what happened and changes nothing. Off per project by default. Everything (the key lookup, the questions and thresholds, storage in migration 11, stats) is in [judge.md](judge.md); the code is `daemon/judge.rs` and `daemon/judge_api.rs`.
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /v1/judge` | | where the key was found, `active`, `off_reason`, the per-project switches and each decision point's numbers |
+| `POST /v1/judge/reload` | | the same, after looking for the key again (login shell included) |
+| `PUT /v1/projects/{id}/judge` | `{"enabled": bool}` | `{project_id, name, enabled}` |
+
+| Event | Data |
+|---|---|
+| `judge.decided` | `{decision_id, point, project_id, subject, would, latency_ms, error}`, never the input |
+| `judge.changed` | `{project_id, enabled}`, or `{key_source}` after a key lookup |
+
+CLI: `cos judge status [--reload]`, `cos judge stats`, `cos judge on|off --project P`, `cos judge test`.
 
 ## The chief
 

@@ -13,6 +13,7 @@ base64.workspace = true
 clap.workspace = true
 cos-core.workspace = true
 cos-harness.workspace = true
+cos-judge.workspace = true
 cos-policy.workspace = true
 crossterm.workspace = true
 http-body-util.workspace = true

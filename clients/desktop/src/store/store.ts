@@ -28,6 +28,7 @@ import {
 } from "../api/models";
 import { DecodeError } from "../api/decode";
 import { type EnvAnswer, type EnvVars, type ProjectEnv } from "../api/env";
+import { type JudgeOverview, type JudgeProject } from "../api/judge";
 import {
   type ContextUsage,
   type InboxItem,
@@ -42,6 +43,7 @@ import {
   changesApprovals,
   changesDevices,
   changesEnv,
+  changesJudge,
   changesProjects,
   changesQuestions,
   changesRuns,
@@ -141,6 +143,11 @@ export interface DaemonState {
   envSupported: boolean;
   /** Why a list couldn't be loaded, by `envKey`. */
   envErrors: Record<string, string>;
+  /** jev in shadow mode: its key, the projects it judges, its stats; null until loaded. */
+  judge: JudgeOverview | null;
+  /** False when the daemon answers 404 for `/v1/judge`. */
+  judgeSupported: boolean;
+  judgeError: string | null;
 }
 
 /** `global`, or `project:<id>`: where an environment list's error is kept. */
@@ -202,6 +209,9 @@ export function initialState(): DaemonState {
     projectEnvs: {},
     envSupported: true,
     envErrors: {},
+    judge: null,
+    judgeSupported: true,
+    judgeError: null,
   };
 }
 
@@ -272,6 +282,7 @@ export class CosStore {
   private devicesRefresh!: CoalescedRefresh<Device[]>;
   private tailnetRefresh!: CoalescedRefresh<TailnetStatus>;
   private globalEnvRefresh!: CoalescedRefresh<EnvVars>;
+  private judgeRefresh!: CoalescedRefresh<JudgeOverview>;
   private readonly projectEnvRefreshes = new Map<number, CoalescedRefresh<ProjectEnv>>();
   /** Set on each (re)connect: the next project list refetches every project's environment. */
   private envStale = true;
@@ -307,6 +318,7 @@ export class CosStore {
       this.devicesRefresh,
       this.tailnetRefresh,
       this.globalEnvRefresh,
+      this.judgeRefresh,
     ]) {
       refresh.dispose();
     }
@@ -349,6 +361,19 @@ export class CosStore {
             envErrors: withoutKey(s.envErrors, envKey(null)),
           }));
         } else this.envFailed(null, result.error);
+      },
+    );
+
+    this.judgeRefresh = new CoalescedRefresh(
+      () => client.judge(),
+      (result) => {
+        if (result.ok) {
+          this.set({ judge: result.value, judgeSupported: true, judgeError: null });
+        } else if (isNotFound(result.error)) {
+          this.set({ judge: null, judgeSupported: false, judgeError: null });
+        } else {
+          this.set({ judgeError: message(result.error) });
+        }
       },
     );
 
@@ -518,6 +543,7 @@ export class CosStore {
         this.envStale = true;
         this.refreshProjects();
         this.globalEnvRefresh.request();
+        this.judgeRefresh.request();
         this.refreshAgents();
         this.refreshRuns();
         // What changed while away: the conversations and inboxes on screen.
@@ -581,6 +607,8 @@ export class CosStore {
       if (project !== null) this.refreshEnv(project);
       else this.refreshEnv(null);
     }
+    // A decision moves the stats; a switch or a key reload, the rest.
+    if (changesJudge(kind)) this.judgeRefresh.request();
     if (kind === "staff.inbox") {
       const project = projectOf(event);
       // Its count of updates waiting moved (shown while coordination is paused).
@@ -1438,6 +1466,38 @@ export class CosStore {
     );
     this.createRefreshes();
     await this.start();
+  }
+
+  // MARK: jev, the judgment model in shadow mode
+
+  refreshJudge(): void {
+    this.judgeRefresh.request();
+  }
+
+  /** Switches jev on or off for a project, showing the answer at once. */
+  async setProjectJudge(projectId: number, enabled: boolean): Promise<JudgeProject> {
+    const answer = await this.client.setProjectJudge(projectId, enabled);
+    this.set((s) =>
+      s.judge
+        ? {
+            judge: {
+              ...s.judge,
+              projects: s.judge.projects.map((p) =>
+                p.projectId === answer.projectId ? { ...p, enabled: answer.enabled } : p,
+              ),
+            },
+          }
+        : {},
+    );
+    this.judgeRefresh.request();
+    return answer;
+  }
+
+  /** Looks for the API key again (the daemon probes the login shell). */
+  async reloadJudge(): Promise<JudgeOverview> {
+    const judge = await this.client.reloadJudge();
+    this.set({ judge, judgeSupported: true, judgeError: null });
+    return judge;
   }
 
   // MARK: Remote access (This Mac only)

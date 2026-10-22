@@ -9,6 +9,7 @@ import {
   decodeProjectEnv,
 } from "./env";
 import { CosError } from "./errors";
+import { type JudgeOverview, type JudgeProject, decodeJudge, decodeJudgeProject } from "./judge";
 import {
   type Agent,
   type AgentScreen,
@@ -433,6 +434,23 @@ export class DaemonClient {
   async removeEnv(projectId: number | null, name: string): Promise<EnvAnswer> {
     const body = await this.request("DELETE", envPath(projectId, name));
     return decodeEnvAnswer(projectId, body);
+  }
+
+  // MARK: jev, the judgment model in shadow mode
+
+  /** The key, the projects it judges, and what it would have done. */
+  judge(): Promise<JudgeOverview> {
+    return this.get("/v1/judge", decodeJudge);
+  }
+
+  /** Switches jev on or off for a project. */
+  setProjectJudge(projectId: number, enabled: boolean): Promise<JudgeProject> {
+    return this.send("PUT", `/v1/projects/${projectId}/judge`, { enabled }, decodeJudgeProject);
+  }
+
+  /** Looks for the API key again, probing the login shell. */
+  reloadJudge(): Promise<JudgeOverview> {
+    return this.send("POST", "/v1/judge/reload", undefined, decodeJudge);
   }
 
   // MARK: Devices and the tailnet

@@ -117,8 +117,17 @@ impl Fixture {
             crate::daemon::staff::StaffConfig::for_tests(),
         )
         .unwrap();
+        let judge = crate::daemon::judge::Judge::off_for_tests(
+            &self.store,
+            &self.log,
+            &self.projects,
+            &runs,
+            &self.manager,
+            self.dir.path(),
+        );
         let state = api::AppState {
             staff,
+            judge,
             log: self.log.clone(),
             projects: self.projects.clone(),
             devices: Arc::new(Devices::new(self.store.clone(), self.log.clone())),
