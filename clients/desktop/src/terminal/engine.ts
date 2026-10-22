@@ -2,11 +2,12 @@
 // engine in WebAssembly with an xterm.js-like API. Swapping to @xterm/xterm
 // means rewriting this file only; everything else uses `TerminalEngine`.
 
-import { FitAddon, Ghostty, Terminal, init } from "ghostty-web";
+import { FitAddon, Ghostty, Terminal } from "ghostty-web";
 // Emitted into dist/assets as its own file, so it loads from Tauri's custom
 // protocol like any other asset.
 import wasmUrl from "ghostty-web/ghostty-vt.wasm?url";
 import type { TerminalTheme } from "./theme";
+import { type WheelState, wheelData } from "./wheel";
 
 export interface Disposable {
   dispose(): void;
@@ -33,20 +34,50 @@ export interface EngineOptions {
   fontSize: number;
 }
 
-let engine: Promise<Ghostty | null> | null = null;
+let compiled: Promise<WebAssembly.Module> | null = null;
+
+/** Compiles the bundled WASM once. */
+function compileEngine(): Promise<WebAssembly.Module> {
+  compiled ??= fetch(wasmUrl)
+    .then((response) => {
+      if (!response.ok) throw new Error(`fetching ${wasmUrl}: ${response.status}`);
+      return response.arrayBuffer();
+    })
+    .then((bytes) => WebAssembly.compile(bytes));
+  compiled.catch(() => {
+    compiled = null;
+  });
+  return compiled;
+}
 
 /**
- * Loads the WASM once. ghostty-web needs it before any Terminal exists. It
- * tries the bundled file first, then the library's own `init()`, which reads
- * a copy inlined as a data: URL.
+ * A fresh WASM instance for one terminal. Terminals must not share one:
+ * with ghostty-web 0.4.0, a terminal opened after another one was disposed
+ * on the same instance draws the old terminal's cells, scrambled, with a
+ * full-height cursor.
  */
-export function loadEngine(): Promise<Ghostty | null> {
-  engine ??= Ghostty.load(wasmUrl).catch(async (error: unknown) => {
+export async function loadEngine(): Promise<Ghostty> {
+  try {
+    const module = await compileEngine();
+    let instance: WebAssembly.Instance | null = null;
+    instance = await WebAssembly.instantiate(module, {
+      env: {
+        // The same logging hook ghostty-web passes.
+        log: (pointer: number, length: number) => {
+          const memory = instance?.exports.memory as WebAssembly.Memory | undefined;
+          if (!memory) return;
+          const text = new TextDecoder().decode(new Uint8Array(memory.buffer, pointer, length));
+          console.log("[ghostty-vt]", text);
+        },
+      },
+    });
+    return new Ghostty(instance);
+  } catch (error: unknown) {
+    // Without a path, ghostty-web reads the copy inlined in its JS as a data:
+    // URL; each call still makes its own instance.
     console.warn("ghostty-web: loading the bundled WASM failed, trying the inlined copy", error);
-    await init();
-    return null;
-  });
-  return engine;
+    return Ghostty.load();
+  }
 }
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -71,10 +102,12 @@ class GhosttyEngine implements TerminalEngine {
   private readonly fit = new FitAddon();
   private parent: HTMLElement | null = null;
   private readonly cleanups: (() => void)[] = [];
+  /** onData listeners, so input made here (the wheel) reaches them too. */
+  private readonly listeners = new Set<(data: string) => void>();
 
-  constructor(ghostty: Ghostty | null, options: EngineOptions) {
+  constructor(ghostty: Ghostty, options: EngineOptions) {
     this.term = new Terminal({
-      ...(ghostty ? { ghostty } : {}),
+      ghostty,
       fontFamily: options.fontFamily,
       fontSize: options.fontSize,
       theme: options.theme,
@@ -118,6 +151,34 @@ class GhosttyEngine implements TerminalEngine {
     };
     parent.addEventListener("paste", onPaste, { capture: true });
     this.cleanups.push(() => parent.removeEventListener("paste", onPaste, { capture: true }));
+
+    // On the alternate screen, the wheel becomes mouse reports (or Page
+    // Up/Down) instead of ghostty-web's arrow keys; see wheel.ts.
+    const wheel: WheelState = { carry: 0 };
+    this.term.attachCustomWheelEventHandler((event) => {
+      if (this.term.buffer.active.type !== "alternate") {
+        wheel.carry = 0;
+        return false;
+      }
+      const rect = parent.getBoundingClientRect();
+      const data = wheelData(
+        {
+          deltaY: event.deltaY,
+          deltaMode: event.deltaMode,
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+          width: rect.width,
+          height: rect.height,
+          cols: this.term.cols,
+          rows: this.term.rows,
+          mouseTracking: [1000, 1002, 1003].some((mode) => this.term.getMode(mode)),
+          sgr: this.term.getMode(1006),
+        },
+        wheel,
+      );
+      if (data) for (const listener of this.listeners) listener(data);
+      return true;
+    });
   }
 
   write(bytes: Uint8Array): void {
@@ -145,7 +206,14 @@ class GhosttyEngine implements TerminalEngine {
   }
 
   onData(listener: (data: string) => void): Disposable {
-    return this.term.onData(listener);
+    this.listeners.add(listener);
+    const own = this.term.onData(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+        own.dispose();
+      },
+    };
   }
 
   dispose(): void {
