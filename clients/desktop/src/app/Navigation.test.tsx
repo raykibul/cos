@@ -149,6 +149,41 @@ describe("⌘K switcher", () => {
   });
 });
 
+describe("focus on open", () => {
+  const chiefInput = () => screen.getByRole("textbox", { name: "Message the Chief of Staff" });
+
+  it("puts the cursor in the chief's box from the rail, a tab or ⌘K", async () => {
+    const { user } = await renderApp();
+    const rail = within(screen.getByRole("navigation", { name: "Projects" }));
+    await user.click(rail.getByRole("button", { name: /^Chief of Staff, cos/ }));
+    expect(chiefInput()).toHaveFocus();
+
+    await user.click(tabs().getByRole("tab", { name: "Waiting on you" }));
+    await user.click(tabs().getByRole("tab", { name: "cos" }));
+    expect(chiefInput()).toHaveFocus();
+
+    await user.keyboard("{Meta>}k{/Meta}opal{Enter}");
+    await act(() => settle());
+    expect(chiefInput()).toHaveFocus();
+  });
+
+  it("does it again when you open the chief that's showing", async () => {
+    const { user } = await renderApp({ kind: "chief", id: 1 });
+    act(() => chiefInput().blur());
+    expect(chiefInput()).not.toHaveFocus();
+    await user.keyboard("{Meta>}k{/Meta}cos{Enter}");
+    await act(() => settle());
+    expect(chiefInput()).toHaveFocus();
+  });
+
+  it("puts the cursor in a workspace's new agent box", async () => {
+    const { user } = await renderApp();
+    await user.click(sidebar().getByRole("button", { name: /^porto/ }));
+    await act(() => settle());
+    expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveFocus();
+  });
+});
+
 describe("status bar and settings", () => {
   it("says what's working and opens Waiting on you", async () => {
     const { user, ui } = await renderApp({ kind: "chief", id: 1 });

@@ -22,6 +22,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CLAUDE_CONFIG_DIR, envHint } from "../../api/env";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
+import { useFocusOnOpen } from "../../app/focus";
 import { models, pluralize } from "../../domain/labels";
 import { type PendingMessage, conversationItems } from "../../domain/transcript";
 import {
@@ -98,6 +99,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   const env = envHint(envNames);
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
+  useFocusOnOpen(input);
   const [jumps, setJumps] = useState(0);
 
   useEffect(() => (agentId !== null ? cos.watchTranscript(agentId) : undefined), [cos, agentId]);
