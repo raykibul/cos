@@ -6,10 +6,28 @@ Version 1 has **no push notifications**: it is current while it is open, and cat
 
 ## Hosts
 
-- **Adding:** by Tailscale name (`my-mac`, `my-mac.tail1234.ts.net`) or address (`100.101.102.103`, `[fd7a:…]`), with an optional `:port` (default 7700). The address is read as the CLI's `--host` reads it (`CosEndpoint.parse`, mirroring `cos-bridge`'s `parse_address`), so a URL, a path or a space is refused with the same message.
+- **Adding:** by Tailscale name (`my-mac`, `my-mac.tail1234.ts.net`) or address (`100.101.102.103`, `[fd7a:…]`), with an optional `:port` (default 7700). The address is read as the CLI's `--host` reads it (`CosEndpoint.parse`, mirroring `cos-bridge`'s `parse_address`), so a URL, a path or a space is refused with the same message. Once one host is saved, the add screen also lists the rest of the tailnet (below).
+- **First run:** with no host saved, the add screen says "Add your first machine by its Tailscale name (for example `my-mac`) or `100.x` address. After that, cos lists the rest of your tailnet here." above the address field.
 - **Saved:** names and addresses in `UserDefaults`, plus which one is current. Nothing secret: Tailscale identifies the phone, and the host approves it.
-- **Hosts tab:** switch by tapping, rename or remove by swiping, reorder with Edit. It shows the current host's address, status, cos version and event count, and the setup steps.
+- **Hosts tab:** switch by tapping, rename or remove by swiping, reorder with Edit. "Found on your tailnet" lists machines running cos that aren't saved yet, each with Connect. It shows the current host's address, status, cos version and event count, and the setup steps.
 - **Switching** stops the old host's session and starts a new one, so nothing from the previous host stays on screen. A host is followed only while the app is in the foreground (`scenePhase`).
+
+## Your tailnet
+
+An iPhone app can't ask Tailscale who is on the tailnet: there's no CLI and no shared API. A host can, so the app asks every saved host that answers (reachable and approved) for `GET /v1/tailnet/peers`, all at once with a 5 s limit each, and merges the lists by Tailscale node ID (`TailnetListing.merge` in `Cos/Model/Tailnet.swift`). `running` from any host wins, as does online, and the latest "last seen".
+
+The add screen shows **On your tailnet** above the manual name/address field, with "via build-box and studio" under the title, and pull to refresh. Each row has an OS icon, the name, `os · 100.x`, and a chip:
+
+| Chip | When | Action |
+|---|---|---|
+| **cos running** (green) | Online, cos answers on its port, not saved. | **Connect** saves it by its `address` under its Tailscale name and switches to it. The host there then asks you to approve the phone as usual. |
+| **Online** | Online, no cos. | |
+| **Offline · seen 3h ago** | Offline (the time when Tailscale knows it). | |
+| **Added** | Already saved, matched by address (its IPs, MagicDNS name or `address`) or by name. | |
+
+The phone itself (`is_you`) is never listed. Machines of other Tailscale users and tagged ones (`mine: false`) can't be approved, so they sit behind "Show N other devices". The hosts tab's **Found on your tailnet** shows just the unsaved machines running cos.
+
+A host with an older cos answers 403 `host_only` for the peer list over the tailnet: it adds nothing, and the section says "Update cos on <host> to list your tailnet here." A host whose Tailscale isn't usable says why. Hosts that can't be reached or refuse the phone are skipped silently; their own screens say why.
 
 ## Connection states
 
@@ -55,6 +73,7 @@ The app uses CosKit's `CosService` protocol, which `CosClient` implements over H
 | `GET /v1/runs`, `POST /v1/runs`, `GET /v1/runs/{id}`, `POST …/approve-plan`, `POST …/cancel`, `GET …/report` | Runs. |
 | `GET /v1/questions?state=open`, `POST /v1/questions/{id}/answer` | Questions. |
 | `GET /v1/projects/{id}/staff`, `POST …/staff/start`, `POST …/staff/message`, `GET …/staff/inbox` | The Chief of Staff. |
+| `GET /v1/tailnet/peers` | The tailnet, from every saved host (`is_you`, `self`). |
 
 Each event refreshes only what it touches, and refreshes of one kind fold together while one is under way:
 

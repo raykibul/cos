@@ -3,7 +3,7 @@
 The iPhone app for the cos daemon, in SwiftUI. It reaches a Mac or server running cos over Tailscale and shows what waits on you, each project's Chief of Staff as a chat, workspaces, runs and agents. The screens, the routes it uses and the plan for push are in [docs/iphone.md](../../docs/iphone.md).
 
 - `Cos/App`: the entry point and `AppModel` (hosts, the session for the current one, launch flags).
-- `Cos/Model`: `HostStore` (saved hosts), `HostSession` (one host's lists, kept current from `/v1/events`), `ChiefChat`, `RunDetail`, `AgentDetail` and the `Notifications` seam.
+- `Cos/Model`: `HostStore` (saved hosts), `HostSession` (one host's lists, kept current from `/v1/events`), `TailnetFinder` and `TailnetListing` (the tailnet, as the saved hosts list it), `ChiefChat`, `RunDetail`, `AgentDetail` and the `Notifications` seam.
 - `Cos/Views`: the screens.
 - `Cos/Fake`: `FakeCos`, a daemon in memory with invented data, for `-fakeData`, screenshots and tests.
 - `CosTests`: unit tests of the models against `FakeCos`.
@@ -35,11 +35,12 @@ Launch arguments (Product > Scheme > Edit Scheme > Arguments, or after `simctl l
 
 | Argument | Effect |
 |---|---|
-| `-fakeData` | Two invented hosts, both answered by `FakeCos`. Nothing touches the network or your saved hosts. |
-| `-screen <name>` | Opens a screen: `waiting`, `projects`, `chief`, `chief-new`, `workspace`, `agent`, `agent-approval`, `runs`, `run`, `plan`, `report`, `hosts`. |
+| `-fakeData` | Two invented hosts, both answered by `FakeCos`, on an invented tailnet (gpu-box runs cos and isn't saved, a Mac without cos, this iPhone, an offline iPad, a tagged CI server). Nothing touches the network or your saved hosts. |
+| `-screen <name>` | Opens a screen: `waiting`, `projects`, `chief`, `chief-new`, `workspace`, `agent`, `agent-approval`, `runs`, `run`, `plan`, `report`, `hosts`, `add-host`. |
 | `-fakeRefusal <code>` | The fake refuses the device, e.g. `device_pending`, `device_denied`, `wrong_user`. |
 | `-fakeUnreachable` | The fake can't be reached. |
 | `-noHosts` | Starts with no hosts (the welcome screen). |
+| `-fakeOldDaemon` | The fake studio is an older cos that refuses its tailnet list (`host_only`). |
 
 ## Run on your iPhone
 
@@ -49,7 +50,7 @@ A free Apple ID is enough; no paid developer account.
 2. In Xcode: open `Cos.xcodeproj`, select the Cos target > Signing & Capabilities, keep "Automatically manage signing", and pick your Personal Team. If Xcode says the bundle id is taken, change `local.cos.iphone` to something of yours there (don't commit the team or the id; `project.yml` leaves `DEVELOPMENT_TEAM` empty).
 3. Connect the iPhone by cable (or on the same Wi-Fi once paired), pick it as the run destination and press Run.
 4. The first launch is refused until you trust the developer: Settings > General > VPN & Device Management > your Apple ID > Trust.
-5. In the app, add the host by its Tailscale name (`my-mac`) or its `100.x` address. The port defaults to 7700.
+5. In the app, add the host by its Tailscale name (`my-mac`) or its `100.x` address. The port defaults to 7700. After the first one, the add screen lists the other machines on your tailnet, and Connect adds one running cos.
 6. The host answers `device_pending`, and the app shows the command to run there: `cos devices approve <n>`. Run it on the host; the app gets in by itself within a few seconds.
 
 On the host, remote access is on by default; `cos remote status` says where it listens, and `cos remote on` turns it back on. Only devices of the host's Tailscale user get in.
