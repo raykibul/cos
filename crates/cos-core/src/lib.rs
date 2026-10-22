@@ -10,6 +10,7 @@ pub mod devices;
 pub mod env;
 pub mod events;
 mod git;
+pub mod judge;
 pub mod projects;
 pub mod runs;
 pub mod staff;
@@ -24,6 +25,7 @@ pub use chief::{Inbox, InboxItem, InboxKind, Question, QuestionState, Questions,
 pub use devices::{Device, DeviceError, DeviceState, Devices, SeenDevice};
 pub use env::{EnvError, Environment, GlobalEnv, ProjectEnv, Variables};
 pub use events::{EventLog, LoggedEvent, Subscription};
+pub use judge::{DecisionPoint, Judgments, NewDecision, PointStats, ProjectSwitch};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};
 pub use runs::{
     ApprovalPreset, Board, NewRun, PlanProposal, ProposedTask, ReviewVerdict, Run, RunError, RunState,
