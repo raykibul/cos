@@ -2,14 +2,16 @@
 
 `cos daemon` is the long-running process that will own runs, workers and approvals. As of milestone 3 it owns the database and the event log, and serves an HTTP API on a Unix socket. It also keeps the books for runs and their tasks (see "Runs, tasks and the board" below); the pipeline drives each task through a worker and a reviewer (see "Pipeline"), and the chief that plans runs arrives in milestone 5. It runs agents (Claude Code in terminals it owns) and holds their permission requests as approvals (see "Agents" below).
 
+It runs on macOS and Linux. To run it on a Linux server such as EC2 and drive it from the Mac app over Tailscale, see [linux.md](linux.md).
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `cos daemon` | Run in the foreground. Ctrl-C or SIGTERM stops it cleanly, asking its agents to exit first. |
-| `cos daemon install` | Install a launchd agent (`local.cos.daemon`): starts now, at every login, and again about 10 s after a crash. |
-| `cos daemon uninstall` | Stop the agent and remove its plist. |
-| `cos status` | Whether the daemon is running, and its pid, uptime, event count and launchd state. Exits 1 when it isn't running. |
+| `cos daemon install` | Run it as a service: on macOS a launchd agent (`local.cos.daemon`) that starts now, at every login, and again about 10 s after a crash; on Linux a systemd user unit (`~/.config/systemd/user/cos.service`), enabled and started, restarted 10 s after a crash. See [Running as a service](#running-as-a-service). |
+| `cos daemon uninstall` | Stop the service and remove its plist or unit. |
+| `cos status` | Whether the daemon is running, and its pid, uptime, event count and service state. Exits 1 when it isn't running. |
 | `cos events` | The last 20 events. `-n 50` for more, `--after N` to start after event N, `--json` for one JSON object per line. |
 | `cos events -f` | Keep printing new events. If the daemon restarts, it waits and carries on from the last event it printed. |
 | `cos remote [on [--port N] \| off]` | Turn remote access over Tailscale on or off, or show where it listens. See [Remote access](#remote-access). |
@@ -26,12 +28,19 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | `hooks.sock` | Where the agents' hooks (relayed by `cos hook`) reach the daemon (mode 0600). One socket for every agent; hooks are routed by session id. |
 | `cos.db` | SQLite in WAL mode. The schema version is in `PRAGMA user_version`; migrations are in `crates/cos-core/src/store.rs`. |
 | `daemon.lock` | Holds the running daemon's pid. Its lock means only one daemon runs per home. |
-| `logs/daemon.log` | The daemon's stderr when launchd runs it. |
+| `logs/daemon.log` | The daemon's stderr when launchd or systemd runs it. |
+| `daemon.env` | Optional, Linux only: `NAME=value` lines the systemd unit loads, for secrets such as `ANTHROPIC_API_KEY` that `install` never copies into the unit. Keep it mode 0600. |
 | `tasks/` | Task worktrees (`tasks/<workspace>-<id>/t<task id>-<slug>`), one per task a run is working on. Removed once the task merges, or when it fails or is cancelled with no commits. |
 | `runs/<run id>/board.md` | The run's board as markdown, rewritten whenever it changes. Nothing is written inside the repo. |
 | `runs/<run id>/report.md` | The chief's report, with the "Approved on your behalf" section appended. |
 
-The launchd plist records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR`, `COS_CLAUDE_BIN`, `COS_CHIEF_MODEL` and `COS_STAFF_MODEL` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them.
+## Running as a service
+
+`cos daemon install` records the binary's path, `COS_HOME` and your `PATH` at install time, and also `CLAUDE_CONFIG_DIR`, `COS_CLAUDE_BIN`, `COS_TAILSCALE`, `COS_CHIEF_MODEL`, `COS_STAFF_MODEL` and `COS_RUN_MODEL` if they're set, so agents use the same Claude config and binary as your shell. Run `cos daemon install` again after moving the binary or changing any of them. If `claude` isn't on your `PATH` but is where its installers put it (`~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, nvm's newest Node, `/usr/local/bin`, `/opt/homebrew/bin`), its folder is added to the recorded `PATH`, and the daemon finds it there at start too.
+
+- **macOS:** a launchd agent, `~/Library/LaunchAgents/local.cos.daemon.plist`, in your login session (`gui/<uid>`).
+- **Linux:** a systemd user unit, `~/.config/systemd/user/cos.service` (`$XDG_CONFIG_HOME` if set). `install` runs `systemctl --user daemon-reload`, `enable` and `restart`; `uninstall` runs `disable --now`, removes the file and reloads. The unit has `Restart=on-failure`, `KillMode=mixed` (SIGTERM to the daemon alone, which stops its agents itself) and appends output to `logs/daemon.log`. systemd stops a user's services when their last session ends unless lingering is on, so `install` warns when `loginctl` says it's off; on a server, run `sudo loginctl enable-linger $USER`. `install` needs your user's systemd, so run it in an SSH login rather than a `su` shell. See [linux.md](linux.md).
+- **Elsewhere,** or without systemd (containers), `install` fails with a message; run `cos daemon` under your own supervisor.
 
 ## Event log
 
@@ -160,9 +169,9 @@ cos remote peers         # the other devices on your tailnet; * marks those runn
 ### How it works
 
 - **Binding.** The daemon asks `tailscale status --json` for this machine's tailnet addresses (100.64.0.0/10 and fd7a:115c:a1e0::/48 only) and binds the port on each of them. It never binds `0.0.0.0` or loopback. Plain HTTP, because WireGuard already encrypts the traffic.
-- **Finding `tailscale`.** `$COS_TAILSCALE` if set, else `tailscale` on `PATH`, else `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. It is looked up on every call, so installing Tailscale later needs no restart.
-- **When Tailscale isn't usable** (not installed, not running, logged out, switched off, or this machine is a tagged node), the daemon keeps serving the Unix socket, reports why in `tailnet.reason`, and tries again every 30 s. While listening it checks every 30 s that this machine's addresses and owner haven't changed, and rebinds or stops if they have.
-- **macOS firewall.** If the application firewall is on and blocks incoming connections to the `cos` binary, the listener still binds but macOS drops every connection before cos sees it. `tailnet.reason` then says so, with the command to allow it (`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp <path to cos>`), or use System Settings > Network > Firewall > Options. A rebuilt binary at a new path needs allowing again.
+- **Finding `tailscale`.** `$COS_TAILSCALE` if set, else `tailscale` on `PATH`, else `/Applications/Tailscale.app/Contents/MacOS/Tailscale` on macOS, or `/usr/bin/tailscale` and `/usr/local/bin/tailscale` on Linux. It is looked up on every call, so installing Tailscale later needs no restart.
+- **When Tailscale isn't usable** (not installed, not running, logged out, switched off, or this machine is a tagged node, which has no owner to compare devices with: log it in as yourself instead), the daemon keeps serving the Unix socket, reports why in `tailnet.reason`, and tries again every 30 s. While listening it checks every 30 s that this machine's addresses and owner haven't changed, and rebinds or stops if they have.
+- **macOS firewall.** If the application firewall is on and blocks incoming connections to the `cos` binary, the listener still binds but macOS drops every connection before cos sees it. `tailnet.reason` then says so, with the command to allow it (`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp <path to cos>`), or use System Settings > Network > Firewall > Options. A rebuilt binary at a new path needs allowing again. The check only runs on macOS; on Linux, Tailscale accepts traffic on `tailscale0` itself, and only a host firewall you added (ufw, firewalld) would need the port opened there.
 
 ### Who gets in
 
