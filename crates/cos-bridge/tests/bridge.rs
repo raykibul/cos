@@ -1,6 +1,7 @@
 //! The bridge against a fake daemon: a small axum server on a temporary Unix
-//! socket that serves the routes the bridge uses, and can drop its streams,
-//! stop, restart and lose its log on demand.
+//! socket, or on 127.0.0.1 over TCP like a tailnet listener, that serves the
+//! routes the bridge uses, and can drop its streams, stop, restart, lose its
+//! log and refuse clients on demand.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -11,17 +12,18 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
-use axum::http::{Method, StatusCode, Uri};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use cos_bridge::{Backoff, Bridge, ErrorKind, EventMessage, StreamHandle, TerminalMessage};
+use cos_bridge::{Backoff, Bridge, ErrorKind, EventMessage, StreamHandle, Target, TerminalMessage};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::net::UnixListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
@@ -85,6 +87,11 @@ struct FakeState {
     open_streams: AtomicUsize,
     /// Every request that reached the daemon, as `METHOD /path`.
     hits: Mutex<Vec<String>>,
+    /// While set, every request gets this refusal: (status, code, message),
+    /// as the tailnet guard answers a device that isn't approved.
+    refusal: Mutex<Option<(StatusCode, String, String)>>,
+    /// Requests the guard saw, refused or not.
+    guarded: AtomicUsize,
 }
 
 impl FakeState {
@@ -98,8 +105,32 @@ impl FakeState {
             snapshots: AtomicUsize::new(0),
             open_streams: AtomicUsize::new(0),
             hits: Mutex::default(),
+            refusal: Mutex::default(),
+            guarded: AtomicUsize::new(0),
         })
     }
+}
+
+/// Like the daemon's tailnet guard: runs before routing.
+async fn guard(State(state): State<Arc<FakeState>>, request: Request, next: Next) -> Response {
+    state.guarded.fetch_add(1, Ordering::SeqCst);
+    let refusal = state.refusal.lock().unwrap().clone();
+    match refusal {
+        Some((status, code, message)) => {
+            (status, axum::Json(json!({"error": message, "code": code}))).into_response()
+        }
+        None => next.run(request).await,
+    }
+}
+
+/// How the fake daemon listens.
+enum Listen {
+    Unix {
+        _dir: tempfile::TempDir,
+        socket: PathBuf,
+    },
+    /// 127.0.0.1 on a port picked when the daemon was made.
+    Tcp { port: u16 },
 }
 
 /// Counts a stream as open until dropped.
@@ -119,8 +150,7 @@ impl Drop for Open {
 }
 
 struct FakeDaemon {
-    _dir: tempfile::TempDir,
-    socket: PathBuf,
+    listen: Listen,
     state: Arc<FakeState>,
     server: Option<JoinHandle<()>>,
 }
@@ -131,8 +161,7 @@ impl FakeDaemon {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("cos.sock");
         Self {
-            _dir: dir,
-            socket,
+            listen: Listen::Unix { _dir: dir, socket },
             state: FakeState::new(),
             server: None,
         }
@@ -144,23 +173,75 @@ impl FakeDaemon {
         daemon
     }
 
+    /// A tailnet listener on 127.0.0.1 that isn't running yet: its port is
+    /// free, so connecting is refused.
+    fn stopped_tcp() -> Self {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        Self {
+            listen: Listen::Tcp { port },
+            state: FakeState::new(),
+            server: None,
+        }
+    }
+
+    fn start_tcp() -> Self {
+        let mut daemon = Self::stopped_tcp();
+        daemon.run();
+        daemon
+    }
+
+    fn socket(&self) -> &PathBuf {
+        match &self.listen {
+            Listen::Unix { socket, .. } => socket,
+            Listen::Tcp { .. } => panic!("a TCP daemon has no socket"),
+        }
+    }
+
+    fn address(&self) -> String {
+        match &self.listen {
+            Listen::Unix { socket, .. } => socket.display().to_string(),
+            Listen::Tcp { port } => format!("127.0.0.1:{port}"),
+        }
+    }
+
     fn bridge(&self) -> Bridge {
-        fast(Bridge::new(&self.socket))
+        match &self.listen {
+            Listen::Unix { socket, .. } => fast(Bridge::new(socket)),
+            Listen::Tcp { .. } => fast(Bridge::to(Target::tcp(&self.address()).unwrap())),
+        }
     }
 
     fn run(&mut self) {
         assert!(self.server.is_none(), "already running");
-        let _ = std::fs::remove_file(&self.socket);
-        let listener = UnixListener::bind(&self.socket).unwrap();
         let app = Router::new()
             .route("/v1/status", get(status))
             .route("/v1/events/stream", get(events_stream))
             .route("/v1/agents/{id}/terminal", get(terminal))
+            .route("/v1/host", get(host))
             .fallback(echo)
+            .layer(middleware::from_fn_with_state(self.state.clone(), guard))
             .with_state(self.state.clone());
-        self.server = Some(tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        }));
+        self.server = Some(match &self.listen {
+            Listen::Unix { socket, .. } => {
+                let _ = std::fs::remove_file(socket);
+                let listener = UnixListener::bind(socket).unwrap();
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, app).await;
+                })
+            }
+            Listen::Tcp { port } => {
+                let listener = std::net::TcpListener::bind(("127.0.0.1", *port)).unwrap();
+                listener.set_nonblocking(true).unwrap();
+                let listener = TcpListener::from_std(listener).unwrap();
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, app).await;
+                })
+            }
+        });
     }
 
     /// Ends every open stream, as a dropped connection would.
@@ -174,7 +255,23 @@ impl FakeDaemon {
             server.abort();
         }
         self.drop_streams();
-        std::fs::remove_file(&self.socket).unwrap();
+        if let Listen::Unix { socket, .. } = &self.listen {
+            std::fs::remove_file(socket).unwrap();
+        }
+    }
+
+    /// Refuses every request from now on, as the tailnet guard does.
+    fn refuse(&self, status: StatusCode, code: &str, message: &str) {
+        *self.state.refusal.lock().unwrap() = Some((status, code.to_owned(), message.to_owned()));
+    }
+
+    /// Lets requests in again, as approving the device does.
+    fn admit(&self) {
+        *self.state.refusal.lock().unwrap() = None;
+    }
+
+    fn guarded(&self) -> usize {
+        self.state.guarded.load(Ordering::SeqCst)
     }
 
     /// Appends an event with the next seq.
@@ -312,6 +409,15 @@ async fn terminal(State(state): State<Arc<FakeState>>, Path(id): Path<i64>) -> R
     sse(receiver)
 }
 
+/// The `Host` header the bridge sent.
+async fn host(headers: HeaderMap) -> String {
+    headers
+        .get("host")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Everything else: a few fixed answers, and an echo of the request.
 async fn echo(State(state): State<Arc<FakeState>>, method: Method, uri: Uri, body: Bytes) -> Response {
     state.hits.lock().unwrap().push(format!("{method} {uri}"));
@@ -357,7 +463,25 @@ fn assert_connected(message: &EventMessage, last_seq: u64) {
 
 #[tokio::test]
 async fn requests_pass_bodies_and_statuses_through() {
-    let daemon = FakeDaemon::start();
+    check_requests(&FakeDaemon::start()).await;
+}
+
+#[tokio::test]
+async fn requests_work_over_tcp() {
+    let daemon = FakeDaemon::start_tcp();
+    check_requests(&daemon).await;
+    // The Host header names the host, as the CLI's `--host` sends it.
+    let response = daemon.bridge().request("GET", "/v1/host", None).await.unwrap();
+    assert_eq!(response.body, Some(json!(daemon.address())));
+    let response = FakeDaemon::start()
+        .bridge()
+        .request("GET", "/v1/host", None)
+        .await
+        .unwrap();
+    assert_eq!(response.body, Some(json!("cos")));
+}
+
+async fn check_requests(daemon: &FakeDaemon) {
     let bridge = daemon.bridge();
 
     let response = bridge
@@ -413,8 +537,8 @@ async fn no_socket_means_not_running() {
     assert!(error.message.contains("not running"), "{}", error.message);
 
     // A socket left behind with nobody listening is the same.
-    drop(std::os::unix::net::UnixListener::bind(&daemon.socket).unwrap());
-    assert!(daemon.socket.exists());
+    drop(std::os::unix::net::UnixListener::bind(daemon.socket()).unwrap());
+    assert!(daemon.socket().exists());
     let error = daemon
         .bridge()
         .request("GET", "/v1/status", None)
@@ -423,7 +547,126 @@ async fn no_socket_means_not_running() {
     assert_eq!(error.kind, ErrorKind::NotRunning);
 }
 
+#[tokio::test]
+async fn a_host_that_cant_be_reached_is_not_running() {
+    let daemon = FakeDaemon::stopped_tcp();
+    let error = daemon
+        .bridge()
+        .request("GET", "/v1/status", None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::NotRunning);
+    let expected = format!("could not reach {}", daemon.address());
+    assert!(error.message.starts_with(&expected), "{}", error.message);
+}
+
+#[tokio::test]
+async fn a_refusal_is_a_normal_answer() {
+    let daemon = FakeDaemon::start_tcp();
+    let message = "this device (laptop) is waiting for approval. On studio, run `cos devices approve 2`";
+    daemon.refuse(StatusCode::FORBIDDEN, "device_pending", message);
+    let response = daemon
+        .bridge()
+        .request("GET", "/v1/projects", None)
+        .await
+        .unwrap();
+    assert_eq!(response.status, 403);
+    assert_eq!(
+        response.body,
+        Some(json!({"error": message, "code": "device_pending"}))
+    );
+    // The guard runs before routing, so nothing reached the routes.
+    assert!(daemon.state.hits.lock().unwrap().is_empty());
+}
+
 // Events
+
+#[tokio::test]
+async fn follow_works_over_tcp() {
+    let daemon = FakeDaemon::start_tcp();
+    daemon.log("daemon.started");
+    let (_handle, mut messages) = collect(|sink| daemon.bridge().follow_events(None, sink));
+    assert_connected(&next(&mut messages).await, 1);
+    assert_eq!(seq(&next(&mut messages).await), 1);
+    daemon.log("project.added");
+    assert_eq!(seq(&next(&mut messages).await), 2);
+
+    daemon.drop_streams();
+    assert!(matches!(
+        next(&mut messages).await,
+        EventMessage::Disconnected {
+            not_running: false,
+            code: None,
+            ..
+        }
+    ));
+    assert_connected(&next(&mut messages).await, 2);
+    daemon.log("workspace.created");
+    assert_eq!(seq(&next(&mut messages).await), 3);
+    assert_eq!(daemon.afters(), [0, 2]);
+}
+
+#[tokio::test]
+async fn a_refused_follow_says_why_and_waits_before_asking_again() {
+    let daemon = FakeDaemon::start_tcp();
+    daemon.log("daemon.started");
+    let message = "this device (laptop) is waiting for approval. On studio, run `cos devices approve 2`";
+    daemon.refuse(StatusCode::FORBIDDEN, "device_pending", message);
+    let bridge = daemon.bridge().with_backoff(Backoff {
+        initial: Duration::from_millis(10),
+        max: Duration::from_millis(300),
+    });
+    let (_handle, mut messages) = collect(|sink| bridge.follow_events(None, sink));
+    assert_eq!(
+        next(&mut messages).await,
+        EventMessage::Disconnected {
+            reason: message.into(),
+            not_running: false,
+            code: Some("device_pending".into()),
+        }
+    );
+
+    // Doubling from 10 ms would ask about six times in 450 ms; a refusal
+    // waits the longest backoff (300 ms) every time instead.
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    let asked = daemon.guarded();
+    assert!((2..=3).contains(&asked), "asked {asked} times");
+    // The same refusal isn't repeated.
+    assert!(messages.try_recv().is_err());
+
+    // Approved: the next try connects and catches up.
+    daemon.admit();
+    assert_connected(&next(&mut messages).await, 1);
+    assert_eq!(seq(&next(&mut messages).await), 1);
+}
+
+#[tokio::test]
+async fn a_refusal_from_the_stream_itself_carries_its_code() {
+    // Tailscale's whois can fail on one request and not the next.
+    let daemon = FakeDaemon::start_tcp();
+    let (_handle, mut messages) = collect(|sink| daemon.bridge().follow_events(None, sink));
+    assert_connected(&next(&mut messages).await, 0);
+    daemon.refuse(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "tailscale_unavailable",
+        "tailscale whois failed",
+    );
+    daemon.drop_streams();
+    let message = loop {
+        match next(&mut messages).await {
+            EventMessage::Disconnected { code: None, .. } => {}
+            other => break other,
+        }
+    };
+    assert_eq!(
+        message,
+        EventMessage::Disconnected {
+            reason: "tailscale whois failed".into(),
+            not_running: false,
+            code: Some("tailscale_unavailable".into()),
+        }
+    );
+}
 
 #[tokio::test]
 async fn follow_sends_connected_then_events_in_order() {
@@ -655,7 +898,7 @@ async fn a_terminal_reconnect_starts_from_a_fresh_snapshot() {
 async fn a_terminal_waits_for_the_daemon() {
     let mut daemon = FakeDaemon::stopped();
     let (_handle, mut messages) = collect(|sink| daemon.bridge().attach_terminal(7, sink));
-    let TerminalMessage::Disconnected { reason } = next(&mut messages).await else {
+    let TerminalMessage::Disconnected { reason, code: None } = next(&mut messages).await else {
         panic!("expected disconnected");
     };
     assert!(reason.contains("not running"), "{reason}");
@@ -670,9 +913,60 @@ async fn an_unknown_agent_reports_the_daemons_error() {
     assert_eq!(
         next(&mut messages).await,
         TerminalMessage::Disconnected {
-            reason: "no agent 404".into()
+            reason: "no agent 404".into(),
+            code: None,
         }
     );
     handle.close();
     assert_eq!(within("the stream to end", messages.recv()).await, None);
+}
+
+#[tokio::test]
+async fn terminals_work_over_tcp() {
+    let mut daemon = FakeDaemon::stopped_tcp();
+    let (handle, mut messages) = collect(|sink| daemon.bridge().attach_terminal(7, sink));
+    let TerminalMessage::Disconnected { reason, code: None } = next(&mut messages).await else {
+        panic!("expected disconnected");
+    };
+    assert!(reason.contains("could not reach"), "{reason}");
+
+    daemon.run();
+    assert_eq!(next(&mut messages).await, snapshot(1));
+    eventually("the stream to open", || daemon.open_streams() == 1).await;
+    daemon.terminal("output", json!({"data": "aGk="}));
+    assert_eq!(
+        next(&mut messages).await,
+        TerminalMessage::Output { data: "aGk=".into() }
+    );
+    daemon.drop_streams();
+    assert!(matches!(
+        next(&mut messages).await,
+        TerminalMessage::Disconnected { code: None, .. }
+    ));
+    assert_eq!(next(&mut messages).await, snapshot(2));
+    eventually("the stream to reopen", || daemon.open_streams() == 1).await;
+    daemon.terminal("exit", json!({"exit_code": 0}));
+    assert_eq!(
+        next(&mut messages).await,
+        TerminalMessage::Exit { exit_code: Some(0) }
+    );
+    assert_eq!(within("the stream to end", messages.recv()).await, None);
+    assert!(handle.is_finished());
+}
+
+#[tokio::test]
+async fn a_refused_terminal_carries_the_code_until_approved() {
+    let daemon = FakeDaemon::start_tcp();
+    let message = "this device (laptop) was denied. On studio, run `cos devices approve 2` to let it in";
+    daemon.refuse(StatusCode::FORBIDDEN, "device_denied", message);
+    let (_handle, mut messages) = collect(|sink| daemon.bridge().attach_terminal(7, sink));
+    assert_eq!(
+        next(&mut messages).await,
+        TerminalMessage::Disconnected {
+            reason: message.into(),
+            code: Some("device_denied".into()),
+        }
+    );
+    daemon.admit();
+    assert_eq!(next(&mut messages).await, snapshot(1));
 }

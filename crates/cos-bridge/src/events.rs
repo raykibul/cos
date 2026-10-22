@@ -4,7 +4,7 @@ use http_body_util::BodyExt;
 use hyper::Method;
 use serde_json::Value;
 
-use crate::http::error_message;
+use crate::http::{answer_error, error_from};
 use crate::sse::SseReader;
 use crate::stream::{self, Outbox, Retry};
 use crate::{Bridge, BridgeError, EventMessage, Sink, StreamHandle};
@@ -15,7 +15,9 @@ impl Bridge {
     /// daemon's status, then the events after the last one delivered. A drop
     /// sends `disconnected` and retries with backoff. If the daemon's log is
     /// now shorter than what was delivered, it sends `log_reset` and starts
-    /// again from 0.
+    /// again from 0. A refusal (a remote daemon answering with a `code`,
+    /// such as `device_pending`) is a `disconnected` with that code, and
+    /// waits the longest backoff before asking again.
     ///
     /// Must be called inside a Tokio runtime.
     pub fn follow_events(&self, after: Option<u64>, sink: impl Sink<EventMessage>) -> StreamHandle {
@@ -37,9 +39,15 @@ impl Bridge {
                 retry.reset();
                 last_drop = None;
             }
+            let delay = if error.is_refusal() {
+                retry.longest()
+            } else {
+                retry.delay()
+            };
             let message = EventMessage::Disconnected {
                 not_running: error.is_not_running(),
                 reason: error.message,
+                code: error.code,
             };
             if last_drop.as_ref() != Some(&message) {
                 if !outbox.send(message.clone()) {
@@ -47,7 +55,7 @@ impl Bridge {
                 }
                 last_drop = Some(message);
             }
-            tokio::time::sleep(retry.delay()).await;
+            tokio::time::sleep(delay).await;
         }
     }
 
@@ -106,6 +114,7 @@ impl Bridge {
         let response = self.request("GET", "/v1/status", None).await?;
         match response.body {
             Some(status @ Value::Object(_)) if response.status == 200 => Ok(status),
+            body if !(200..300).contains(&response.status) => Err(error_from(response.status, body.as_ref())),
             _ => Err(BridgeError::io(format!(
                 "unexpected answer to /v1/status ({})",
                 response.status
@@ -114,7 +123,7 @@ impl Bridge {
     }
 
     /// Opens a server-sent events stream, turning an error status into an
-    /// error with the daemon's message.
+    /// error with the daemon's message (and code, for a refusal).
     pub(crate) async fn open_stream(&self, path: &str) -> Result<SseReader, BridgeError> {
         let (response, connection) = self.send(Method::GET, path, None).await?;
         let status = response.status();
@@ -125,7 +134,7 @@ impl Bridge {
                 .await
                 .map(|body| body.to_bytes())
                 .unwrap_or_default();
-            return Err(BridgeError::io(error_message(status.as_u16(), &bytes)));
+            return Err(answer_error(status.as_u16(), &bytes));
         }
         Ok(SseReader::new(response.into_body(), connection))
     }

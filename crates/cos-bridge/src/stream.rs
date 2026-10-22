@@ -127,6 +127,13 @@ impl Retry {
     pub(crate) fn reset(&mut self) {
         self.next = self.backoff.initial;
     }
+
+    /// The longest wait, after a refusal: asking again soon won't change the
+    /// answer, and each ask may cost the host a `tailscale whois`.
+    pub(crate) fn longest(&mut self) -> Duration {
+        self.next = self.backoff.max;
+        self.backoff.max
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +147,15 @@ mod tests {
             .map(|_| u64::try_from(retry.delay().as_millis()).unwrap())
             .collect();
         assert_eq!(delays, [500, 1000, 2000, 4000, 5000, 5000]);
+        retry.reset();
+        assert_eq!(retry.delay(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn a_refusal_waits_the_longest() {
+        let mut retry = Retry::new(Backoff::default());
+        assert_eq!(retry.longest(), Duration::from_secs(5));
+        assert_eq!(retry.delay(), Duration::from_secs(5));
         retry.reset();
         assert_eq!(retry.delay(), Duration::from_millis(500));
     }
