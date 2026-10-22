@@ -117,6 +117,38 @@ pub(crate) fn uninstall() -> anyhow::Result<bool> {
     Ok(removed)
 }
 
+/// Restarts the unit, so it runs whatever binary `ExecStart` names now.
+pub(crate) fn restart() -> anyhow::Result<()> {
+    systemctl(&["restart", UNIT])
+}
+
+/// The command [`restart`] runs, for people to run themselves.
+pub(crate) fn restart_command() -> String {
+    format!("systemctl --user restart {UNIT}")
+}
+
+/// The binary an installed unit runs: `ExecStart`'s first word, quoted as
+/// [`exec_quote`] wrote it.
+pub(crate) fn recorded_exe(unit: &str) -> Option<PathBuf> {
+    let line = unit.lines().find_map(|line| line.strip_prefix("ExecStart="))?;
+    let mut chars = line.strip_prefix('"')?.chars();
+    let mut exe = String::new();
+    while let Some(char) = chars.next() {
+        match char {
+            '"' => return Some(PathBuf::from(exe)),
+            '\\' => match chars.next()? {
+                'n' => exe.push('\n'),
+                other => exe.push(other),
+            },
+            // `$$` and `%%` each stand for one.
+            '$' | '%' if chars.next()? == char => exe.push(char),
+            '$' | '%' => return None,
+            other => exe.push(other),
+        }
+    }
+    None
+}
+
 /// Removes the unit file. Returns false if there was none.
 pub(crate) fn remove_unit_file() -> anyhow::Result<bool> {
     let unit = unit_path()?;
@@ -347,6 +379,16 @@ mod tests {
             unit.contains("StandardOutput=append:/tmp/100%% \"cos\"/logs/daemon.log"),
             "{unit}"
         );
+    }
+
+    #[test]
+    fn reads_the_binary_back_from_the_unit() {
+        let home = CosHome::new("/home/me/.cos");
+        for exe in ["/home/me/.local/bin/cos", "/opt/my $cos/100% \"c\\os\""] {
+            let unit = render_unit(Path::new(exe), &home, "/usr/bin", &[]);
+            assert_eq!(recorded_exe(&unit), Some(PathBuf::from(exe)), "{unit}");
+        }
+        assert_eq!(recorded_exe("[Service]\nExecStart=cos daemon\n"), None);
     }
 
     #[test]

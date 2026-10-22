@@ -67,6 +67,51 @@ pub(crate) fn describe() -> String {
     }
 }
 
+/// An installed service, as `cos upgrade` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Installation {
+    /// The plist or unit file.
+    pub file: PathBuf,
+    /// The binary it runs, or `None` if the file doesn't say.
+    pub exe: Option<PathBuf>,
+    /// The command that restarts it, for people to run.
+    pub restart: String,
+}
+
+/// The service installed on this OS, if any.
+pub(crate) fn installation() -> Option<Installation> {
+    let (file, exe): (PathBuf, fn(&str) -> Option<PathBuf>) = if cfg!(target_os = "macos") {
+        (launchd::plist_path().ok()?, launchd::recorded_exe)
+    } else if cfg!(target_os = "linux") {
+        (systemd::unit_path().ok()?, systemd::recorded_exe)
+    } else {
+        return None;
+    };
+    let text = std::fs::read_to_string(&file).ok()?;
+    Some(Installation {
+        exe: exe(&text),
+        file,
+        restart: restart_command(),
+    })
+}
+
+/// Restarts the installed service, so it runs the binary its file names
+/// now: `launchctl kickstart -k` or `systemctl --user restart`.
+pub(crate) fn restart() -> anyhow::Result<()> {
+    match manager()? {
+        Manager::Launchd => launchd::restart(),
+        Manager::Systemd => systemd::restart(),
+    }
+}
+
+fn restart_command() -> String {
+    if cfg!(target_os = "macos") {
+        launchd::restart_command()
+    } else {
+        systemd::restart_command()
+    }
+}
+
 /// Installs the service and starts it, replacing any earlier install.
 pub(crate) fn install(home: &CosHome) -> anyhow::Result<Installed> {
     let manager = manager()?;

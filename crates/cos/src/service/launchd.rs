@@ -65,6 +65,27 @@ pub(crate) fn uninstall() -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Restarts the agent on whatever binary its plist names now:
+/// `launchctl kickstart -k`, which stops the running daemon (SIGTERM, so it
+/// ends its agents first) and starts it again.
+pub(crate) fn restart() -> anyhow::Result<()> {
+    launchctl(&["kickstart", "-k", &format!("{}/{LABEL}", gui_domain()?)])
+}
+
+/// The command [`restart`] runs, for people to run themselves.
+pub(crate) fn restart_command() -> String {
+    let uid = rustix::process::getuid().as_raw();
+    format!("launchctl kickstart -k gui/{uid}/{LABEL}")
+}
+
+/// The binary an installed plist runs: the first `ProgramArguments` string.
+pub(crate) fn recorded_exe(plist: &str) -> Option<PathBuf> {
+    let (_, rest) = plist.split_once("<key>ProgramArguments</key>")?;
+    let (_, rest) = rest.split_once("<string>")?;
+    let (exe, _) = rest.split_once("</string>")?;
+    Some(PathBuf::from(xml_unescape(exe)))
+}
+
 fn render_plist(exe: &Path, home: &CosHome, path_env: &str, extra_env: &[(&str, String)]) -> String {
     let exe = xml_escape(&exe.to_string_lossy());
     let cos_home = xml_escape(&home.root().to_string_lossy());
@@ -120,6 +141,14 @@ fn xml_escape(text: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn xml_unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// launchd's domain for agents in the current user's login session.
@@ -185,6 +214,16 @@ mod tests {
         assert!(plist.contains(
             "<key>CLAUDE_CONFIG_DIR</key>\n        <string>/Users/me/.claude-work</string>\n    </dict>"
         ));
+    }
+
+    #[test]
+    fn reads_the_binary_back_from_the_plist() {
+        let home = CosHome::new("/Users/me/.cos");
+        for exe in ["/Users/me/.local/bin/cos", "/tmp/a&b <c>/\"cos\""] {
+            let plist = render_plist(Path::new(exe), &home, "/usr/bin", &[]);
+            assert_eq!(recorded_exe(&plist), Some(PathBuf::from(exe)));
+        }
+        assert_eq!(recorded_exe("<plist></plist>"), None);
     }
 
     #[test]
