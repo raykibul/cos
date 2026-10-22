@@ -287,7 +287,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cos"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "cos-bridge"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "cos-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cos-policy",
  "jiff",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "cos-harness"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "portable-pty",
  "serde",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "cos-judge"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "reqwest",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "cos-policy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "jiff",
  "serde",
