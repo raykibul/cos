@@ -20,6 +20,7 @@ use tokio::sync::watch;
 use super::{AgentConfig, AgentManager, StartAgent};
 use crate::client::agents::TerminalStream;
 use crate::client::{Client, DaemonError, TerminalMessage};
+use crate::daemon::chief::{Chief, ChiefConfig};
 use crate::daemon::{api, serve, tailnet::Tailnet};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -32,6 +33,16 @@ pub(crate) fn fake_claude() -> PathBuf {
     exe.parent()
         .and_then(Path::parent)
         .map(|dir| dir.join("cos-fake-claude"))
+        .unwrap_or_default()
+}
+
+/// The `cos` binary, built next to this test binary because the crate has
+/// integration tests (`crates/cos/tests`).
+pub(crate) fn cos_binary() -> PathBuf {
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    exe.parent()
+        .and_then(Path::parent)
+        .map(|dir| dir.join("cos"))
         .unwrap_or_default()
 }
 
@@ -86,13 +97,24 @@ impl Fixture {
         let socket = self.dir.path().join("cos.sock");
         let _ = std::fs::remove_file(&socket);
         let (stop, stopping) = watch::channel(false);
+        let runs = Arc::new(Runs::new(self.store.clone(), self.log.clone()));
+        let chief = Chief::start(
+            self.store.clone(),
+            self.log.clone(),
+            runs.clone(),
+            self.manager.clone(),
+            self.dir.path().to_path_buf(),
+            ChiefConfig::for_tests(),
+        )
+        .unwrap();
         let state = api::AppState {
             log: self.log.clone(),
             projects: self.projects.clone(),
             devices: Arc::new(Devices::new(self.store.clone(), self.log.clone())),
             tailnet: Tailnet::load(self.store.clone(), self.log.clone()),
-            runs: Arc::new(Runs::new(self.store.clone(), self.log.clone())),
+            runs,
             agents: self.manager.clone(),
+            chief,
             started_at: Timestamp::now(),
             home: self.dir.path().to_path_buf(),
             stopping: stopping.clone(),
@@ -184,7 +206,7 @@ fn start_manager(
 }
 
 /// Polls `check` until it returns something.
-async fn until<T, F: Future<Output = Option<T>>>(what: &str, mut check: impl FnMut() -> F) -> T {
+pub(crate) async fn until<T, F: Future<Output = Option<T>>>(what: &str, mut check: impl FnMut() -> F) -> T {
     let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         if let Some(found) = check().await {
@@ -198,7 +220,7 @@ async fn until<T, F: Future<Output = Option<T>>>(what: &str, mut check: impl FnM
     }
 }
 
-fn status(error: anyhow::Error) -> u16 {
+pub(crate) fn status(error: anyhow::Error) -> u16 {
     error
         .downcast::<DaemonError>()
         .expect("a DaemonError")
@@ -207,7 +229,7 @@ fn status(error: anyhow::Error) -> u16 {
 }
 
 /// A git repo with one commit and no remote.
-fn git_repo(dir: &Path) -> PathBuf {
+pub(crate) fn git_repo(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     let git = |args: &[&str]| {

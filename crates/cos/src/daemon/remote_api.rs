@@ -101,7 +101,7 @@ fn is_host_only(path: &str) -> bool {
     HOST_ONLY.iter().any(|prefix| {
         path.strip_prefix(prefix)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    })
+    }) || super::chief_api::is_tool_route(path)
 }
 
 impl IntoResponse for Refusal {
@@ -194,6 +194,7 @@ mod tests {
             "/v1/devices/3/approve",
             "/v1/tailnet",
             "/v1/tailnet/",
+            "/v1/agents/3/tools/board_get",
         ] {
             assert!(is_host_only(path), "{path}");
         }

@@ -49,9 +49,18 @@ pub(crate) struct CheckedTask {
 /// Checks a plan. On failure, the message lists every problem, so the chief
 /// can fix them all in one go.
 pub(crate) fn validate(plan: &PlanProposal) -> Result<Vec<CheckedTask>, String> {
+    check(plan).map_err(|problems| problems.join("; "))
+}
+
+/// Every problem with a plan, one sentence each; empty if it's fine.
+pub fn problems(plan: &PlanProposal) -> Vec<String> {
+    check(plan).err().unwrap_or_default()
+}
+
+fn check(plan: &PlanProposal) -> Result<Vec<CheckedTask>, Vec<String>> {
     let mut problems = Vec::new();
     if plan.tasks.is_empty() {
-        return Err("a plan needs at least one task".into());
+        return Err(vec!["a plan needs at least one task".into()]);
     }
     if plan.tasks.len() > MAX_TASKS {
         problems.push(format!(
@@ -128,7 +137,7 @@ pub(crate) fn validate(plan: &PlanProposal) -> Result<Vec<CheckedTask>, String> 
     if problems.is_empty() {
         Ok(tasks)
     } else {
-        Err(problems.join("; "))
+        Err(problems)
     }
 }
 

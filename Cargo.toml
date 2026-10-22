@@ -23,6 +23,8 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 jiff = { version = "0.2", features = ["serde"] }
 portable-pty = "0.9"
+# Pinned to a release that has been out a few weeks; 3.x moves fast.
+rmcp = { version = "=3.4.1", default-features = false, features = ["server", "transport-io"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustix = { version = "1", features = ["process"] }
 serde = { version = "1", features = ["derive"] }

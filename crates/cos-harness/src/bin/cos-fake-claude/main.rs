@@ -14,6 +14,7 @@
 //! `cos-fake-claude hook` is the hook relay, like `cos hook`.
 
 mod interactive;
+mod mcp;
 mod script;
 
 use std::io::{BufRead, Write};

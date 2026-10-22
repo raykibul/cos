@@ -3,6 +3,7 @@
 
 pub(crate) mod agents;
 mod approvals;
+pub(crate) mod chief;
 
 pub(crate) use agents::TerminalMessage;
 
