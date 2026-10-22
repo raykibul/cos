@@ -16,6 +16,7 @@ It runs on macOS and Linux. To run it on a Linux server such as EC2 and drive it
 | `cos events -f` | Keep printing new events. If the daemon restarts, it waits and carries on from the last event it printed. |
 | `cos remote [on [--port N] \| off]` | Turn remote access over Tailscale on or off, or show where it listens. See [Remote access](#remote-access). |
 | `cos devices [list \| approve \| deny \| remove <device>]` | The tailnet devices that may use this daemon. |
+| `cos env [set NAME=value \| unset NAME] [--project P]` | The environment variables agents get, globally or per project. See [Environment](#environment). |
 | `cos --host <ip or name>[:port] …` | Talk to another machine's daemon over its tailnet listener instead of the local socket (also `COS_HOST`). The port defaults to 7700. |
 
 ## Files
@@ -424,11 +425,60 @@ Run agents never show `needs_trust`: the daemon answers their trust dialog itsel
 An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it owns, in a workspace's folder. Apps show its terminal live and type into it; the daemon follows it through hooks, not by reading the screen. The routes, JSON, events and CLI are in [agents-api.md](agents-api.md); this section is how the daemon does it. The code is `crates/cos/src/daemon/agents.rs` (process side) and `cos_core::agents` (the `agents` and `approvals` tables).
 
 - **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder (for a worker or reviewer, its task's worktree; the folder, system prompt and MCP config are recorded so `resume` starts it the same way). The hooks run `cos hook`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
-- **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The one thing read from the screen is Claude's trust dialog (`needs_trust`).
+- **Environment:** each launch and resume gets the global and project variables as they are at that moment, under the ones cos sets itself (see [Environment](#environment)). The agent records their names in `env_names`.
+- **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The only things read from the screen, before the first hook, are Claude's trust dialog (`needs_trust`) and its login screen (`needs_login`).
 - **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Approvals of agents runs start are denied after 5 minutes; yours wait. Before any of that, the approvals policy decides who answers (see "Approvals policy" below).
 - **Restarts:** when the daemon stops, it asks each agent to exit (`/exit`, then kill) and marks it `interrupted`. If it crashed instead, agents still marked running become `interrupted` on the next start. `resume` runs `claude --resume <session id>` as the same agent.
 - **Trust:** agents a run or a Chief of Staff started answer Claude's trust dialog by themselves, since they work in a worktree cos made for a registered project. Agents you start leave it to you (`needs_trust`).
 - **Transcripts:** every hook carries `transcript_path`, which is stored on the agent when it changes (`agents/transcripts.rs`). After `UserPromptSubmit`, `PostToolUse` and `Stop`, the daemon waits 250 ms, and if the file grew since the last time, logs `agent.transcript` with how many messages are final. It does this at most once a second per agent. `GET /v1/agents/{id}/transcript?after=` parses the file each time (`daemon/transcript.rs`): see [agents-api.md](agents-api.md).
+
+## Environment
+
+Agents get the environment variables you set in cos: a global list, and one per project. The usual reason is several Claude accounts on one machine. `CLAUDE_CONFIG_DIR` picks the account, so `cos env set CLAUDE_CONFIG_DIR=~/.claude-personal --project topflexi` makes every agent of topflexi use that one while other projects keep `~/.claude`. API keys, `CLAUDE_CODE_OAUTH_TOKEN` and anything else work the same way. The code is `cos_core::env` (the `env` table, migration 9), `daemon/env_api.rs` and `agent_env` in `daemon/agents.rs`.
+
+- **Who gets them:** every agent launched for the project, whatever its role: yours, its Chief of Staff and the agents that one starts, a run's chief, workers and reviewers.
+- **Order:** the daemon's own environment, then the global list, then the project's, then what cos sets itself. A project's value wins over a global one with the same name, and both win over the daemon's environment (what `cos daemon install` recorded, see [Running as a service](#running-as-a-service)).
+- **When it applies:** the variables are read at every launch, resume and restart. A change reaches agents started or resumed after it. **A running agent keeps the environment it started with**: stop and resume it to pick up a change.
+- **`~`:** a value that is exactly `~` or starts with `~/` gets the daemon user's home (`$HOME`) at launch. Nothing else is expanded: no `$VAR`, no `~user`, no `~` after a `:`. The API returns values as stored, unexpanded.
+- **`PATH`:** allowed. It replaces the daemon's `PATH` for the agent, so Claude and every tool it runs see only yours: include `/usr/bin:/bin` and the rest. cos still finds `claude` itself on the daemon's `PATH`.
+- **Names cos keeps:** refused with 400 and a reason, because cos sets or removes them itself for every agent: `TERM`, `COLORTERM`, `COS_HOOK_SOCKET`, the Claude session markers it removes (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, … see "Inherited environment" in [claude-protocol.md](claude-protocol.md)), and every name starting with `COS_`. The list is `cos_harness::claude::reserved_env_names`. If the database holds one anyway, launches skip it.
+- **Validation:** a name matches `^[A-Za-z_][A-Za-z0-9_]*$` and has at most 128 characters. A value has at most 32 KiB and no NUL byte; empty is fine.
+- **Secrecy:** values are stored as plain text in `cos.db` (the cos home is readable by you only). The API returns them as they are, on the socket and to approved tailnet devices, which are you; the apps mask them. They never go in events, the daemon's log or error messages: `env.changed` and the agent's `env_names` carry names only.
+- **Removing a project** removes its variables. The global list stays.
+
+### `CLAUDE_CONFIG_DIR`
+
+- **Transcripts** come from each hook's `transcript_path`, so they're found in whichever config dir the agent uses.
+- **Trust:** Claude remembers trusted folders per config dir, so the first agent in a new one may ask again. cos answers it for run and Chief of Staff agents as usual; yours show `needs_trust`.
+- **Login:** an agent whose config dir nobody has logged into shows Claude's first-run or login screen in its terminal, before any hook. The daemon spots it, the only screen read besides the trust dialog, and sets the agent to `needs_login`. Open its terminal (the app, or `cos agent attach <id>`) and log in; Claude keeps the login for that config dir, and the agent carries on (`SessionStart` makes it `idle`). Stopping it there kills it. A run's worker on that screen times out like one that never started. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) logs an agent in with no screen at all. A session that loses its login later shows "Not logged in · Please run /login" in its turn; that isn't detected.
+- **`cos sessions`** also looks in the `CLAUDE_CONFIG_DIR` of the global list and of each project when the daemon is running.
+
+### Routes
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /v1/env` | | `{"variables": {"NAME": "value", …}}`: the global list |
+| `PUT /v1/env/{name}` | `{"value": "…"}` | 200 with the global list |
+| `DELETE /v1/env/{name}` | | 200 with the global list, whether or not it was set |
+| `GET /v1/projects/{id}/env` | | `{"variables", "global", "effective"}`: the project's own list, the global list, and their merge (the project's win) that its agents get |
+| `PUT /v1/projects/{id}/env/{name}` | `{"value": "…"}` | 200 with the project's lists |
+| `DELETE /v1/projects/{id}/env/{name}` | | 200 with the project's lists, whether or not it was set |
+
+Served on the socket and the tailnet listener. Errors: 400 for a bad or reserved name, a bad value or a body that isn't `{"value": "<string>"}`; 404 for an unknown project.
+
+### Events
+
+| Kind | Data |
+|---|---|
+| `env.changed` | `{project_id, name, action}`: `project_id` is null for the global list, `action` is `set` or `removed`. Never the value. |
+
+### CLI
+
+| Command | What it does |
+|---|---|
+| `cos env [--project P] [--show]` | Lists the global variables, or a project's above the global ones, marking those it overrides. Values are masked as their first three characters and their length (`sk-…  (108 chars)`; short values show none of themselves) unless `--show`. |
+| `cos env set NAME=value [--project P]` | Sets a variable, globally or for a project (id or name). `cos env set NAME` reads the value from stdin, which keeps it out of your shell history. |
+| `cos env unset NAME [--project P]` | Removes it. |
 
 ## Approvals policy
 

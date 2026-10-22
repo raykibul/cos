@@ -37,6 +37,13 @@ Then log in on the headless box. Pick one:
   mkdir -p ~/.cos && umask 077
   echo 'ANTHROPIC_API_KEY=sk-ant-…' >> ~/.cos/daemon.env
   ```
+- **An OAuth token, with no login screen at all:** run `claude setup-token` wherever you're logged in to the account (your Mac will do) and copy the token it prints. Then give it to cos, globally or for one project, which also lets different projects use different accounts on one box:
+
+  ```sh
+  cos env set CLAUDE_CODE_OAUTH_TOKEN --project your-repo    # paste the token, then Ctrl-D
+  ```
+
+  Reading it from stdin keeps it out of your shell history. See "Environment" in [daemon.md](daemon.md#environment); `CLAUDE_CONFIG_DIR` per project works too, but each config dir needs its own login.
 
 ## 4. Install cos
 

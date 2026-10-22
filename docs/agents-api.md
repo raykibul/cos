@@ -41,7 +41,8 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
   "last_message": "Done. I created hello.txt …",
   "pending_approval_id": null,
   "spawned_by": null,
-  "transcript_path": "/Users/me/.claude/projects/-Users-me-.cos-worktrees-app-1-lisbon/5504b543-….jsonl"
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-.cos-worktrees-app-1-lisbon/5504b543-….jsonl",
+  "env_names": ["CLAUDE_CONFIG_DIR"]
 }
 ```
 
@@ -51,6 +52,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 |---|---|
 | `starting` | spawned; no hook yet |
 | `needs_trust` | Claude is showing its trust dialog (the folder isn't trusted) |
+| `needs_login` | Claude is showing its first-run or login screen: the agent's Claude config dir (`CLAUDE_CONFIG_DIR`) isn't logged in. Someone logs in in its terminal, then it carries on. |
 | `working` | a prompt is running (after `UserPromptSubmit` or `PreToolUse`) |
 | `waiting_approval` | a `PermissionRequest` is open |
 | `idle` | the turn ended (`Stop`), waiting for input |
@@ -63,6 +65,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 - **`run_id`:** the run's id (an integer), or null for agents you start.
 - **`spawned_by`:** the Chief of Staff agent that started it, else null.
 - **`transcript_path`:** Claude's transcript file, from the hooks; null until the first hook.
+- **`env_names`:** the sorted names of the extra environment variables (global and project, see "Environment" in [daemon.md](daemon.md#environment)) it was last launched with, so an app can show "uses CLAUDE_CONFIG_DIR". Never the values. Empty for an agent launched before this existed, or with none.
 - **`task_id`:** the task a worker or reviewer works on, else null.
 - **`cwd`:** only present when the agent runs somewhere other than the workspace folder: a worker or reviewer runs in its task's worktree.
 - **`permission_mode`:** `default`, `acceptEdits`, `plan` or `dontAsk`. `default` is started as `--permission-mode manual`, which is what the CLI now calls it.
@@ -202,13 +205,15 @@ Terminal output is never in the event log; it's too much data.
 | `cos agent attach <id>` | Your terminal becomes the agent's terminal: raw mode, keys in, output out, Ctrl-] to detach. |
 | `cos approvals [--all]` | List pending approvals, or every approval. |
 | `cos allow <id>` / `cos deny <id> [message]` | Answer an approval. |
-| `cos sessions` | Lists the Claude sessions running on this Mac, from Claude's own files. Local only; works without the daemon. |
+| `cos sessions` | Lists the Claude sessions running on this Mac, from Claude's own files. Local only; works without the daemon. With the daemon up it also looks in each `CLAUDE_CONFIG_DIR` set in cos. |
+| `cos env [set \| unset] [--project P]` | The environment variables agents get. See "Environment" in [daemon.md](daemon.md#environment). |
 
 ## How the daemon does it
 
 - **One hook socket:** every agent's hooks go to one listener at `<home>/hooks.sock`, routed by `session_id`. The daemon picks the session id (`--session-id`) and registers it before Claude starts, so even the first hook finds its agent.
-- **The claude binary:** `COS_CLAUDE_BIN`, else `claude` on the daemon's `PATH`. Agents get a clean environment: the daemon's own Claude variables (`CLAUDE_CODE_*`, `CLAUDECODE`) are removed, `CLAUDE_CONFIG_DIR` is kept.
-- **Trust:** the daemon watches the screen for Claude's trust dialog only to set `needs_trust`; everything else comes from hooks.
+- **The claude binary:** `COS_CLAUDE_BIN`, else `claude` on the daemon's `PATH`.
+- **Environment:** the daemon's own, then the global and project variables set in cos (see "Environment" in [daemon.md](daemon.md#environment)), read at every launch and resume, then what cos sets itself (`TERM`, `COLORTERM`, the hook socket). Claude's session markers (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, …) are removed; `CLAUDE_CONFIG_DIR` is kept unless a project sets its own. A running agent keeps the environment it started with.
+- **Trust and login:** until the first hook, the daemon watches the screen for Claude's trust dialog, to set `needs_trust`, and for its first-run or login screen, to set `needs_login`. Everything else comes from hooks.
 - **Pending approvals and decisions:** each `PermissionRequest` is classified by the approvals policy (`cos-policy`, `daemon::agents::approvals`) first; see [approvals.md](approvals.md#daemon-wiring).
 - **Daemon restarts:** agents still running when the daemon starts again (after a crash) become `interrupted` and their pending approvals `settled`. A daemon that stops normally ends its agents first (`/exit`, then kill), and marks them `interrupted` so `resume` brings them back.
 - **Workspaces:** `DELETE /v1/workspaces/{id}` is 409 while an agent runs in it. Removing a workspace forgets its agents and their approvals.

@@ -101,11 +101,13 @@ Every agent cos launches runs Claude's own interactive UI in a pseudo-terminal t
 **Trust dialog:** in a folder nobody has trusted, Claude first asks "Do you trust the files in this folder?". Nothing runs until it's answered, not even hooks.
 - **How Claude decides:** it looks up trust from the folder up to the git root, so a trusted parent folder doesn't cover a separate repo inside it.
 - **Worktrees:** a git worktree of a trusted repo is trusted. That covers cos workspaces of any project you've opened in Claude.
-- **Who answers:** cos answers the dialog only when told to (`cos try --pty --trust`). Otherwise the person at the terminal does. Detecting the dialog (`asks_for_trust`) is the one place cos reads the screen.
+- **Who answers:** cos answers the dialog only when told to (`cos try --pty --trust`). Otherwise the person at the terminal does. Detecting the dialog (`asks_for_trust`) and the login screen (below) are the only places cos reads the screen.
+
+**Login screen:** in a Claude config dir (`CLAUDE_CONFIG_DIR`) nobody has logged into, Claude first shows its first-run screens: "Choose the text style…", then "Select login method:". A session that isn't logged in says "Not logged in · Please run /login". These come before the trust dialog and before any hook. `asks_for_login` looks for those three texts (strings checked in Claude 2.1.308's bundle) so the daemon can set `needs_login`; cos never answers them.
 
 **Terminal queries:** the PTY reader answers cursor-position, status, device-attribute and colour queries, as a terminal would. Without answers some programs pause or guess.
 
-**Inherited environment:** a Claude session sets markers such as `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION` and `CLAUDE_CODE_SESSION_ID` for its children. When cos itself was started from inside Claude, passing them on made the new Claude believe it was a child session and stop saving its transcript. cos removes those markers (`SESSION_MARKERS`) and keeps settings such as `CLAUDE_CONFIG_DIR`.
+**Inherited environment:** a Claude session sets markers such as `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION` and `CLAUDE_CODE_SESSION_ID` for its children. When cos itself was started from inside Claude, passing them on made the new Claude believe it was a child session and stop saving its transcript. cos removes those markers (`SESSION_MARKERS`) and keeps settings such as `CLAUDE_CONFIG_DIR`. The daemon's extra variables (see "Environment" in [daemon.md](daemon.md#environment)) go on before the markers are removed and before cos sets `TERM`, `COLORTERM` and the hook socket, so none of those can be replaced.
 
 **Ending:** typing `/exit` and pressing Return ends the session with exit code 0 (`SessionEnd` reason `prompt_input_exit`). Claude clears the screen when it exits.
 
