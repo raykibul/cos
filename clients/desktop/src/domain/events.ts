@@ -39,7 +39,12 @@ export function changesStaff(kind: string): boolean {
   return kind === "staff.started" || kind === "staff.changed" || kind === "staff.stopped";
 }
 
-/** The project a staff event is about. */
+/** `env.changed {project_id|null, name, action}`: a project's list, or the global one. */
+export function changesEnv(kind: string): boolean {
+  return kind.startsWith("env.");
+}
+
+/** The project a staff or env event is about. */
 export function projectOf(event: LoggedEvent): number | null {
   return optNum(event.data.project_id);
 }

@@ -27,6 +27,7 @@ import {
   decodeTailnetPeers,
 } from "../api/models";
 import { DecodeError } from "../api/decode";
+import { type EnvVars, type ProjectEnv } from "../api/env";
 import { type InboxItem, type Staff, type Transcript, type TranscriptMessage } from "../api/staff";
 import type { Bridge, DaemonInfo, EventMessage, Host, HostList } from "../bridge/types";
 import {
@@ -34,6 +35,7 @@ import {
   changesAgents,
   changesApprovals,
   changesDevices,
+  changesEnv,
   changesProjects,
   changesQuestions,
   changesRuns,
@@ -125,6 +127,19 @@ export interface DaemonState {
   transcripts: Record<number, TranscriptState>;
   /** What you sent each project's chief that its transcript doesn't show yet. */
   pending: Record<number, PendingMessage[]>;
+  /** The environment variables every project's agents get; null until loaded. */
+  globalEnv: EnvVars | null;
+  /** Each project's own variables, with the global ones and the merge, by project id. */
+  projectEnvs: Record<number, ProjectEnv>;
+  /** False when the daemon answers 404 for the env routes. */
+  envSupported: boolean;
+  /** Why a list couldn't be loaded, by `envKey`. */
+  envErrors: Record<string, string>;
+}
+
+/** `global`, or `project:<id>`: where an environment list's error is kept. */
+export function envKey(projectId: number | null): string {
+  return projectId === null ? "global" : `project:${projectId}`;
 }
 
 export interface TranscriptState {
@@ -175,6 +190,10 @@ export function initialState(): DaemonState {
     inboxes: {},
     transcripts: {},
     pending: {},
+    globalEnv: null,
+    projectEnvs: {},
+    envSupported: true,
+    envErrors: {},
   };
 }
 
@@ -204,6 +223,13 @@ export interface StoreOptions {
 
 function message(error: unknown): string {
   return CosError.from(error).message;
+}
+
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const next = { ...record };
+  delete next[key];
+  return next;
 }
 
 /** Whether the host is this Mac (a missing host, from an older shell, is too). */
@@ -237,6 +263,10 @@ export class CosStore {
   private allApprovalsRefresh!: CoalescedRefresh<Approval[]>;
   private devicesRefresh!: CoalescedRefresh<Device[]>;
   private tailnetRefresh!: CoalescedRefresh<TailnetStatus>;
+  private globalEnvRefresh!: CoalescedRefresh<EnvVars>;
+  private readonly projectEnvRefreshes = new Map<number, CoalescedRefresh<ProjectEnv>>();
+  /** Set on each (re)connect: the next project list refetches every project's environment. */
+  private envStale = true;
   private readonly staffRefreshes = new Map<number, CoalescedRefresh<Staff>>();
   /** Set on each (re)connect: the next project list refetches every chief. */
   private staffStale = true;
@@ -268,6 +298,7 @@ export class CosStore {
       this.allApprovalsRefresh,
       this.devicesRefresh,
       this.tailnetRefresh,
+      this.globalEnvRefresh,
     ]) {
       refresh.dispose();
     }
@@ -297,6 +328,19 @@ export class CosStore {
         } else {
           this.set({ remoteAccessError: message(result.error) });
         }
+      },
+    );
+
+    this.globalEnvRefresh = new CoalescedRefresh(
+      () => client.env(),
+      (result) => {
+        if (result.ok) {
+          this.set((s) => ({
+            globalEnv: result.value,
+            envSupported: true,
+            envErrors: withoutKey(s.envErrors, envKey(null)),
+          }));
+        } else this.envFailed(null, result.error);
       },
     );
 
@@ -463,7 +507,9 @@ export class CosStore {
         }
         this.set({ status, connection: "running", connectionReason: null, refusal: null });
         this.staffStale = true;
+        this.envStale = true;
         this.refreshProjects();
+        this.globalEnvRefresh.request();
         this.refreshAgents();
         this.refreshRuns();
         // What changed while away: the conversations and inboxes on screen.
@@ -520,6 +566,12 @@ export class CosStore {
       const project = projectOf(event);
       if (project !== null) this.refreshStaff(project);
       else for (const p of this.get().projects) this.refreshStaff(p.id);
+    }
+    if (changesEnv(kind)) {
+      // A global change moves every project's merge too.
+      const project = projectOf(event);
+      if (project !== null) this.refreshEnv(project);
+      else this.refreshEnv(null);
     }
     if (kind === "staff.inbox") {
       const project = projectOf(event);
@@ -704,16 +756,20 @@ export class CosStore {
   private followProjects(projects: Project[]): void {
     const all = this.staffStale;
     this.staffStale = false;
+    const allEnv = this.envStale;
+    this.envStale = false;
     const ids = new Set(projects.map((p) => p.id));
-    const staffs = this.get().staffs;
+    const { staffs, projectEnvs } = this.get();
     for (const project of projects) {
       if (all || staffs[project.id] === undefined) this.refreshStaff(project.id);
+      if (allEnv || projectEnvs[project.id] === undefined) this.refreshProjectEnv(project.id);
     }
-    if (Object.keys(staffs).some((id) => !ids.has(Number(id)))) {
-      this.set((s) => ({
-        staffs: Object.fromEntries(Object.entries(s.staffs).filter(([id]) => ids.has(Number(id)))),
-      }));
-    }
+    const gone = (record: Record<number, unknown>) =>
+      Object.keys(record).some((id) => !ids.has(Number(id)));
+    const keep = <T>(record: Record<number, T>): Record<number, T> =>
+      Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(Number(id))));
+    if (gone(staffs)) this.set((s) => ({ staffs: keep(s.staffs) }));
+    if (gone(projectEnvs)) this.set((s) => ({ projectEnvs: keep(s.projectEnvs) }));
   }
 
   refreshStaff(projectId: number): void {
@@ -966,6 +1022,102 @@ export class CosStore {
       const unsubscribe = this.state.subscribe((state) => {
         if (test(state)) done();
       });
+    });
+  }
+
+  // MARK: Environment variables
+
+  /**
+   * Refetches a project's environment, or, for `null`, the global list and
+   * every project's (each merge includes it).
+   */
+  refreshEnv(projectId: number | null): void {
+    if (projectId !== null) {
+      this.refreshProjectEnv(projectId);
+      return;
+    }
+    this.globalEnvRefresh.request();
+    for (const project of this.get().projects) this.refreshProjectEnv(project.id);
+  }
+
+  private refreshProjectEnv(projectId: number): void {
+    let refresh = this.projectEnvRefreshes.get(projectId);
+    if (!refresh) {
+      refresh = new CoalescedRefresh(
+        () => this.client.projectEnv(projectId),
+        (result) => {
+          if (result.ok) {
+            this.set((s) => ({
+              projectEnvs: { ...s.projectEnvs, [projectId]: result.value },
+              envSupported: true,
+              envErrors: withoutKey(s.envErrors, envKey(projectId)),
+            }));
+          } else if (
+            isNotFound(result.error) &&
+            !this.get().projects.some((p) => p.id === projectId)
+          ) {
+            return;
+          } else this.envFailed(projectId, result.error);
+        },
+      );
+      this.projectEnvRefreshes.set(projectId, refresh);
+    }
+    refresh.request();
+  }
+
+  private envFailed(projectId: number | null, error: unknown): void {
+    if (isNotFound(error)) this.set({ envSupported: false });
+    else this.set((s) => ({ envErrors: { ...s.envErrors, [envKey(projectId)]: message(error) } }));
+  }
+
+  /**
+   * Sets a variable for every project (`projectId` null) or one. It applies
+   * to agents launched or resumed after; running ones keep their values.
+   * A refused name throws the daemon's reason.
+   */
+  async setEnv(projectId: number | null, name: string, value: string): Promise<void> {
+    await this.client.setEnv(projectId, name, value);
+    this.applyEnv(projectId, name, value);
+    this.refreshEnv(projectId);
+  }
+
+  async removeEnv(projectId: number | null, name: string): Promise<void> {
+    await this.client.removeEnv(projectId, name);
+    this.applyEnv(projectId, name, null);
+    this.refreshEnv(projectId);
+  }
+
+  /** Shows a change at once, before the refetch confirms it. */
+  private applyEnv(projectId: number | null, name: string, value: string | null): void {
+    const put = (vars: EnvVars): EnvVars => {
+      const next = { ...vars };
+      if (value === null) delete next[name];
+      else next[name] = value;
+      return next;
+    };
+    this.set((s) => {
+      if (projectId === null) {
+        const global = put(s.globalEnv ?? {});
+        const projectEnvs = Object.fromEntries(
+          Object.entries(s.projectEnvs).map(([id, env]) => [
+            id,
+            { ...env, global, effective: { ...global, ...env.variables } },
+          ]),
+        );
+        return { globalEnv: global, projectEnvs };
+      }
+      const current = s.projectEnvs[projectId] ?? {
+        variables: {},
+        global: s.globalEnv ?? {},
+        effective: {},
+      };
+      const variables = put(current.variables);
+      return {
+        projectEnvs: {
+          ...s.projectEnvs,
+          [projectId]: { ...current, variables, effective: { ...current.global, ...variables } },
+        },
+      };
     });
   }
 
@@ -1225,6 +1377,9 @@ export class CosStore {
     for (const refresh of this.staffRefreshes.values()) refresh.dispose();
     this.staffRefreshes.clear();
     this.staffStale = true;
+    for (const refresh of this.projectEnvRefreshes.values()) refresh.dispose();
+    this.projectEnvRefreshes.clear();
+    this.envStale = true;
     for (const watch of this.transcriptWatches.values()) watch.refresh.dispose();
     this.transcriptWatches.clear();
     for (const watch of this.inboxWatches.values()) watch.refresh.dispose();

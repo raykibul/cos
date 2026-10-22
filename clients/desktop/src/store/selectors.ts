@@ -11,6 +11,7 @@ import type {
   Run,
   Workspace,
 } from "../api/models";
+import { CLAUDE_CONFIG_DIR, accountOf, sortedNames } from "../api/env";
 import type { Staff } from "../api/staff";
 import type { Page } from "../app/ui";
 import { isForYou } from "../domain/approvals";
@@ -253,7 +254,8 @@ export function workspaceOfPage(s: DaemonState, page: Page): number | null {
 
 /** The project a page belongs to, for unfolding it in the sidebar. */
 export function projectOfPage(s: DaemonState, page: Page): number | null {
-  if (page.kind === "chief" || page.kind === "project") return page.id;
+  if (page.kind === "chief" || page.kind === "project" || page.kind === "projectEnv")
+    return page.id;
   const ws = workspace(s, workspaceOfPage(s, page));
   if (ws) return ws.projectId;
   if (page.kind === "agent") {
@@ -262,6 +264,29 @@ export function projectOfPage(s: DaemonState, page: Page): number | null {
     }
   }
   return null;
+}
+
+// MARK: Environment variables
+
+/** A project's own variable names, CLAUDE_CONFIG_DIR first. */
+export function projectEnvNames(s: DaemonState, projectId: number): string[] {
+  return sortedNames(Object.keys(s.projectEnvs[projectId]?.variables ?? {}));
+}
+
+/** The Claude account a project's agents use, from CLAUDE_CONFIG_DIR, its own or inherited. */
+export interface ClaudeAccount {
+  /** The value's last path segment: `.claude-personal`. */
+  account: string;
+  value: string;
+  inherited: boolean;
+}
+
+export function claudeAccount(s: DaemonState, projectId: number): ClaudeAccount | null {
+  const env = s.projectEnvs[projectId];
+  const value = env?.effective[CLAUDE_CONFIG_DIR];
+  const account = accountOf(value);
+  if (!env || value === undefined || !account) return null;
+  return { account, value, inherited: !(CLAUDE_CONFIG_DIR in env.variables) };
 }
 
 /** The current run and the latest two finished ones, plus the selected one. */
