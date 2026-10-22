@@ -17,7 +17,7 @@ export type Page =
   | { kind: "run"; id: number }
   /** A project's environment variables for its agents; `id` is the project's. */
   | { kind: "projectEnv"; id: number }
-  /** Settings: your Macs, environment variables for all projects, and remote access to this one. */
+  /** Settings: your machines, environment variables for all projects, and remote access to this one. */
   | { kind: "settings" };
 
 export type DialogState =
@@ -44,6 +44,7 @@ export type DialogState =
       mode?: "add" | "edit" | "override";
     }
   | { kind: "addHost" }
+  | { kind: "renameHost"; hostId: string }
   | { kind: "removeHost"; hostId: string };
 
 export interface Toast {

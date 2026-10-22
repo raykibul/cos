@@ -51,6 +51,10 @@ export class TauriBridge implements Bridge {
     return invoke<HostList>("host_remove", { id });
   }
 
+  hostRename(id: string, name: string): Promise<HostList> {
+    return invoke<HostList>("host_rename", { id, name });
+  }
+
   hostSelect(id: string): Promise<HostList> {
     return invoke<HostList>("host_select", { id });
   }

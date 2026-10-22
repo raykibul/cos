@@ -269,7 +269,7 @@ public final class DaemonMonitor {
     /// An agent waiting on its run's chief isn't waiting on you.
     public var agentsWaitingOnYou: [Agent] {
         agents.filter { agent in
-            if agent.state == .needsTrust { return true }
+            if agent.state == .needsTrust || agent.state == .needsLogin { return true }
             if let approval = pendingApproval(forAgent: agent.id) { return approval.isForYou }
             return agent.state == .waitingApproval
         }
@@ -283,7 +283,7 @@ public final class DaemonMonitor {
     /// Everything blocked on you: approvals routed to you, agents stuck on
     /// the trust dialog, chiefs' open questions, and plans to approve.
     public var waitingCount: Int {
-        approvalsForYou.count + agents.filter { $0.state == .needsTrust }.count + questions.count + plansAwaitingApproval.count
+        approvalsForYou.count + agents.filter { $0.state == .needsTrust || $0.state == .needsLogin }.count + questions.count + plansAwaitingApproval.count
     }
 
     @discardableResult

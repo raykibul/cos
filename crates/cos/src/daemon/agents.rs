@@ -269,6 +269,8 @@ struct Inner {
     signals: broadcast::Sender<AgentSignal>,
     /// Permission requests routed to you.
     asked: broadcast::Sender<PermissionAsked>,
+    /// Transcripts parsed so far, by file.
+    parsed: transcript::Cache,
     /// Kept for its socket; dropping it stops the hooks.
     _hook_server: HookServer,
 }
@@ -338,6 +340,7 @@ impl AgentManager {
             live: Mutex::default(),
             signals: broadcast::channel(SIGNAL_BUFFER).0,
             asked: broadcast::channel(SIGNAL_BUFFER).0,
+            parsed: transcript::Cache::default(),
             _hook_server: hook_server,
         });
         tokio::spawn(follow_hooks(Arc::downgrade(&inner), hook_events));
@@ -592,14 +595,16 @@ impl AgentManager {
         })
     }
 
-    /// The agent's transcript as chat messages, those after `after` (see
-    /// [`transcript`]). Empty while Claude hasn't said where it is.
+    /// The agent's transcript as chat messages, those after `after`, and how
+    /// full its context is (see [`transcript`]). Empty while Claude hasn't
+    /// said where it is.
     pub(crate) async fn transcript(&self, id: i64, after: usize) -> Result<Transcript, AgentError> {
         let agent = self.inner.agent(id)?;
         let Some(path) = agent.transcript_path else {
             return Ok(Transcript::default());
         };
-        let read = tokio::task::spawn_blocking(move || transcript::read(&path))
+        let inner = self.inner.clone();
+        let read = tokio::task::spawn_blocking(move || inner.parsed.read(&path, agent.model.as_deref()))
             .await
             .map_err(|error| AgentError::Failed(error.to_string()))?;
         let transcript = read.map_err(|error| {

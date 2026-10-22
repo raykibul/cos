@@ -1,0 +1,97 @@
+# iPhone app
+
+The iPhone app is SwiftUI in `clients/iphone`, built on `clients/shared/CosKit`. It reaches a cos daemon on a Mac or a server over Tailscale, the same way `cos --host` and the desktop app's hosts do. How to build it and put it on your phone is in [its README](../clients/iphone/README.md).
+
+Version 1 has **no push notifications**: it is current while it is open, and catches up when it comes back to the foreground. The plan for push is at the end, along with what the daemon needs for it.
+
+## Hosts
+
+- **Adding:** by Tailscale name (`my-mac`, `my-mac.tail1234.ts.net`) or address (`100.101.102.103`, `[fd7a:…]`), with an optional `:port` (default 7700). The address is read as the CLI's `--host` reads it (`CosEndpoint.parse`, mirroring `cos-bridge`'s `parse_address`), so a URL, a path or a space is refused with the same message.
+- **Saved:** names and addresses in `UserDefaults`, plus which one is current. Nothing secret: Tailscale identifies the phone, and the host approves it.
+- **Hosts tab:** switch by tapping, rename or remove by swiping, reorder with Edit. It shows the current host's address, status, cos version and event count, and the setup steps.
+- **Switching** stops the old host's session and starts a new one, so nothing from the previous host stays on screen. A host is followed only while the app is in the foreground (`scenePhase`).
+
+## Connection states
+
+Each state fills the screen in place of the tab's content. Once the lists have loaded, a lost connection shows a banner over what was loaded instead.
+
+| State | Shown as |
+|---|---|
+| `403 device_pending` | "Approve this iPhone on <host>", the command from the daemon's message (`cos devices approve <n>`) with Copy, the daemon's own words, and "Checking again every few seconds…". The event follower retries with backoff (0.5 s doubling to 5 s), so approving it on the host lets the app in by itself. |
+| `403 device_denied` | "<host> denied this iPhone", with the daemon's message on how to start over. |
+| `403 wrong_user`, `unknown_peer`, `tagged_device`, `host_only` | What the code means and what to do, with the daemon's message. |
+| `503 tailscale_unavailable` | Tailscale isn't usable on the host; retried. |
+| Can't reach | The name doesn't resolve, the port is closed, or there's no route: the error's detail, and three checks (Tailscale on both devices, `cos status`, `cos remote status`). Retried. |
+
+Any other error code is shown with its daemon message: `RefusalCode` is an open type.
+
+## Screens
+
+Four tabs. The host chip at the top left switches hosts from any of them.
+
+- **Waiting on you** (the home tab, with a badge): approvals routed to you (`route` isn't `chief`) with the command, the policy's reason, Deny and Allow; questions from run chiefs with their choices and a free answer; plans to approve; agents at Claude's trust dialog (Trust folder); agents on Claude's login screen (`needs_login`, with `cos agent attach <id>` to log in on the host). Each card opens its agent or run.
+- **Projects:** each project with its Chief of Staff (★, its state, how many of the agents it started are working, and how many wait on you) and its workspaces by title or city, with their branch, agents and run state.
+  - **Chief of Staff:** a chat read from its transcript (`GET /v1/agents/{id}/transcript?after=N`). Your messages are bubbles, its replies are markdown, tool calls are one-line rows (the `cos` tools in words: "Started an agent"), and a `[cos · N updates]` wakeup is an "N updates from agents" row that expands. The composer posts to `/staff/message`, which starts the chief if needed; a sent message shows as pending until the transcript has it, and a failed one offers Retry and Discard. Agents it started that wait on you sit above the composer with Allow and Deny. It reads again on each `agent.transcript` event for its agent. An unstarted chief shows three suggestions.
+  - **Workspace:** the branch and base, its agents (state, role, last message) and its runs, and New run.
+- **Runs:** active and finished runs with progress and blocked counts, and New run (goal and workspace).
+  - **Run:** state, goal, place and preset; Approve plan when a plan waits; the chief's questions; the board (or the plan), each task with its state, dependencies, failure, and on tap its instructions, files, tests and review; the report as markdown; Cancel run, with a confirmation.
+- **Agents** (from any list): state, title, project and workspace, model, "Started by the Chief of Staff"; the approval it waits on (Allow, Deny), the trust dialog or the login hint; the last message as markdown; Screen, a plain-text snapshot of its terminal (`GET /v1/agents/{id}/screen`) loaded on request; Stop; and a message box that types into the agent, resuming it first when it has exited.
+
+There's no live terminal and no environment editing on the phone. Markdown is rendered by blocks (headings, paragraphs, lists, quotes, code, rules) with inline styles from `AttributedString`.
+
+The look follows the desktop app: warm neutral pages, Claude orange (#d97757) only for actions and what waits on you, amber ★ for chiefs, SF Symbols, light and dark.
+
+## Contract
+
+The app uses CosKit's `CosService` protocol, which `CosClient` implements over HTTP/1.1, on a Unix socket or TCP. `FakeCos` implements it in memory for `-fakeData` and the tests.
+
+| Route | Used for |
+|---|---|
+| `GET /v1/status`, `GET /v1/events` (SSE, `Last-Event-ID`) | Connecting, and following. Resumes after the last `seq`; `log_reset` reloads. |
+| `GET /v1/projects` | Projects and workspaces. |
+| `GET /v1/agents`, `GET /v1/agents/{id}`, `POST …/input`, `…/trust`, `…/stop`, `…/resume`, `GET …/screen` | Agents. |
+| `GET /v1/agents/{id}/transcript?after=N` | The Chief of Staff chat. |
+| `GET /v1/approvals?state=pending`, `POST /v1/approvals/{id}` | Approvals. |
+| `GET /v1/runs`, `POST /v1/runs`, `GET /v1/runs/{id}`, `POST …/approve-plan`, `POST …/cancel`, `GET …/report` | Runs. |
+| `GET /v1/questions?state=open`, `POST /v1/questions/{id}/answer` | Questions. |
+| `GET /v1/projects/{id}/staff`, `POST …/staff/start`, `POST …/staff/message`, `GET …/staff/inbox` | The Chief of Staff. |
+
+Each event refreshes only what it touches, and refreshes of one kind fold together while one is under way:
+
+| Events | Reloads |
+|---|---|
+| `project.*`, `workspace.*` | projects, chiefs |
+| `agent.*`, `approval.*` | agents, approvals |
+| `run.*`, `plan.*`, `task.*` | runs, and the run on screen |
+| `question.*`, `run.state_changed` | questions |
+| `staff.*`, agent state changes | chiefs |
+| `agent.transcript` | the chat of that agent, if open |
+
+Decoding is lenient: unknown fields are ignored, a bad row in a list is dropped rather than failing the list, numbers sent as strings are read, and titles may be `null` (workspaces then show their city).
+
+## Push, later
+
+Everything that would raise a notification already goes through one seam, `Notifications` (`clients/iphone/Cos/Model/Notifications.swift`): `start()`, `notify(_:)` and `setBadge(_:)`. Version 1 uses `NoNotifications`. `HostSession` calls it when something new waits on you, never for what already waited at launch, and sets the badge to the waiting count.
+
+**Note:** push needs a paid Apple Developer account. A free Personal Team can't sign the Push Notifications capability.
+
+### On the phone
+
+1. Add the Push Notifications capability and the `aps-environment` entitlement (development for Xcode builds, production for TestFlight).
+2. An `APNsNotifications` in place of `NoNotifications`: `start()` asks for permission and calls `registerForRemoteNotifications()`; the app delegate gets the device token and sends it to every saved host (`PUT /v1/push/token`) whenever it changes or a host is added.
+3. Categories with actions: Allow and Deny on approvals, a text reply on questions. Actions post to the same routes the cards use, through Tailscale's VPN on demand.
+4. A notification's `thread-id` is the host, and tapping one opens its card (`Navigator.open`).
+
+### On the daemon (changes wanted)
+
+- **Device token route:** `PUT /v1/push/token` with `{"token": "<hex>", "environment": "development" | "production", "bundle_id": "…"}`, tailnet only, saved against the approved device that sent it; `DELETE` to stop. Removing or denying a device drops its token. APNs answering `410 Unregistered` drops it too.
+- **APNs key:** a `.p8` auth key with its Key ID and Team ID, set on the host (for example `cos push setup --key AuthKey_ABC123.p8 --key-id ABC123 --team-id XYZ987`), kept in `~/.cos` with mode 0600 and never sent over the API. The daemon signs an ES256 JWT, refreshes it within the hour, and posts over HTTP/2 to `api.push.apple.com` or `api.sandbox.push.apple.com` by the token's environment.
+- **What notifies:**
+  - `approval.requested` routed to you (not to a run's chief), and `approval.routed` that comes back to you;
+  - `question.asked`;
+  - `plan.proposed`, as the run waits for approval;
+  - `agent.state_changed` to `needs_trust` or `needs_login`;
+  - `run.state_changed` to `done`, `failed` or `cancelled`, and tasks reaching `blocked`;
+  - optionally, the Chief of Staff ending a turn that answered your message (`staff.changed` to idle after `staff/message`).
+- **Payload:** `alert` (title and body as the cards word them), `badge` (the count of what waits on you), `thread-id` (the host), `category` (approval, question, plan, trust, login, run), and the ids (`approval_id`, `run_id`, …) as custom keys. `apns-collapse-id` per item, so a decided approval can be replaced or withdrawn.
+- **Not for every event:** at most one push per item, and none while the phone is following the event stream (the daemon knows which devices have a stream open).

@@ -45,9 +45,11 @@ final class FakeDaemon: Sendable {
 
     init(handler: @escaping @Sendable (Request) -> Reply) throws {
         // Short path: Unix socket paths are limited to 104 bytes.
-        socketPath = NSTemporaryDirectory() + "cosfake-\(UUID().uuidString.prefix(8)).sock"
+        let socketPath = NSTemporaryDirectory() + "cosfake-\(UUID().uuidString.prefix(8)).sock"
+        self.socketPath = socketPath
         self.handler = handler
-        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        self.listener = listener
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         withUnsafeMutableBytes(of: &address.sun_path) { buffer in
@@ -59,8 +61,38 @@ final class FakeDaemon: Sendable {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard bound == 0, listen(listener, 16) == 0 else { throw POSIXError(.EADDRINUSE) }
+        endpoint = .unix(socketPath)
         Thread { [self] in acceptLoop() }.start()
     }
+
+    /// The same, over TCP on 127.0.0.1 and a free port, like a daemon's
+    /// tailnet listener.
+    init(tcp: Void, handler: @escaping @Sendable (Request) -> Reply) throws {
+        self.handler = handler
+        let listener = socket(AF_INET, SOCK_STREAM, 0)
+        self.listener = listener
+        var on: Int32 = 1
+        setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, listen(listener, 16) == 0 else { throw POSIXError(.EADDRINUSE) }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { _ = getsockname(listener, $0, &length) }
+        }
+        let port = Int(UInt16(bigEndian: address.sin_port))
+        socketPath = "127.0.0.1:\(port)"
+        endpoint = .tcp(host: "127.0.0.1", port: port)
+        Thread { [self] in acceptLoop() }.start()
+    }
+
+    /// Where a client finds it.
+    let endpoint: CosEndpoint
 
     func stop() {
         // Under the lock, so a connection can't close (and its number be
@@ -71,7 +103,7 @@ final class FakeDaemon: Sendable {
         }
         shutdown(listener, SHUT_RDWR)
         close(listener)
-        unlink(socketPath)
+        if case .unix = endpoint { unlink(socketPath) }
     }
 
     private func acceptLoop() {

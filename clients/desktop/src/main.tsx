@@ -19,9 +19,11 @@ import { CosStore } from "./store/store";
 //   ?dialog=newRun:3 open a sheet over it (envVar:1 adds a variable to project 1, envVar:all to all
 //                    projects; envVar:1:NAME edits one)
 //   ?terminal        open the chief's terminal split
-//   ?host=h1         start on another Mac (h1 Studio waits for approval, h2 can't be reached)
+//   ?host=h1         start on another machine (h1 Studio waits for approval, h2 can't be reached)
 //   ?firewall        this Mac's tailnet listener is blocked by the macOS firewall
 //   ?tailscale=off   Tailscale is off on this Mac, so its tailnet's devices can't be listed
+//   ?paused          cos's Chief of Staff starts with coordination paused, 3 updates waiting
+//   ?context=92      how full cos's chief's context is, in percent (42 by default)
 //   ?theme=dark      force a colour scheme
 const params = new URLSearchParams(window.location.search);
 
@@ -52,6 +54,7 @@ function parseDialog(value: string | null): DialogState | null {
     case "addProject":
     case "addHost":
       return { kind };
+    case "renameHost":
     case "removeHost":
       return id ? { kind, hostId: id } : null;
     case "newWorkspace":
@@ -91,6 +94,8 @@ async function main() {
     host: params.get("host") ?? undefined,
     firewall: params.has("firewall"),
     tailscaleOff: params.get("tailscale") === "off",
+    staffPaused: params.has("paused"),
+    chiefContext: params.has("context") ? Number(params.get("context")) : undefined,
   });
   const cos = new CosStore(bridge);
   const ui = createUiStore({

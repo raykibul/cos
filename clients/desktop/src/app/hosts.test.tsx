@@ -22,15 +22,15 @@ const main = () => within(screen.getByRole("main"));
 const sidebar = () => within(screen.getByRole("complementary", { name: "Sidebar" }));
 
 async function pickHost(user: ReturnType<typeof userEvent.setup>, name: string | RegExp) {
-  await user.click(sidebar().getByRole("button", { name: /^Mac:/ }));
+  await user.click(sidebar().getByRole("button", { name: /^Machine:/ }));
   await user.click(screen.getByRole("menuitem", { name }));
   await act(() => settle());
 }
 
 describe("host picker", () => {
-  it("shows This Mac, the saved Macs and Add a Mac…", async () => {
+  it("shows This Mac, the saved machines, Rename and Add a machine…", async () => {
     const { user } = await renderApp();
-    const picker = sidebar().getByRole("button", { name: "Mac: This Mac" });
+    const picker = sidebar().getByRole("button", { name: "Machine: This Mac" });
     expect(picker).toHaveTextContent("T");
     await user.click(picker);
     // A Mac on the tailnet running cos joins once This Mac's daemon answers.
@@ -41,7 +41,8 @@ describe("host picker", () => {
       expect.stringMatching(/^Studio.*studio:7700/),
       expect.stringMatching(/^Travel laptop.*100\.101\.102\.105:7700/),
       expect.stringMatching(/^mac-mini/),
-      "Add a Mac…",
+      "Rename This Mac…",
+      "Add a machine…",
       expect.stringMatching(/^Settings/),
     ]);
   });
@@ -55,10 +56,53 @@ describe("host picker", () => {
     expect(bridge.current).toBe("h1");
     expect(bridge.daemons.get("h1")!.followers.size).toBe(1);
     expect(bridge.daemon.followers.size).toBe(0);
-    expect(sidebar().getByRole("button", { name: "Mac: Studio" })).toBeInTheDocument();
+    expect(sidebar().getByRole("button", { name: "Machine: Studio" })).toBeInTheDocument();
     // The footer names the host; no device count from This Mac.
     expect(sidebar().getByText(/^cos v0\.1\.0/).parentElement).toHaveTextContent("Studio");
     expect(screen.queryByText("Devices asking to reach this Mac")).not.toBeInTheDocument();
+  });
+});
+
+describe("renaming a machine", () => {
+  it("renames the host in use from the picker; Return saves", async () => {
+    const { user, bridge } = await renderApp();
+    await user.click(sidebar().getByRole("button", { name: "Machine: This Mac" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename This Mac…" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const input = dialog.getByLabelText("Name");
+    expect(input).toHaveFocus();
+    await user.clear(input);
+    await user.type(input, "  MacBook Pro {Enter}");
+    await act(() => settle());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(sidebar().getByRole("button", { name: "Machine: MacBook Pro" })).toBeInTheDocument();
+    expect(bridge.hosts[0]).toMatchObject({ id: "local", name: "MacBook Pro" });
+  });
+
+  it("shows why a name is refused and keeps the sheet open", async () => {
+    const { user, cos } = await renderApp({ kind: "settings" });
+    await user.click(main().getByRole("button", { name: "Rename Travel laptop" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await user.clear(dialog.getByLabelText("Name"));
+    await user.type(dialog.getByLabelText("Name"), "studio{Enter}");
+    await act(() => settle());
+    expect(dialog.getByText('"studio" is already the name of another machine')).toBeInTheDocument();
+    expect(cos.get().hosts.map((h) => h.name)).toEqual(["This Mac", "Studio", "Travel laptop"]);
+    // Too long is caught before asking.
+    await user.clear(dialog.getByLabelText("Name"));
+    await user.type(dialog.getByLabelText("Name"), "x".repeat(61));
+    expect(dialog.getByText("At most 60 characters.")).toBeInTheDocument();
+    expect(dialog.getByRole("button", { name: "Rename" })).toBeDisabled();
+  });
+
+  it("Escape cancels without renaming", async () => {
+    const { user, cos } = await renderApp({ kind: "settings" });
+    await user.click(main().getByRole("button", { name: "Rename Studio" }));
+    const input = within(screen.getByRole("dialog")).getByLabelText("Name");
+    await user.type(input, " 2");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(cos.get().hosts.map((h) => h.name)).toContain("Studio");
   });
 });
 
@@ -122,8 +166,8 @@ describe("refusal screens", () => {
 describe("add a Mac", () => {
   it("saves the host, connects to it and shows its approval page", async () => {
     const { user, bridge } = await renderApp();
-    await user.click(sidebar().getByRole("button", { name: /^Mac:/ }));
-    await user.click(screen.getByRole("menuitem", { name: "Add a Mac…" }));
+    await user.click(sidebar().getByRole("button", { name: /^Machine:/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Add a machine…" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("cos daemon install")).toBeInTheDocument();
 
@@ -233,7 +277,7 @@ describe("remote access page", () => {
     expect(bridge.daemons.get("h1")!.requests.some((r) => r.path === "/v1/tailnet")).toBe(false);
   });
 
-  it("removes a saved Mac", async () => {
+  it("removes a saved machine", async () => {
     const { user, cos } = await renderApp({ kind: "settings" });
     await user.click(main().getByRole("button", { name: "Remove Travel laptop" }));
     const dialog = screen.getByRole("dialog");

@@ -171,7 +171,26 @@ describe("staff decoding", () => {
     });
     expect(transcript.messages[3]!.kind).toBe("thinking_v2");
     expect(transcript.next).toBe(4);
-    expect(decodeTranscript({ messages: [], next: 0 })).toEqual({ messages: [], next: 0 });
+    expect(decodeTranscript({ messages: [], next: 0 })).toEqual({
+      messages: [],
+      next: 0,
+      context: null,
+    });
+  });
+
+  it("decodes a transcript's context, with or without a window", () => {
+    const full = decodeTranscript({
+      messages: [],
+      next: 0,
+      context: { used_tokens: 84_123, window_tokens: 200_000 },
+    });
+    expect(full.context).toEqual({ usedTokens: 84_123, windowTokens: 200_000 });
+    const unknown = decodeTranscript({
+      messages: [],
+      context: { used_tokens: 5, window_tokens: null },
+    });
+    expect(unknown.context).toEqual({ usedTokens: 5, windowTokens: null });
+    expect(decodeTranscript({ messages: [], context: { window_tokens: 9 } }).context).toBeNull();
   });
 
   it("decodes inbox items newest first, whatever their text field is called", () => {

@@ -98,7 +98,7 @@ export function HostRefused() {
   const refusal = useCos((s) => s.refusal);
   const host = useCos((s) => s.host);
   if (!refusal) return null;
-  const name = host?.name ?? "that Mac";
+  const name = host?.name ?? "that machine";
   const copy = refusalCopy(refusal.code, name);
   const commands = quotedCommands(refusal.message);
   const pending = refusal.code === "device_pending";
@@ -135,7 +135,7 @@ export function HostRefused() {
 export function HostUnreachable() {
   const host = useCos((s) => s.host);
   const reason = useCos((s) => s.connectionReason);
-  const name = host?.name ?? "that Mac";
+  const name = host?.name ?? "that machine";
   return (
     <Layout icon={Unplug} title={`Can't reach ${name}`} waiting="Trying again every few seconds…">
       <p>
@@ -146,7 +146,7 @@ export function HostUnreachable() {
         . Check that:
       </p>
       <ul className="flex list-disc flex-col gap-1.5 pl-5 marker:text-ink-3">
-        <li>{name} is awake, and both Macs are connected to Tailscale.</li>
+        <li>{name} is awake, and both machines are connected to Tailscale.</li>
         <li>
           cos is running there with remote access on. It listens on port 7700 unless you chose
           another with <code className="font-mono text-[13px]">--port</code>.

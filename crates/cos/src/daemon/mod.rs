@@ -152,6 +152,8 @@ pub(crate) async fn run_with(
         json!({ "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION") }),
     )?;
     tracing::info!(socket = %socket.display(), "cos daemon started");
+    // Chiefs of Staff the restart interrupted come back, one a second.
+    state.staff.resume_chiefs();
     let remote = tailnet::spawn(state, tailscale, timing);
 
     let reason = stop.await;

@@ -20,6 +20,21 @@ public struct Status: Codable, Equatable, Sendable {
         self.events = events
         self.lastSeq = lastSeq
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, pid, startedAt, home, events, lastSeq
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = c.string(.version) ?? ""
+        pid = c.int(.pid) ?? 0
+        startedAt = c.optional(Date.self, .startedAt) ?? Date(timeIntervalSince1970: 0)
+        home = c.string(.home) ?? ""
+        events = c.int(.events) ?? 0
+        // The one field a client relies on to resume the event stream.
+        lastSeq = try c.id(.lastSeq)
+    }
 }
 
 /// One entry of the daemon's event log.
@@ -42,11 +57,41 @@ public struct LoggedEvent: Codable, Equatable, Sendable, Identifiable {
         self.runId = runId
         self.data = data
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case seq, ts, kind, runId, data
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seq = try c.id(.seq)
+        ts = c.optional(Date.self, .ts) ?? Date(timeIntervalSince1970: 0)
+        kind = c.string(.kind) ?? "unknown"
+        runId = c.string(.runId)
+        data = c.optional(JSONValue.self, .data) ?? .null
+    }
+
+    /// `data.agent_id`, `data.project_id` and the like, as numbers.
+    public func number(_ key: String) -> Int? {
+        switch data[key] {
+        case .number(let value)?: return value.rounded() == value ? Int(value) : nil
+        case .string(let text)?: return Int(text)
+        default: return nil
+        }
+    }
 }
 
 /// `GET /v1/events`.
 public struct EventsPage: Codable, Equatable, Sendable {
     public var events: [LoggedEvent]
+
+    public init(events: [LoggedEvent]) {
+        self.events = events
+    }
+
+    public init(from decoder: Decoder) throws {
+        events = try decoder.container(keyedBy: CodingKeys.self).list(LoggedEvent.self, .events)
+    }
 }
 
 /// Event kinds the daemon writes today. New kinds arrive with new milestones,

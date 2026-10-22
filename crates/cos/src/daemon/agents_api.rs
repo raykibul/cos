@@ -193,12 +193,17 @@ async fn trust(State(state): State<AppState>, id: Id) -> Result<StatusCode, ApiE
 }
 
 async fn stop(State(state): State<AppState>, id: Id) -> Result<StatusCode, ApiError> {
-    state.agents.stop(agent_id(id)?)?;
+    let id = agent_id(id)?;
+    state.agents.stop(id)?;
+    // A Chief of Staff you stop stays stopped across daemon restarts.
+    state.staff.stopped_by_user(id);
     Ok(StatusCode::ACCEPTED)
 }
 
 async fn resume(State(state): State<AppState>, id: Id) -> Result<(StatusCode, Json<Agent>), ApiError> {
-    let agent = state.agents.resume(agent_id(id)?)?;
+    let id = agent_id(id)?;
+    let agent = state.agents.resume(id)?;
+    state.staff.resumed_by_user(id);
     Ok((StatusCode::CREATED, Json(agent)))
 }
 

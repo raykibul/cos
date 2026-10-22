@@ -99,6 +99,12 @@ impl AppState {
         lock(&self.hosts).add(name, address)
     }
 
+    fn rename_host(&self, id: &str, name: &str) -> CommandResult<HostList> {
+        let mut hosts = lock(&self.hosts);
+        hosts.rename(id, name)?;
+        Ok(hosts.list())
+    }
+
     fn remove_host(&self, id: &str) -> CommandResult<HostList> {
         let mut hosts = lock(&self.hosts);
         if hosts.remove(id)? {
@@ -238,6 +244,13 @@ pub(crate) fn hosts_list(state: State<'_, AppState>) -> HostList {
 #[tauri::command]
 pub(crate) fn host_add(state: State<'_, AppState>, name: String, address: String) -> CommandResult<Host> {
     state.add_host(&name, &address)
+}
+
+/// Renames a host, this Mac included. The name is trimmed, at most 60
+/// characters and not another host's; the id stays.
+#[tauri::command]
+pub(crate) fn host_rename(state: State<'_, AppState>, id: String, name: String) -> CommandResult<HostList> {
+    state.rename_host(&id, &name)
 }
 
 /// Forgets a host. Removing the one in use switches to this Mac and closes
@@ -513,6 +526,21 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(plain.message, "the cos daemon answered 500");
+    }
+
+    #[test]
+    fn renaming_the_host_in_use_keeps_its_streams_and_shows_in_info() {
+        let state = state();
+        follow(&state);
+        let list = state.rename_host("local", "Work Mac").unwrap();
+        assert_eq!(list.current, "local");
+        assert_eq!(list.hosts[0].name, "Work Mac");
+        assert_eq!(state.info().host.name, "Work Mac");
+        assert_eq!(state.streams().len(), 1, "a rename doesn't switch");
+        assert_eq!(
+            state.rename_host("h4", "Nope").unwrap_err().kind,
+            ErrorKind::BadRequest
+        );
     }
 
     #[test]

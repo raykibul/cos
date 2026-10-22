@@ -160,7 +160,9 @@ export function Menu({
                   </div>
                 ) : (
                   <button
-                    key={item.label}
+                    // By position too: two items may share a label (two hosts
+                    // named alike in a saved file from before names were unique).
+                    key={`${index}-${item.label}`}
                     type="button"
                     role="menuitem"
                     disabled={item.disabled}

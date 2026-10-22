@@ -1,5 +1,6 @@
-// Adding and removing a Mac. These work whether or not a daemon answers,
-// since the host list lives in the app.
+// Adding, renaming and removing a machine (another Mac or a Linux server
+// over Tailscale; This Mac can be renamed too). These work whether or not a
+// daemon answers, since the host list lives in the app.
 
 import { useState } from "react";
 import { messageOf } from "../api/errors";
@@ -52,8 +53,8 @@ export function AddHostSheet() {
   };
   return (
     <Dialog
-      title="Add a Mac"
-      description="Use cos on another Mac of yours, over Tailscale."
+      title="Add a machine"
+      description="Use cos on another Mac or Linux server of yours, over Tailscale."
       onClose={ui.close}
       onSubmit={submit}
       footer={
@@ -118,6 +119,72 @@ export function AddHostSheet() {
   );
 }
 
+/** The longest name the shell keeps for a machine. */
+const MAX_NAME = 60;
+
+export function RenameHostSheet({ hostId }: { hostId: string }) {
+  const { cos, ui } = useApp();
+  const host = useCos((s) => s.hosts.find((h) => h.id === hostId));
+  const { busy, error, run } = useSheetAction();
+  const [name, setName] = useState(host?.name ?? "");
+  if (!host) return null;
+  const trimmed = name.trim();
+  const tooLong = [...trimmed].length > MAX_NAME;
+  const unchanged = trimmed === host.name;
+  const submit = () => {
+    if (!trimmed || tooLong) return;
+    if (unchanged) return ui.close();
+    run(async () => {
+      await cos.renameHost(hostId, trimmed);
+      ui.close();
+    });
+  };
+  return (
+    <Dialog
+      title={`Rename ${host.name}`}
+      description={
+        host.address ? (
+          <>
+            Only how the app shows it. It is still reached at{" "}
+            <span className="font-mono text-[12.5px]">{host.address}</span>.
+          </>
+        ) : (
+          "Only how the app shows this Mac. It is still reached through its own socket."
+        )
+      }
+      width="sm"
+      onClose={ui.close}
+      onSubmit={submit}
+      footer={
+        <>
+          <Button variant="ghost" onClick={ui.close}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" busy={busy} disabled={!trimmed || tooLong}>
+            Rename
+          </Button>
+        </>
+      }
+    >
+      <Field label="Name" htmlFor="host-rename">
+        <input
+          id="host-rename"
+          data-autofocus
+          className={inputClass}
+          value={name}
+          maxLength={MAX_NAME + 20}
+          onChange={(event) => setName(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </Field>
+      {tooLong ? <p className="text-[12px] text-tone-red">At most {MAX_NAME} characters.</p> : null}
+      <ErrorText>{error}</ErrorText>
+    </Dialog>
+  );
+}
+
 export function RemoveHostSheet({ hostId }: { hostId: string }) {
   const { cos, ui } = useApp();
   const host = useCos((s) => s.hosts.find((h) => h.id === hostId));
@@ -136,8 +203,8 @@ export function RemoveHostSheet({ hostId }: { hostId: string }) {
       description={
         <>
           The app forgets <span className="font-mono text-[12.5px]">{host.address}</span>
-          {inUse ? " and goes back to This Mac" : ""}. Nothing changes on that Mac: this Mac stays
-          approved there until you remove it with <Code>cos devices</Code>.
+          {inUse ? " and goes back to This Mac" : ""}. Nothing changes on that machine: this Mac
+          stays approved there until you remove it with <Code>cos devices</Code>.
         </>
       }
       width="sm"

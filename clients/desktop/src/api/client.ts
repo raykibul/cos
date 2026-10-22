@@ -375,8 +375,14 @@ export class DaemonClient {
     return this.get(`/v1/projects/${projectId}/staff`, decodeStaff);
   }
 
-  /** `null` goes back to the default model. */
-  setStaff(projectId: number, settings: { model: string | null }): Promise<Staff> {
+  /**
+   * Changes what's given and leaves the rest: `model` (`null` goes back to
+   * the default) and `paused` (coordination on hold).
+   */
+  setStaff(
+    projectId: number,
+    settings: { model?: string | null; paused?: boolean },
+  ): Promise<Staff> {
     return this.send("PUT", `/v1/projects/${projectId}/staff`, settings, decodeStaff);
   }
 

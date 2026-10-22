@@ -87,7 +87,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 | `DELETE /v1/agents/{id}` | | 204. Forgets an exited agent. 409 if still running. |
 | `GET /v1/agents/{id}/screen` | | `{"rows", "cols", "text", "cursor": [row, col]}`: the current screen as plain text |
 | `GET /v1/agents/{id}/terminal` | | SSE stream of the terminal (below) |
-| `GET /v1/agents/{id}/transcript?after=N` | | `{"messages": [Message], "next": N}`: the chat read from Claude's transcript (below) |
+| `GET /v1/agents/{id}/transcript?after=N` | | `{"messages": [Message], "next": N, "context": Context \| null}`: the chat read from Claude's transcript, and how full its context is (below) |
 | `GET /v1/approvals?state=pending` | | `{"approvals": [Approval]}`, newest first. Without `state`, every approval. |
 | `GET /v1/approvals/{id}` | | Approval |
 | `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. You can answer any pending approval, including one routed to the chief. |
@@ -169,6 +169,7 @@ data: {"exit_code":0}
 ```
 
 - **Numbers:** messages are numbered 1, 2, 3… in the order of the file, so the same file always gives the same numbers.
+- **`context`:** `{"used_tokens": 41203, "window_tokens": 200000}`, for the whole file whatever `after` is. `used_tokens` is the newest reply's input plus cache-read plus cache-creation tokens (subagents' replies and Claude's `<synthetic>` notices don't count). `window_tokens` is the model's context window when cos knows it: 1M for a model started or named with `[1m]` and for Opus and Sonnet from 4.6, Haiku from 5 and Fable; 200K for older Claude models; else null, and null too when the conversation is already past the guess. `context` is null before the first reply.
 - **`next`:** every message up to `next` is final. A tool call still waiting for its result comes after `next`, so asking again with `after=next` returns it again, with its result once it's in. Poll with `after=next` when `agent.transcript` arrives.
 - **Tool calls:** one message per call, with `summary` its main argument on one line (Bash's command, a file tool's path, a search's pattern, else its input as JSON, cut to 160 characters) and `is_error` from its result. `ToolSearch` (Claude loading deferred tools) is left out.
 - **`update`:** a user turn that starts with `[cos ·`, a Chief of Staff's inbox wakeup.

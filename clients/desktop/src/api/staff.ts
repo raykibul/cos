@@ -30,6 +30,10 @@ export interface Staff {
   /** Counts over the agents it started. */
   workingAgents: number;
   waitingOnYou: number;
+  /** Coordination paused: news collects in its inbox, but no wakeups go in. Your messages still do. */
+  paused: boolean;
+  /** News from its agents and runs not yet delivered to it. */
+  updatesWaiting: number;
 }
 
 export function decodeStaff(value: unknown): Staff {
@@ -44,7 +48,24 @@ export function decodeStaff(value: unknown): Staff {
     branch: optStr(o.branch),
     workingAgents: num(o.working_agents, 0),
     waitingOnYou: num(o.waiting_on_you, 0),
+    paused: bool(o.paused, false),
+    updatesWaiting: num(o.updates_waiting, 0),
   };
+}
+
+/** How full a conversation's context is, from Claude's latest usage. */
+export interface ContextUsage {
+  usedTokens: number;
+  /** The model's window, when the daemon knows it. */
+  windowTokens: number | null;
+}
+
+function decodeContext(value: unknown): ContextUsage | null {
+  if (!isObject(value)) return null;
+  const used = optNum(value.used_tokens);
+  if (used === null) return null;
+  const window = optNum(value.window_tokens);
+  return { usedTokens: used, windowTokens: window !== null && window > 0 ? window : null };
 }
 
 export type MessageRole = "user" | "assistant" | (string & {});
@@ -71,6 +92,8 @@ export interface TranscriptMessage {
 export interface Transcript {
   messages: TranscriptMessage[];
   next: number;
+  /** For the whole file, whatever `after` was; null from older daemons or before Claude answered. */
+  context: ContextUsage | null;
 }
 
 function decodeTool(value: unknown): ToolCall | null {
@@ -103,7 +126,7 @@ export function decodeTranscript(value: unknown): Transcript {
   const o = asObject(value, "transcript");
   const messages = list(o.messages, decodeMessage).sort((a, b) => a.n - b.n);
   const last = messages[messages.length - 1];
-  return { messages, next: num(o.next, last ? last.n : 0) };
+  return { messages, next: num(o.next, last ? last.n : 0), context: decodeContext(o.context) };
 }
 
 /** What an agent the chief started reported. */

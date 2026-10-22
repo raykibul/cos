@@ -12,7 +12,6 @@ use cos_harness::claude::hooks::Hook;
 use serde_json::Value;
 
 use super::{Inner, Live};
-use crate::daemon::transcript;
 
 /// After a signal, wait this long for Claude to finish writing.
 const SETTLE: Duration = Duration::from_millis(250);
@@ -81,12 +80,13 @@ impl Inner {
             };
             (path, note.logged_len)
         };
+        let inner = self.clone();
         let read = tokio::task::spawn_blocking(move || -> std::io::Result<Option<(u64, usize)>> {
             let len = std::fs::metadata(&path)?.len();
             if len == logged_len {
                 return Ok(None);
             }
-            Ok(Some((len, transcript::read(&path)?.next)))
+            Ok(Some((len, inner.parsed.read(&path, None)?.next)))
         })
         .await;
         let (len, next) = match read {

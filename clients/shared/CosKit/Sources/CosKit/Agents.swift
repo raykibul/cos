@@ -8,9 +8,13 @@ import Foundation
 /// PTY the daemon owns, in a workspace's folder.
 public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public var id: Int
-    public var workspaceId: Int
+    /// `nil` only from a daemon that leaves it out. A Chief of Staff's is
+    /// its hidden worktree, which no workspace list shows.
+    public var workspaceId: Int?
     /// The run that started it; `nil` for agents you started yourself.
     public var runId: String?
+    /// The task a worker or reviewer works on.
+    public var taskId: Int?
     public var role: AgentRole
     public var title: String
     public var sessionId: String?
@@ -18,6 +22,8 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public var state: AgentState
     public var model: String?
     public var permissionMode: String?
+    /// Whether Claude loads your own settings.
+    public var userSettings: Bool
     public var rows: Int
     public var cols: Int
     /// Unix milliseconds, like every time in this API.
@@ -29,17 +35,27 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     /// The last thing Claude said at the end of a turn, cut to 2,000 characters.
     public var lastMessage: String?
     public var pendingApprovalId: Int?
+    /// Only when it runs outside the workspace folder (a task's worktree).
+    public var cwd: String?
+    /// The Chief of Staff agent that started it, if one did.
+    public var spawnedBy: Int?
+    /// Claude's JSONL transcript, once a hook has reported it.
+    public var transcriptPath: String?
+    /// The extra environment variables it was launched with (names only).
+    public var envNames: [String]
 
     public init(
-        id: Int, workspaceId: Int, runId: String? = nil, role: AgentRole = .user, title: String,
+        id: Int, workspaceId: Int?, runId: String? = nil, taskId: Int? = nil, role: AgentRole = .user, title: String,
         sessionId: String? = nil, pid: Int? = nil, state: AgentState, model: String? = nil,
-        permissionMode: String? = nil, rows: Int = 40, cols: Int = 120, startedMs: Int64,
+        permissionMode: String? = nil, userSettings: Bool = true, rows: Int = 40, cols: Int = 120, startedMs: Int64,
         lastActivityMs: Int64? = nil, exitedMs: Int64? = nil, exitCode: Int? = nil,
-        lastMessage: String? = nil, pendingApprovalId: Int? = nil
+        lastMessage: String? = nil, pendingApprovalId: Int? = nil, cwd: String? = nil, spawnedBy: Int? = nil,
+        transcriptPath: String? = nil, envNames: [String] = []
     ) {
         self.id = id
         self.workspaceId = workspaceId
         self.runId = runId
+        self.taskId = taskId
         self.role = role
         self.title = title
         self.sessionId = sessionId
@@ -47,6 +63,7 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
         self.state = state
         self.model = model
         self.permissionMode = permissionMode
+        self.userSettings = userSettings
         self.rows = rows
         self.cols = cols
         self.startedMs = startedMs
@@ -55,38 +72,45 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
         self.exitCode = exitCode
         self.lastMessage = lastMessage
         self.pendingApprovalId = pendingApprovalId
+        self.cwd = cwd
+        self.spawnedBy = spawnedBy
+        self.transcriptPath = transcriptPath
+        self.envNames = envNames
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, workspaceId, runId, role, title, sessionId, pid, state, model, permissionMode, rows, cols
-        case startedMs, lastActivityMs, exitedMs, exitCode, lastMessage, pendingApprovalId
+        case id, workspaceId, runId, taskId, role, title, sessionId, pid, state, model, permissionMode, userSettings
+        case rows, cols, startedMs, lastActivityMs, exitedMs, exitCode, lastMessage, pendingApprovalId
+        case cwd, spawnedBy, transcriptPath, envNames
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int.self, forKey: .id)
-        workspaceId = try c.decode(Int.self, forKey: .workspaceId)
-        // Runs don't exist yet, so their id's type isn't settled: take a number or a string.
-        if let number = try? c.decodeIfPresent(Int.self, forKey: .runId) {
-            runId = String(number)
-        } else {
-            runId = try? c.decodeIfPresent(String.self, forKey: .runId)
-        }
-        role = try c.decodeIfPresent(AgentRole.self, forKey: .role) ?? .user
-        title = try c.decode(String.self, forKey: .title)
-        sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
-        pid = try c.decodeIfPresent(Int.self, forKey: .pid)
-        state = try c.decode(AgentState.self, forKey: .state)
-        model = try c.decodeIfPresent(String.self, forKey: .model)
-        permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
-        rows = try c.decodeIfPresent(Int.self, forKey: .rows) ?? 40
-        cols = try c.decodeIfPresent(Int.self, forKey: .cols) ?? 120
-        startedMs = try c.decode(Int64.self, forKey: .startedMs)
-        lastActivityMs = try c.decodeIfPresent(Int64.self, forKey: .lastActivityMs)
-        exitedMs = try c.decodeIfPresent(Int64.self, forKey: .exitedMs)
-        exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
-        lastMessage = try c.decodeIfPresent(String.self, forKey: .lastMessage)
-        pendingApprovalId = try c.decodeIfPresent(Int.self, forKey: .pendingApprovalId)
+        id = try c.id(.id)
+        workspaceId = c.int(.workspaceId)
+        // A number from the daemon; a string is taken too.
+        runId = c.string(.runId)
+        taskId = c.int(.taskId)
+        role = c.optional(AgentRole.self, .role) ?? .user
+        title = c.string(.title).nilIfBlank ?? "Agent \(id)"
+        sessionId = c.string(.sessionId)
+        pid = c.int(.pid)
+        state = c.optional(AgentState.self, .state) ?? .starting
+        model = c.string(.model)
+        permissionMode = c.string(.permissionMode)
+        userSettings = c.optional(Bool.self, .userSettings) ?? true
+        rows = c.int(.rows) ?? 40
+        cols = c.int(.cols) ?? 120
+        startedMs = c.int64(.startedMs) ?? 0
+        lastActivityMs = c.int64(.lastActivityMs)
+        exitedMs = c.int64(.exitedMs)
+        exitCode = c.int(.exitCode)
+        lastMessage = c.string(.lastMessage)
+        pendingApprovalId = c.int(.pendingApprovalId)
+        cwd = c.string(.cwd)
+        spawnedBy = c.int(.spawnedBy)
+        transcriptPath = c.string(.transcriptPath)
+        envNames = c.strings(.envNames)
     }
 
     public var startedAt: Date { Date(unixMilliseconds: startedMs) }
@@ -105,6 +129,10 @@ public struct AgentState: RawRepresentable, Codable, Hashable, Sendable {
     public static let starting = AgentState(rawValue: "starting")
     /// Claude is showing its trust dialog for the folder.
     public static let needsTrust = AgentState(rawValue: "needs_trust")
+    /// Claude is showing its first-run or login screen: the agent's Claude
+    /// config dir (`CLAUDE_CONFIG_DIR`) isn't logged in. Someone logs in in
+    /// its terminal, then it carries on.
+    public static let needsLogin = AgentState(rawValue: "needs_login")
     /// A prompt is running.
     public static let working = AgentState(rawValue: "working")
     /// A permission request is open.
@@ -122,7 +150,9 @@ public struct AgentState: RawRepresentable, Codable, Hashable, Sendable {
     /// Whether Resume applies.
     public var canResume: Bool { self == .exited || self == .interrupted }
     /// Whether it is blocked until you answer something.
-    public var needsYou: Bool { self == .needsTrust || self == .waitingApproval }
+    public var needsYou: Bool { self == .needsTrust || self == .waitingApproval || self == .needsLogin }
+    /// Busy on a turn (or starting one).
+    public var isBusy: Bool { self == .working || self == .starting }
 }
 
 public struct AgentRole: RawRepresentable, Codable, Hashable, Sendable {
@@ -134,6 +164,8 @@ public struct AgentRole: RawRepresentable, Codable, Hashable, Sendable {
     public static let chief = AgentRole(rawValue: "chief")
     public static let worker = AgentRole(rawValue: "worker")
     public static let reviewer = AgentRole(rawValue: "reviewer")
+    /// A project's Chief of Staff.
+    public static let staff = AgentRole(rawValue: "staff")
 }
 
 /// `POST /v1/workspaces/{id}/agents`. Every field is optional; empty
@@ -209,21 +241,21 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int.self, forKey: .id)
-        agentId = try c.decode(Int.self, forKey: .agentId)
-        workspaceId = try c.decodeIfPresent(Int.self, forKey: .workspaceId)
-        toolName = try c.decode(String.self, forKey: .toolName)
-        toolInput = try c.decodeIfPresent(JSONValue.self, forKey: .toolInput) ?? .null
-        toolUseId = try c.decodeIfPresent(String.self, forKey: .toolUseId)
-        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? toolName
-        state = try c.decode(ApprovalState.self, forKey: .state)
-        decidedBy = try c.decodeIfPresent(String.self, forKey: .decidedBy)
-        message = try c.decodeIfPresent(String.self, forKey: .message)
-        createdMs = try c.decode(Int64.self, forKey: .createdMs)
-        decidedMs = try c.decodeIfPresent(Int64.self, forKey: .decidedMs)
-        tier = try? c.decodeIfPresent(ApprovalTier.self, forKey: .tier)
-        route = try? c.decodeIfPresent(ApprovalRoute.self, forKey: .route)
-        reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+        id = try c.id(.id)
+        agentId = try c.id(.agentId)
+        workspaceId = c.int(.workspaceId)
+        toolName = c.string(.toolName) ?? "tool"
+        toolInput = c.optional(JSONValue.self, .toolInput) ?? .null
+        toolUseId = c.string(.toolUseId)
+        summary = c.string(.summary) ?? toolName
+        state = c.optional(ApprovalState.self, .state) ?? .pending
+        decidedBy = c.string(.decidedBy)
+        message = c.string(.message)
+        createdMs = c.int64(.createdMs) ?? 0
+        decidedMs = c.int64(.decidedMs)
+        tier = c.optional(ApprovalTier.self, .tier)
+        route = c.optional(ApprovalRoute.self, .route)
+        reason = c.string(.reason)
     }
 
     public var createdAt: Date { Date(unixMilliseconds: createdMs) }
@@ -258,11 +290,27 @@ public enum ApprovalDecision: String, Codable, Sendable {
 /// `GET /v1/agents`.
 public struct AgentsPage: Codable, Equatable, Sendable {
     public var agents: [Agent]
+
+    public init(agents: [Agent]) {
+        self.agents = agents
+    }
+
+    public init(from decoder: Decoder) throws {
+        agents = try decoder.container(keyedBy: CodingKeys.self).list(Agent.self, .agents)
+    }
 }
 
 /// `GET /v1/approvals`.
 public struct ApprovalsPage: Codable, Equatable, Sendable {
     public var approvals: [Approval]
+
+    public init(approvals: [Approval]) {
+        self.approvals = approvals
+    }
+
+    public init(from decoder: Decoder) throws {
+        approvals = try decoder.container(keyedBy: CodingKeys.self).list(Approval.self, .approvals)
+    }
 }
 
 /// `GET /v1/agents/{id}/screen`: the current screen as plain text.
@@ -272,6 +320,21 @@ public struct AgentScreen: Codable, Equatable, Sendable {
     public var text: String
     /// `[row, col]`.
     public var cursor: [Int]
+
+    public init(rows: Int, cols: Int, text: String, cursor: [Int] = [0, 0]) {
+        self.rows = rows
+        self.cols = cols
+        self.text = text
+        self.cursor = cursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rows = c.int(.rows) ?? 0
+        cols = c.int(.cols) ?? 0
+        text = c.string(.text) ?? ""
+        cursor = c.list(Int.self, .cursor)
+    }
 }
 
 extension EventKind {

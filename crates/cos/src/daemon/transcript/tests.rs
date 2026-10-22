@@ -1,6 +1,9 @@
+use std::io::Write;
+
 use super::*;
 
 const WORKER: &str = include_str!("fixtures/worker.jsonl");
+const CONTEXT: &str = include_str!("fixtures/context.jsonl");
 const CHIEF: &str = include_str!("fixtures/chief.jsonl");
 const INTERRUPTED: &str = include_str!("fixtures/interrupted.jsonl");
 
@@ -151,8 +154,149 @@ fn an_open_tool_call_before_text_does_not_hold_next_back() {
 fn empty_and_missing_files_are_empty_transcripts() {
     assert_eq!(parse(b""), Transcript::default());
     assert_eq!(parse(b"{\"type\":\"user\""), Transcript::default());
-    let missing = read(Path::new("/nonexistent/cos/transcript.jsonl")).unwrap();
+    let missing = Cache::default()
+        .read(Path::new("/nonexistent/cos/transcript.jsonl"), None)
+        .unwrap();
     assert_eq!(missing, Transcript::default());
+}
+
+#[test]
+fn the_context_is_the_newest_replys_input_in_the_models_window() {
+    let transcript = parse(CONTEXT.as_bytes());
+    assert_eq!(
+        transcript.context,
+        Some(Context {
+            used_tokens: 3 + 1_200 + 40_000,
+            window_tokens: Some(200_000)
+        }),
+        "the subagent's and the synthetic reply's usage don't count"
+    );
+    assert_eq!(transcript.messages.len(), 4);
+
+    // An agent started on a `[1m]` model has the 1M window.
+    let mut parser = Parser::default();
+    parser.feed(CONTEXT.as_bytes());
+    let wide = parser.transcript(Some("claude-sonnet-4-5[1m]"));
+    assert_eq!(wide.context.unwrap().window_tokens, Some(1_000_000));
+    // `after` keeps it: it's for the whole file.
+    assert_eq!(wide.clone().after(4).context, wide.context);
+
+    let json = serde_json::to_value(parse(CONTEXT.as_bytes())).unwrap();
+    assert_eq!(
+        json["context"],
+        serde_json::json!({"used_tokens": 41_203, "window_tokens": 200_000})
+    );
+    assert_eq!(serde_json::to_value(parse(b"")).unwrap()["context"], Value::Null);
+}
+
+#[test]
+fn context_windows_by_model() {
+    for (launch, model, window) in [
+        (None, Some("claude-sonnet-4-5-20250929"), Some(200_000)),
+        (None, Some("claude-sonnet-4-20250514"), Some(200_000)),
+        (None, Some("claude-opus-4-5"), Some(200_000)),
+        (None, Some("claude-haiku-4-5-20251001"), Some(200_000)),
+        (None, Some("claude-3-5-sonnet-20241022"), Some(200_000)),
+        (None, Some("claude-opus-4-6"), Some(1_000_000)),
+        (None, Some("claude-sonnet-4-6"), Some(1_000_000)),
+        (None, Some("claude-opus-5-5"), Some(1_000_000)),
+        (None, Some("claude-haiku-5-5"), Some(1_000_000)),
+        (None, Some("claude-fable-5-1"), Some(1_000_000)),
+        (Some("opus[1m]"), Some("claude-opus-4-5"), Some(1_000_000)),
+        (Some("sonnet"), Some("claude-sonnet-4-5"), Some(200_000)),
+        (None, Some("claude-sonnet-4-5[1M]"), Some(1_000_000)),
+        (None, Some("gpt-5"), None),
+        (None, Some("claude-newname-9"), None),
+        (None, None, None),
+    ] {
+        assert_eq!(context_window(launch, model), window, "{launch:?} {model:?}");
+    }
+    // A guess the conversation outgrew is dropped.
+    let line = r#"{"type":"assistant","message":{"model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":250000}}}"#;
+    let context = parse(format!("{line}\n").as_bytes()).context.unwrap();
+    assert_eq!((context.used_tokens, context.window_tokens), (250_000, None));
+}
+
+fn user_line(text: &str) -> String {
+    serde_json::json!({"type": "user", "message": {"role": "user", "content": text}}).to_string() + "\n"
+}
+
+#[test]
+fn the_cache_parses_only_what_was_appended() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    let cache = Cache::default();
+    let first = user_line("first");
+    std::fs::write(&path, &first).unwrap();
+    assert_eq!(cache.read(&path, None).unwrap().messages.len(), 1);
+    // Unchanged: the same answer from the cache.
+    assert_eq!(cache.read(&path, None).unwrap(), parse(first.as_bytes()));
+
+    // The file grows, and its first line is overwritten with a different one
+    // of the same length: only the appended lines are read, so "first"
+    // stays as it was parsed.
+    let replaced = user_line("FIRST");
+    assert_eq!(replaced.len(), first.len());
+    let grown = format!("{replaced}{}", user_line("second"));
+    std::fs::write(&path, &grown).unwrap();
+    let texts = |transcript: &Transcript| -> Vec<String> {
+        transcript
+            .messages
+            .iter()
+            .map(|message| message.text.clone().unwrap_or_default())
+            .collect()
+    };
+    assert_eq!(texts(&cache.read(&path, None).unwrap()), ["first", "second"]);
+
+    // A line still being written waits, then counts once it's complete.
+    let third = user_line("third");
+    let (head, tail) = third.split_at(10);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(head.as_bytes())
+        .unwrap();
+    assert_eq!(cache.read(&path, None).unwrap().messages.len(), 2);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(tail.as_bytes())
+        .unwrap();
+    assert_eq!(
+        texts(&cache.read(&path, None).unwrap()),
+        ["first", "second", "third"]
+    );
+}
+
+#[test]
+fn the_cache_starts_over_when_the_file_shrinks_or_is_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    let cache = Cache::default();
+    std::fs::write(&path, format!("{}{}", user_line("one"), user_line("two"))).unwrap();
+    assert_eq!(cache.read(&path, None).unwrap().messages.len(), 2);
+
+    // Truncated: a new session in the same file.
+    std::fs::write(&path, user_line("fresh")).unwrap();
+    assert_eq!(
+        cache.read(&path, None).unwrap(),
+        parse(user_line("fresh").as_bytes())
+    );
+
+    // Rewritten longer, with the old last line's end no longer a newline:
+    // parsed again from the top rather than glued on.
+    let rewritten = format!("{}{}", user_line("a much longer opening line"), user_line("next"));
+    std::fs::write(&path, &rewritten).unwrap();
+    assert_eq!(cache.read(&path, None).unwrap(), parse(rewritten.as_bytes()));
+
+    // Gone: empty, and forgotten.
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(cache.read(&path, None).unwrap(), Transcript::default());
+    // Back with a context, read from the top.
+    std::fs::write(&path, CONTEXT).unwrap();
+    assert_eq!(cache.read(&path, None).unwrap(), parse(CONTEXT.as_bytes()));
 }
 
 #[test]

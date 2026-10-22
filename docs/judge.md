@@ -76,7 +76,7 @@ jev is **off by default** for every project, because what it judges (commands, p
 
 ## Storage
 
-Migration 10: `judge_projects (project_id, enabled, updated_ms)` and `judge_decisions`:
+Migration 11 (`MIGRATIONS[11]`): `judge_projects (project_id, enabled, updated_ms)` and `judge_decisions`:
 
 | Column | |
 |---|---|

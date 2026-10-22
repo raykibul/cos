@@ -20,7 +20,7 @@ import { cx } from "../ui/cx";
 import { Dialog, ErrorText } from "../ui/Dialog";
 import { Button, Field, inputClass } from "../ui/kit";
 import { EnvVarSheet } from "./EnvSheet";
-import { AddHostSheet, RemoveHostSheet } from "./HostSheets";
+import { AddHostSheet, RemoveHostSheet, RenameHostSheet } from "./HostSheets";
 
 export function Dialogs() {
   const dialog = useUi((s) => s.dialog);
@@ -56,6 +56,8 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
       return <EnvVarSheet dialog={dialog} />;
     case "addHost":
       return <AddHostSheet />;
+    case "renameHost":
+      return <RenameHostSheet hostId={dialog.hostId} />;
     case "removeHost":
       return <RemoveHostSheet hostId={dialog.hostId} />;
   }

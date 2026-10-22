@@ -29,7 +29,13 @@ import {
 import { DecodeError } from "../api/decode";
 import { type EnvAnswer, type EnvVars, type ProjectEnv } from "../api/env";
 import { type JudgeOverview, type JudgeProject } from "../api/judge";
-import { type InboxItem, type Staff, type Transcript, type TranscriptMessage } from "../api/staff";
+import {
+  type ContextUsage,
+  type InboxItem,
+  type Staff,
+  type Transcript,
+  type TranscriptMessage,
+} from "../api/staff";
 import type { Bridge, DaemonInfo, EventMessage, Host, HostList } from "../bridge/types";
 import {
   agentOf,
@@ -153,6 +159,8 @@ export interface TranscriptState {
   messages: TranscriptMessage[];
   /** What to ask for next (`after=next`). */
   next: number;
+  /** How full its context is, as of the last read; null until the daemon says. */
+  context: ContextUsage | null;
   loaded: boolean;
   error: string | null;
 }
@@ -603,6 +611,8 @@ export class CosStore {
     if (changesJudge(kind)) this.judgeRefresh.request();
     if (kind === "staff.inbox") {
       const project = projectOf(event);
+      // Its count of updates waiting moved (shown while coordination is paused).
+      if (project !== null && this.get().staffs[project]) this.refreshStaff(project);
       for (const [id, watch] of this.inboxWatches) {
         if (project === null || project === id) watch.refresh.request();
       }
@@ -863,6 +873,7 @@ export class CosStore {
             [agentId]: {
               messages: current?.messages ?? [],
               next: current?.next ?? 0,
+              context: current?.context ?? null,
               loaded: true,
               error,
             },
@@ -878,6 +889,7 @@ export class CosStore {
         [agentId]: {
           messages,
           next: Math.max(page.reset ? 0 : (current?.next ?? 0), page.next),
+          context: page.context ?? (page.reset ? null : (current?.context ?? null)),
           loaded: true,
           error: null,
         },
@@ -953,6 +965,16 @@ export class CosStore {
   /** `null` for the default model. It applies from the chief's next start. */
   async setStaffModel(projectId: number, model: string | null): Promise<Staff> {
     const staff = await this.client.setStaff(projectId, { model });
+    this.storeStaff(staff);
+    return staff;
+  }
+
+  /**
+   * Pauses or resumes its coordination. While paused, news from its agents
+   * waits in its inbox; your messages still go in.
+   */
+  async setStaffPaused(projectId: number, paused: boolean): Promise<Staff> {
+    const staff = await this.client.setStaff(projectId, { paused });
     this.storeStaff(staff);
     return staff;
   }
@@ -1357,7 +1379,7 @@ export class CosStore {
   // MARK: Hosts
 
   /**
-   * Switches to another Mac's daemon. The shell closes every stream; the
+   * Switches to another machine's daemon. The shell closes every stream; the
    * state starts over, and the new host's events are followed.
    */
   async switchHost(id: string): Promise<void> {
@@ -1393,6 +1415,16 @@ export class CosStore {
       }
       throw error;
     }
+  }
+
+  /** Renames a host, This Mac included. Nothing restarts: only the label changes. */
+  async renameHost(id: string, name: string): Promise<void> {
+    const list = await this.bridge.hostRename(id, name);
+    const current = this.get().host;
+    this.set({
+      hosts: list.hosts,
+      host: current ? (list.hosts.find((h) => h.id === current.id) ?? current) : current,
+    });
   }
 
   /** Forgets a host; if it was in use, goes back to this Mac. */

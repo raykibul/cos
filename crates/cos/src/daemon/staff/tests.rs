@@ -24,6 +24,7 @@ use crate::daemon::{api, serve, tailnet::Tailnet};
 
 struct Fixture {
     dir: tempfile::TempDir,
+    store: Arc<Store>,
     log: EventLog,
     runs: Arc<Runs>,
     projects: Arc<Projects>,
@@ -33,6 +34,8 @@ struct Fixture {
     client: Client,
     project_id: i64,
     workspace_id: i64,
+    manager: AgentManager,
+    staff: Staff,
     _stop: watch::Sender<bool>,
 }
 
@@ -56,65 +59,48 @@ impl Fixture {
             .await
             .unwrap();
         let runs = Arc::new(Runs::new(store.clone(), log.clone()));
-        let manager = AgentManager::start(
-            Agents::new(store.clone(), log.clone()),
-            projects.clone(),
-            runs.clone(),
-            cos_core::Environment::new(store.clone(), log.clone()),
-            AgentConfig::for_tests(dir.path()),
-        )
-        .unwrap();
-        let chief = Chief::start(
-            store.clone(),
-            log.clone(),
-            runs.clone(),
-            manager.clone(),
-            dir.path().to_path_buf(),
-            ChiefConfig::for_tests(),
-        )
-        .unwrap();
-        let staff = Staff::start(
-            store.clone(),
-            log.clone(),
-            projects.clone(),
-            runs.clone(),
-            manager.clone(),
-            chief.clone(),
-            StaffConfig::for_tests(),
-        )
-        .unwrap();
-        let socket = dir.path().join("cos.sock");
-        let (stop, stopping) = watch::channel(false);
-        let judge =
-            crate::daemon::judge::Judge::off_for_tests(&store, &log, &projects, &runs, &manager, dir.path());
-        let state = api::AppState {
-            log: log.clone(),
-            projects: projects.clone(),
-            devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),
-            tailnet: Tailnet::load(store.clone(), log.clone()),
-            peers: crate::daemon::peers::Peers::without_tailscale(),
-            runs: runs.clone(),
-            agents: manager,
-            chief,
-            staff,
-            judge,
-            started_at: Timestamp::now(),
-            home: dir.path().to_path_buf(),
-            stopping: stopping.clone(),
-        };
-        serve(UnixListener::bind(&socket).unwrap(), state, stopping);
+        let manager = start_manager(&store, &log, &projects, &runs, dir.path());
+        let (staff, stop) = serve_daemon(&store, &log, &projects, &runs, &manager, dir.path());
         Self {
-            client: Client::new(socket),
+            client: Client::new(dir.path().join("cos.sock")),
             books: StaffBooks::new(store.clone(), log.clone()),
-            records: Agents::new(store, log.clone()),
+            records: Agents::new(store.clone(), log.clone()),
+            store,
             dir,
             log,
             runs,
             projects,
             project_id: project.id,
             workspace_id: workspace.id,
+            manager,
+            staff,
             _stop: stop,
         }
+    }
+
+    /// What a daemon restart does: shut the agents down, then start the
+    /// agents, chiefs and server again on the same database. Chiefs aren't
+    /// resumed until the test calls `resume_chiefs`, as the daemon does
+    /// once it serves.
+    async fn restart(&mut self) {
+        self.manager.shutdown().await;
+        let _ = self._stop.send(true);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.manager = start_manager(
+            &self.store,
+            &self.log,
+            &self.projects,
+            &self.runs,
+            self.dir.path(),
+        );
+        (self.staff, self._stop) = serve_daemon(
+            &self.store,
+            &self.log,
+            &self.projects,
+            &self.runs,
+            &self.manager,
+            self.dir.path(),
+        );
     }
 
     /// Starts the chief and waits until it's idle.
@@ -208,6 +194,75 @@ impl Fixture {
             .unwrap();
         (project.id, workspace.id, agent.id)
     }
+}
+
+fn start_manager(
+    store: &Arc<Store>,
+    log: &EventLog,
+    projects: &Arc<Projects>,
+    runs: &Arc<Runs>,
+    dir: &std::path::Path,
+) -> AgentManager {
+    AgentManager::start(
+        Agents::new(store.clone(), log.clone()),
+        projects.clone(),
+        runs.clone(),
+        cos_core::Environment::new(store.clone(), log.clone()),
+        AgentConfig::for_tests(dir),
+    )
+    .unwrap()
+}
+
+/// Starts the chiefs and serves the API on `<dir>/cos.sock` until the
+/// returned sender is told to stop.
+fn serve_daemon(
+    store: &Arc<Store>,
+    log: &EventLog,
+    projects: &Arc<Projects>,
+    runs: &Arc<Runs>,
+    manager: &AgentManager,
+    dir: &std::path::Path,
+) -> (Staff, watch::Sender<bool>) {
+    let chief = Chief::start(
+        store.clone(),
+        log.clone(),
+        runs.clone(),
+        manager.clone(),
+        dir.to_path_buf(),
+        ChiefConfig::for_tests(),
+    )
+    .unwrap();
+    let staff = Staff::start(
+        store.clone(),
+        log.clone(),
+        projects.clone(),
+        runs.clone(),
+        manager.clone(),
+        chief.clone(),
+        StaffConfig::for_tests(),
+    )
+    .unwrap();
+    let socket = dir.join("cos.sock");
+    let _ = std::fs::remove_file(&socket);
+    let (stop, stopping) = watch::channel(false);
+    let judge = crate::daemon::judge::Judge::off_for_tests(store, log, projects, runs, manager, dir);
+    let state = api::AppState {
+        log: log.clone(),
+        projects: projects.clone(),
+        devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),
+        tailnet: Tailnet::load(store.clone(), log.clone()),
+        peers: crate::daemon::peers::Peers::without_tailscale(),
+        runs: runs.clone(),
+        agents: manager.clone(),
+        chief,
+        staff: staff.clone(),
+        judge,
+        started_at: Timestamp::now(),
+        home: dir.to_path_buf(),
+        stopping: stopping.clone(),
+    };
+    serve(UnixListener::bind(&socket).unwrap(), state, stopping);
+    (staff, stop)
 }
 
 #[tokio::test]
@@ -813,4 +868,135 @@ async fn the_chief_of_staff_and_the_agents_it_spawns_get_the_project_env() {
     assert_eq!(agent.spawned_by, Some(staff.id));
     let env = launched_env(fixture.dir.path(), &agent.session_id);
     assert_eq!(var(&env, "CLAUDE_CONFIG_DIR"), Some(expected.as_str()));
+}
+
+#[tokio::test]
+async fn paused_coordination_holds_news_but_not_your_messages() {
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+    let staff = fixture.idle_staff().await;
+    client
+        .set_staff_model(fixture.project_id, Some("sonnet".into()))
+        .await
+        .unwrap();
+    let changed = fixture.events(kind::STAFF_CHANGED).len();
+
+    let paused = client.set_staff_paused(fixture.project_id, true).await.unwrap();
+    assert!(paused.paused);
+    assert_eq!(
+        paused.model.as_deref(),
+        Some("sonnet"),
+        "a pause leaves the model"
+    );
+    assert_eq!(fixture.events(kind::STAFF_CHANGED).len(), changed + 1);
+    fixture
+        .books
+        .add(
+            fixture.project_id,
+            StaffItemKind::Agent,
+            None,
+            None,
+            "News 1\nbody",
+        )
+        .unwrap();
+
+    // Your messages still go in; the news waits.
+    assert_eq!(
+        fixture.say(staff.id, "still listening?").await,
+        "echo: still listening?"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let view = client.staff(fixture.project_id).await.unwrap();
+    assert_eq!((view.paused, view.updates_waiting), (true, 1));
+    assert_eq!(
+        client.agent(staff.id).await.unwrap().last_message.as_deref(),
+        Some("echo: still listening?")
+    );
+
+    // Resuming lets it in.
+    let resumed = client.set_staff_paused(fixture.project_id, false).await.unwrap();
+    assert!(!resumed.paused);
+    fixture.until_says(staff.id, "[cos · 1 updates]").await;
+    let view = client.staff(fixture.project_id).await.unwrap();
+    assert_eq!((view.paused, view.updates_waiting), (false, 0));
+    assert_eq!(view.model.as_deref(), Some("sonnet"));
+}
+
+#[tokio::test]
+async fn chiefs_come_back_after_a_daemon_restart_unless_you_stopped_them() {
+    let mut fixture = Fixture::start().await;
+    let staff = fixture.idle_staff().await;
+    assert_eq!(fixture.say(staff.id, "remember me").await, "echo: remember me");
+    // Another project's chief, to see the second one wait its turn.
+    let (other, _, mine) = fixture.other_project().await;
+    let other_staff = fixture.client.start_staff(other).await.unwrap().agent_id.unwrap();
+    fixture.until_state(other_staff, AgentState::Idle).await;
+    fixture.until_state(mine, AgentState::Idle).await;
+    let started = fixture.events(kind::STAFF_STARTED).len();
+
+    fixture.restart().await;
+    for id in [staff.id, other_staff, mine] {
+        assert_eq!(
+            fixture.client.agent(id).await.unwrap().state,
+            AgentState::Interrupted
+        );
+    }
+    fixture.staff.resume_chiefs().await.unwrap();
+
+    let back = fixture.until_state(staff.id, AgentState::Idle).await;
+    assert_eq!(back.session_id, staff.session_id, "the same Claude session");
+    let transcript = fixture.client.transcript(staff.id, 0).await.unwrap();
+    assert!(
+        transcript
+            .messages
+            .iter()
+            .any(|message| message.text.as_deref() == Some("remember me")),
+        "{transcript:?}"
+    );
+    fixture.until_state(other_staff, AgentState::Idle).await;
+    let restarts: Vec<_> = fixture.events(kind::STAFF_STARTED)[started..].to_vec();
+    assert_eq!(restarts.len(), 2);
+    let gap = restarts[1].ts.as_millisecond() - restarts[0].ts.as_millisecond();
+    assert!(gap >= 90, "staggered, {gap} ms apart");
+    // Your own agent stays interrupted, and `cos agent resume` brings it back.
+    assert_eq!(
+        fixture.client.agent(mine).await.unwrap().state,
+        AgentState::Interrupted
+    );
+    fixture.client.resume_agent(mine).await.unwrap();
+    fixture.until_state(mine, AgentState::Idle).await;
+    fixture.client.stop_agent(mine).await.unwrap();
+    fixture.until_state(mine, AgentState::Exited).await;
+
+    // A chief you stop stays stopped, even if a crash left it interrupted.
+    fixture.client.stop_agent(staff.id).await.unwrap();
+    fixture.until_state(staff.id, AgentState::Exited).await;
+    assert!(fixture.books.record(fixture.project_id).unwrap().stopped);
+    fixture.client.stop_agent(other_staff).await.unwrap();
+    fixture.until_state(other_staff, AgentState::Exited).await;
+    // As if the daemon crashed with its record still running: the next
+    // start marks it interrupted.
+    fixture.records.restart(staff.id).unwrap();
+    fixture.restart().await;
+    assert_eq!(
+        fixture.client.agent(staff.id).await.unwrap().state,
+        AgentState::Interrupted
+    );
+    fixture.staff.resume_chiefs().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        fixture.client.agent(staff.id).await.unwrap().state,
+        AgentState::Interrupted
+    );
+    assert_eq!(
+        fixture.client.agent(other_staff).await.unwrap().state,
+        AgentState::Exited
+    );
+
+    // Starting it again clears that.
+    fixture.client.start_staff(fixture.project_id).await.unwrap();
+    fixture.until_state(staff.id, AgentState::Idle).await;
+    assert!(!fixture.books.record(fixture.project_id).unwrap().stopped);
+    fixture.client.stop_agent(staff.id).await.unwrap();
+    fixture.until_state(staff.id, AgentState::Exited).await;
 }
