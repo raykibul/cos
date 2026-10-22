@@ -10,7 +10,7 @@ use jiff::tz::TimeZone;
 
 use crate::client::{self, Client, NotRunning};
 use crate::home::CosHome;
-use crate::{devices_cmd, launchd};
+use crate::{devices_cmd, service};
 
 #[derive(clap::Args)]
 pub(crate) struct EventsArgs {
@@ -29,11 +29,7 @@ pub(crate) struct EventsArgs {
 }
 
 pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
-    let launchd = if launchd::is_installed() {
-        format!("installed ({})", launchd::LABEL)
-    } else {
-        "not installed".into()
-    };
+    let service = service::describe();
 
     let client = Client::new(home.socket());
     if client.is_remote() {
@@ -51,7 +47,7 @@ pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
             );
             println!("  home     {}", status.home.display());
             println!("  events   {} (last #{})", status.events, status.last_seq);
-            println!("  launchd  {launchd}");
+            println!("  service  {service}");
             for line in status.tailnet.iter().flat_map(devices_cmd::describe) {
                 println!("  {line}");
             }
@@ -60,8 +56,8 @@ pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
         Err(error) if error.is::<NotRunning>() => {
             println!("cos daemon: not running");
             println!("  home     {}", home.root().display());
-            println!("  launchd  {launchd}");
-            println!("  start it with `cos daemon`, or `cos daemon install` to run it at login");
+            println!("  service  {service}");
+            println!("  start it with `cos daemon`, or `cos daemon install` to run it as a service");
             Ok(ExitCode::FAILURE)
         }
         Err(error) => Err(error),
@@ -69,7 +65,7 @@ pub(crate) async fn status(home: &CosHome) -> anyhow::Result<ExitCode> {
 }
 
 /// `cos --host … status`: the remote daemon's status, without the local
-/// launchd details.
+/// service details.
 async fn remote_status(client: &Client) -> anyhow::Result<ExitCode> {
     let host = client::remote_host().unwrap_or_default();
     match client.status().await {
@@ -139,39 +135,46 @@ pub(crate) async fn events(home: &CosHome, args: EventsArgs) -> anyhow::Result<E
 }
 
 pub(crate) async fn install(home: &CosHome) -> anyhow::Result<ExitCode> {
-    let plist = launchd::install(home)?;
-    println!("Installed {}", plist.display());
-    if std::env::current_exe()?
-        .components()
-        .any(|part| part.as_os_str() == "target")
-    {
+    let installed = service::install(home)?;
+    println!("Installed {}", installed.file.display());
+    if service::is_build_output(&std::env::current_exe()?) {
         println!("  note: it runs this binary from the build directory; rebuilding replaces it");
     }
 
-    // Give launchd a moment to start it.
+    // Give the service manager a moment to start it.
     let client = Client::new(home.socket());
+    let mut running = None;
     for _ in 0..50 {
         if let Ok(status) = client.status().await {
-            println!(
-                "cos daemon is running (pid {}). It starts again at every login.",
-                status.pid
-            );
-            return Ok(ExitCode::SUCCESS);
+            running = Some(status.pid);
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    println!(
-        "launchd loaded the agent, but the daemon isn't answering yet. Check {}",
-        home.daemon_log().display()
-    );
-    Ok(ExitCode::FAILURE)
+    match running {
+        Some(pid) => println!("cos daemon is running (pid {pid}). {}", installed.restarts),
+        None => println!(
+            "The {} is loaded, but the daemon isn't answering yet. Check {}",
+            service::kind(),
+            home.daemon_log().display()
+        ),
+    }
+    for note in &installed.notes {
+        println!("  note: {note}");
+    }
+    Ok(if running.is_some() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 pub(crate) fn uninstall() -> anyhow::Result<ExitCode> {
-    if launchd::uninstall().context("could not uninstall the launchd agent")? {
-        println!("Stopped the daemon and removed the launchd agent.");
+    let kind = service::kind();
+    if service::uninstall().with_context(|| format!("could not uninstall the {kind}"))? {
+        println!("Stopped the daemon and removed the {kind}.");
     } else {
-        println!("The launchd agent wasn't installed.");
+        println!("The {kind} wasn't installed.");
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -74,9 +74,6 @@ pub(crate) enum AgentSignal {
     },
 }
 
-/// The environment variable naming the `claude` binary agents run.
-pub(crate) const CLAUDE_BIN_ENV: &str = "COS_CLAUDE_BIN";
-
 #[derive(Debug, Clone)]
 pub(crate) struct AgentConfig {
     /// The `claude` binary. A bare name is looked up on the daemon's PATH
@@ -99,12 +96,26 @@ pub(crate) struct AgentConfig {
 }
 
 impl AgentConfig {
-    /// The daemon's settings: `claude` from `$COS_CLAUDE_BIN` or PATH, and
-    /// this binary's `cos hook` as the relay.
+    /// The daemon's settings: `claude` from `$COS_CLAUDE_BIN`, PATH or where
+    /// its installers put it (see [`crate::which::claude`]), and this
+    /// binary's `cos hook` as the relay.
     pub(crate) fn for_home(home: &CosHome) -> anyhow::Result<Self> {
         let exe = std::env::current_exe()?;
+        let claude = crate::which::claude();
+        if claude.is_absolute() {
+            tracing::info!(claude = %claude.display(), "agents run this claude");
+        } else if crate::which::find_on_path(&claude.to_string_lossy(), std::env::var_os("PATH").as_deref())
+            .is_none()
+        {
+            tracing::warn!(
+                "no `{}` on PATH or where Claude Code installs it; agents won't start. \
+                 Install Claude Code, or set {} to its path",
+                claude.display(),
+                crate::which::CLAUDE_BIN_ENV
+            );
+        }
         Ok(Self {
-            claude: std::env::var_os(CLAUDE_BIN_ENV).map_or_else(|| PathBuf::from("claude"), PathBuf::from),
+            claude,
             hook_command: format!("{} hook", crate::try_pty::shell_quote(&exe)),
             hook_socket: home.hook_socket(),
             env: Vec::new(),

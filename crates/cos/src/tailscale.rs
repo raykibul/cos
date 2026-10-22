@@ -17,8 +17,16 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-/// The Mac app's binary doubles as the CLI when it isn't on `PATH`.
-const MAC_APP_CLI: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+/// The environment variable naming the `tailscale` CLI, when it isn't on `PATH`.
+pub(crate) const TAILSCALE_ENV: &str = "COS_TAILSCALE";
+/// Where to look when `tailscale` isn't on `PATH`. On macOS the app's binary
+/// doubles as the CLI; Linux packages put it in `/usr/bin`, and the static
+/// tarball's instructions in `/usr/local/bin`.
+const FALLBACK_CLIS: &[&str] = if cfg!(target_os = "macos") {
+    &["/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+} else {
+    &["/usr/bin/tailscale", "/usr/local/bin/tailscale"]
+};
 /// A `tailscale` call that takes longer than this has hung.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -99,7 +107,10 @@ pub(crate) struct PeerNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum TailscaleError {
-    #[error("Tailscale is not installed (no `tailscale` on PATH or at {MAC_APP_CLI})")]
+    #[error(
+        "Tailscale is not installed (no `tailscale` on PATH or at {}; set {TAILSCALE_ENV} if it's elsewhere)",
+        FALLBACK_CLIS.join(" or ")
+    )]
     NotInstalled,
     #[error("Tailscale is not running ({0})")]
     NotRunning(String),
@@ -388,17 +399,19 @@ fn cli_message(stderr: &[u8]) -> String {
 pub(crate) struct TailscaleCli;
 
 impl TailscaleCli {
-    /// `COS_TAILSCALE` if set, else `tailscale` on `PATH`, else the Mac app's binary.
+    /// `COS_TAILSCALE` if set, else `tailscale` on `PATH`, else the first of
+    /// [`FALLBACK_CLIS`] that exists.
     fn program() -> Option<PathBuf> {
-        if let Some(path) = std::env::var_os("COS_TAILSCALE") {
+        if let Some(path) = std::env::var_os(TAILSCALE_ENV).filter(|path| !path.is_empty()) {
             return Some(PathBuf::from(path));
         }
-        let on_path = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join("tailscale"))
-                .find(|candidate| candidate.is_file())
-        });
-        on_path.or_else(|| Path::new(MAC_APP_CLI).is_file().then(|| MAC_APP_CLI.into()))
+        crate::which::find_on_path("tailscale", std::env::var_os("PATH").as_deref()).or_else(|| {
+            FALLBACK_CLIS
+                .iter()
+                .map(Path::new)
+                .find(|path| crate::which::is_executable(path))
+                .map(Path::to_path_buf)
+        })
     }
 
     /// Runs `tailscale <args>`. Returns stdout on success, or the exit's

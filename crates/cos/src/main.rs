@@ -8,7 +8,7 @@
 //! `cos approvals`, `cos allow` and `cos deny` drive the agents the daemon
 //! runs in terminals, and `cos staff` talks to a project's Chief of Staff.
 //! `cos try` runs one prompt through Claude Code without the daemon, and
-//! `cos sessions` lists the Claude sessions running on this Mac. See
+//! `cos sessions` lists the Claude sessions running on this machine. See
 //! `docs/proposal.md` for where this is going.
 
 mod agents_cmd;
@@ -19,16 +19,17 @@ mod commands;
 mod daemon;
 mod devices_cmd;
 mod home;
-mod launchd;
 mod limits_cmd;
 mod mcp;
 mod projects_cmd;
 mod runs_cmd;
+mod service;
 mod sessions_cmd;
 mod staff_cmd;
 mod tailscale;
 mod try_cmd;
 mod try_pty;
+mod which;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -50,7 +51,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the daemon in the foreground, or install it to run at login.
+    /// Run the daemon in the foreground, or install it as a service.
     Daemon {
         #[command(subcommand)]
         action: Option<DaemonAction>,
@@ -79,7 +80,7 @@ enum Command {
     Limits(limits_cmd::LimitsArgs),
     /// Run one prompt through Claude Code and answer its permission requests here (no daemon).
     Try(try_cmd::TryArgs),
-    /// List the Claude sessions running on this Mac, including ones cos didn't start.
+    /// List the Claude sessions running on this machine, including ones cos didn't start.
     Sessions(sessions_cmd::SessionsArgs),
     /// Run by Claude Code's hooks in sessions cos starts: forwards the hook to cos.
     #[command(hide = true)]
@@ -122,9 +123,10 @@ enum Command {
 
 #[derive(Subcommand)]
 enum DaemonAction {
-    /// Run the daemon as a launchd agent: start now, at every login, and after a crash.
+    /// Run the daemon as a service: start now, at login and after a crash
+    /// (a launchd agent on macOS, a systemd user unit on Linux).
     Install,
-    /// Stop the launchd agent and remove it.
+    /// Stop the service and remove it.
     Uninstall,
 }
 
@@ -152,7 +154,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
     match cli.command {
         Command::Daemon { action: None } => {
-            // Under launchd stderr is a log file, so no colours there.
+            // Under launchd or systemd stderr is a log file, so no colours there.
             tracing_subscriber::fmt()
                 .with_target(false)
                 .with_ansi(std::io::stderr().is_terminal())

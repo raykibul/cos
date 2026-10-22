@@ -1,5 +1,5 @@
-//! Runs the daemon as a launchd agent, so it starts at login and restarts if
-//! it exits. The Mac app will take this over later with `SMAppService`.
+//! The daemon as a launchd agent on macOS: starts at login and restarts if it
+//! exits. The Mac app may take this over later with `SMAppService`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,8 +10,6 @@ use anyhow::{Context, bail};
 use crate::home::CosHome;
 
 pub(crate) const LABEL: &str = "local.cos.daemon";
-/// Claude's config dir, when it isn't `~/.claude`.
-const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 
 pub(crate) fn plist_path() -> anyhow::Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
@@ -28,22 +26,10 @@ pub(crate) fn is_installed() -> bool {
 /// Returns the plist path.
 pub(crate) fn install(home: &CosHome) -> anyhow::Result<PathBuf> {
     home.prepare()?;
-    let exe = std::env::current_exe()?.canonicalize()?;
-    // launchd starts agents with a bare PATH; the daemon needs the user's to
-    // find `claude`, `git` and whatever the workers run.
-    let path_env = std::env::var("PATH").unwrap_or_default();
-    // Where Claude keeps its settings and session files, which `claude`
-    // agents run, and the chiefs' models, when set; launchd wouldn't pass them
-    // on otherwise.
-    let extra: Vec<(&str, String)> = [
-        CLAUDE_CONFIG_DIR,
-        crate::daemon::agents::CLAUDE_BIN_ENV,
-        crate::daemon::chief::MODEL_ENV,
-        crate::daemon::staff::MODEL_ENV,
-    ]
-    .into_iter()
-    .filter_map(|name| Some((name, std::env::var(name).ok().filter(|value| !value.is_empty())?)))
-    .collect();
+    let exe = super::current_exe()?;
+    // launchd starts agents with a bare PATH and none of your environment.
+    let path_env = super::service_path();
+    let extra = super::passthrough_env();
     let plist = plist_path()?;
 
     std::fs::create_dir_all(plist.parent().expect("plist path has a parent"))?;
@@ -163,6 +149,7 @@ fn launchctl(args: &[&str]) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::CLAUDE_CONFIG_DIR;
     use super::*;
 
     #[test]
