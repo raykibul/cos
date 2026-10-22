@@ -30,7 +30,7 @@ const tailnet = () => within(dialog().getByRole("region", { name: "On your tailn
 const row = (name: string) => within(tailnet().getByRole("listitem", { name }));
 const sidebar = () => within(screen.getByRole("complementary", { name: "Sidebar" }));
 
-describe("the tailnet in the Add a Mac sheet", () => {
+describe("the tailnet in the Add a machine sheet", () => {
   it("lists your devices with a chip each, above the manual fields", async () => {
     await openSheet();
     await waitFor(() =>
@@ -180,7 +180,7 @@ describe("the tailnet in the Add a Mac sheet", () => {
 describe("the tailnet in the host menu", () => {
   it("lists only Macs running cos that aren't saved, and adds one in a click", async () => {
     const { user, bridge } = await renderApp();
-    await user.click(sidebar().getByRole("button", { name: /^Mac:/ }));
+    await user.click(sidebar().getByRole("button", { name: /^Machine:/ }));
     await waitFor(() => expect(screen.getByText("On your tailnet")).toBeInTheDocument());
     const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
     expect(items).toEqual([
@@ -188,7 +188,8 @@ describe("the tailnet in the host menu", () => {
       expect.stringMatching(/^Studio/),
       expect.stringMatching(/^Travel laptop/),
       "mac-minicos running · 100.101.102.112",
-      "Add a Mac…",
+      "Rename This Mac…",
+      "Add a machine…",
       expect.stringMatching(/^Settings/),
     ]);
     await user.click(screen.getByRole("menuitem", { name: /^mac-mini/ }));
@@ -210,10 +211,10 @@ describe("the tailnet in the host menu", () => {
       await settle();
     });
     const user = userEvent.setup();
-    await user.click(sidebar().getByRole("button", { name: /^Mac:/ }));
+    await user.click(sidebar().getByRole("button", { name: /^Machine:/ }));
     await act(() => settle());
     expect(screen.queryByText("On your tailnet")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("menuitem")).toHaveLength(5);
+    expect(screen.getAllByRole("menuitem")).toHaveLength(6);
   });
 });
 

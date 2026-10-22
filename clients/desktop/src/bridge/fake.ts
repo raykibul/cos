@@ -53,6 +53,10 @@ export interface FakeOptions {
    * Mac.
    */
   approveAfterMs?: number;
+  /** cos's Chief of Staff starts with coordination paused and 3 updates waiting. */
+  staffPaused?: boolean;
+  /** How full cos's chief's context is, in percent of its 200K window (42 by default). */
+  chiefContext?: number;
 }
 
 interface Follower {
@@ -153,7 +157,10 @@ export class FakeDaemon {
     this.running = options.running ?? true;
     this.simulate = options.simulate ?? true;
     this.startedAt = new Date(this.fixtures.now - 90_100_000).toISOString();
-    const staff = makeStaff(this.fixtures.now);
+    const staff = makeStaff(this.fixtures.now, {
+      paused: options.staffPaused ?? false,
+      contextPercent: options.chiefContext ?? 42,
+    });
     this.agents.push(staff.agent);
     this.fixtures.screens[staff.agent.id] = staff.screen;
     this.staffDesk = new FakeStaffDesk(this, staff);
@@ -1195,6 +1202,9 @@ export class FakeDaemon {
   }
 }
 
+/** The longest name a host can have, as in the shell. */
+const MAX_HOST_NAME = 60;
+
 /** `host[:port]` → `host:port`, as the shell reads it (port 7700 by default). */
 export function parseAddress(address: string): string {
   const typed = address.trim();
@@ -1482,8 +1492,7 @@ export class FakeBridge implements Bridge {
   }
 
   async hostAdd(name: string, address: string): Promise<Host> {
-    const trimmed = name.trim();
-    if (!trimmed) throw { kind: "bad_request", message: "give the Mac a name" };
+    const trimmed = this.checkName(name, null);
     const full = parseAddress(address);
     const existing = this.hosts.find((h) => h.address === full);
     if (existing) {
@@ -1512,6 +1521,27 @@ export class FakeBridge implements Bridge {
       this.closeAll();
       this.current = "local";
     }
+    return this.hostsList();
+  }
+
+  /** A host's name as the shell checks it: trimmed, at most 60, unique. */
+  private checkName(name: string, id: string | null): string {
+    const trimmed = name.trim();
+    if (!trimmed) throw { kind: "bad_request", message: "give the machine a name" };
+    if ([...trimmed].length > MAX_HOST_NAME) {
+      throw { kind: "bad_request", message: `a name can be at most ${MAX_HOST_NAME} characters` };
+    }
+    const lower = trimmed.toLowerCase();
+    if (this.hosts.some((h) => h.id !== id && h.name.toLowerCase() === lower)) {
+      throw { kind: "bad_request", message: `"${trimmed}" is already the name of another machine` };
+    }
+    return trimmed;
+  }
+
+  async hostRename(id: string, name: string): Promise<HostList> {
+    const host = this.hostOf(id);
+    if (!host) throw { kind: "bad_request", message: `no saved host ${id}` };
+    host.name = this.checkName(name, id);
     return this.hostsList();
   }
 

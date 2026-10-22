@@ -40,7 +40,7 @@ describe("the Chief of Staff in the store", () => {
     );
   });
 
-  it("refetches a watched inbox on staff.inbox, and only that one", async () => {
+  it("refetches a watched inbox on staff.inbox, and only that one, with its chief's count", async () => {
     const { cos, daemon } = await startedStore();
     const unwatch = cos.watchInbox(1);
     await settle();
@@ -51,13 +51,17 @@ describe("the Chief of Staff in the store", () => {
       event: rawEvent(5000, "staff.inbox", { project_id: 2, count: 1 }),
     });
     await settle();
-    expect(requestLines(daemon)).toEqual([]);
+    // Its chief's updates_waiting moved; nobody watches its inbox.
+    expect(requestLines(daemon)).toEqual(["GET /v1/projects/2/staff"]);
+    daemon.requests.length = 0;
     cos.handle({
       type: "event",
       event: rawEvent(5001, "staff.inbox", { project_id: 1, count: 3 }),
     });
     await settle();
-    expect(requestLines(daemon)).toEqual(["GET /v1/projects/1/staff/inbox"]);
+    expect(new Set(requestLines(daemon))).toEqual(
+      new Set(["GET /v1/projects/1/staff", "GET /v1/projects/1/staff/inbox"]),
+    );
     unwatch();
   });
 

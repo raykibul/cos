@@ -1,6 +1,8 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FakeOptions } from "../bridge/fake";
+import { SPLIT_KEY } from "../pages/chief/split";
 import { fakeStore, settle } from "../test/harness";
 import { App } from "./App";
 import { type Page, createUiStore } from "./ui";
@@ -20,8 +22,8 @@ vi.mock("../terminal/engine", () => ({
     }),
 }));
 
-async function renderApp(page: Page = { kind: "waiting" }) {
-  const harness = fakeStore();
+async function renderApp(page: Page = { kind: "waiting" }, options: FakeOptions = {}) {
+  const harness = fakeStore(options);
   const ui = createUiStore({ page });
   render(<App cos={harness.cos} ui={ui} />);
   await act(async () => {
@@ -220,6 +222,95 @@ describe("chief page", () => {
       body: { model: "sonnet" },
     });
     expect(screen.getByRole("button", { name: "Model: Sonnet" })).toBeInTheDocument();
+  });
+
+  it("shows how full its context is, with the exact numbers in the tooltip", async () => {
+    await renderApp({ kind: "chief", id: 1 });
+    const meter = screen.getByRole("meter", { name: "84,123 of 200,000 tokens in context" });
+    expect(meter).toHaveTextContent("42% context");
+    expect(meter).toHaveAttribute("aria-valuenow", "42");
+  });
+
+  it("pauses coordination from the menu, says so above the composer, and resumes", async () => {
+    const { user, daemon } = await renderApp({ kind: "chief", id: 1 });
+    expect(screen.queryByRole("region", { name: "Coordination paused" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Chief of Staff actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Pause coordination/ }));
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "PUT",
+      path: "/v1/projects/1/staff",
+      body: { paused: true },
+    });
+    const strip = screen.getByRole("region", { name: "Coordination paused" });
+    expect(strip).toHaveTextContent("Coordination paused · no updates waiting");
+
+    await user.click(screen.getByRole("button", { name: "Chief of Staff actions" }));
+    expect(screen.getByRole("menuitem", { name: /^Resume coordination/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(within(strip).getByRole("button", { name: "Resume" }));
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "PUT",
+      path: "/v1/projects/1/staff",
+      body: { paused: false },
+    });
+    expect(screen.queryByRole("region", { name: "Coordination paused" })).toBeNull();
+  });
+
+  it("counts the updates waiting while paused, and they go once it resumes", async () => {
+    const { user, cos } = await renderApp({ kind: "chief", id: 1 }, { staffPaused: true });
+    const strip = screen.getByRole("region", { name: "Coordination paused" });
+    expect(strip).toHaveTextContent("Coordination paused · 3 updates waiting");
+    await user.click(within(strip).getByRole("button", { name: "Resume" }));
+    await act(() => settle());
+    expect(cos.get().staffs[1]).toMatchObject({ paused: false, updatesWaiting: 0 });
+  });
+});
+
+describe("the terminal split", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  const pane = () => screen.getByRole("complementary", { name: "The chief's terminal" });
+  const divider = () => screen.getByRole("separator", { name: "Resize the chief's terminal" });
+
+  it("keeps the width you set for next time, and double-click resets it", async () => {
+    const { user } = await renderApp({ kind: "chief", id: 1 });
+    await user.click(screen.getByRole("button", { name: "Show the chief's terminal" }));
+    // jsdom lays nothing out, so the default is the floor.
+    expect(pane().style.width).toBe("360px");
+    divider().focus();
+    await user.keyboard("{ArrowLeft}{ArrowLeft}");
+    expect(pane().style.width).toBe("408px");
+    expect(localStorage.getItem(SPLIT_KEY)).toBe("408");
+
+    await user.click(
+      screen.getByRole("button", { name: "Hide the chief's terminal", pressed: true }),
+    );
+    await user.click(screen.getByRole("button", { name: "Show the chief's terminal" }));
+    expect(pane().style.width).toBe("408px");
+    expect(divider()).toHaveAttribute("aria-valuenow", "408");
+
+    await user.dblClick(divider());
+    expect(pane().style.width).toBe("360px");
+    expect(localStorage.getItem(SPLIT_KEY)).toBeNull();
+  });
+
+  it("still opens and resizes when storage refuses", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    const { user } = await renderApp({ kind: "chief", id: 1 }, {});
+    await user.click(screen.getByRole("button", { name: "Show the chief's terminal" }));
+    divider().focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(pane().style.width).toBe("384px");
   });
 });
 

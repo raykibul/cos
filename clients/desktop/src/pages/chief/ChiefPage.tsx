@@ -1,13 +1,15 @@
 // A project's Chief of Staff, as a chat (docs/chief-of-staff.md, "App"):
-// a header with its state, model, terminal toggle and menu; the
-// conversation from its transcript; the agents waiting on you; and a
-// composer. Its own terminal opens in a split on the right (Ctrl-J).
+// a header with its state, how full its context is, model, terminal toggle
+// and menu; the conversation from its transcript; the agents waiting on you;
+// whether coordination is paused; and a composer. Its own terminal opens in
+// a resizable split on the right (Ctrl-J).
 
 import {
   ChevronDown,
   FolderGit2,
   LayoutGrid,
   MoreHorizontal,
+  Pause,
   Play,
   RotateCcw,
   Sparkles,
@@ -39,7 +41,10 @@ import { EmptyState, IconButton, Spinner, StateDot } from "../../ui/kit";
 import { type MenuItem, Menu } from "../../ui/Menu";
 import { PageHeader } from "../../ui/Page";
 import { ChiefComposer } from "./ChiefComposer";
+import { ContextRing } from "./ContextRing";
 import { Conversation } from "./Conversation";
+import { PausedStrip } from "./PausedStrip";
+import { SplitDivider } from "./SplitDivider";
 import { staffLabel, staffRunning, suggestions } from "./staffState";
 import { WaitingStrip } from "./WaitingStrip";
 
@@ -171,6 +176,27 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
           agentId !== null ? cos.stopAgent(agentId) : Promise.resolve(),
         ),
     },
+    staff?.paused
+      ? {
+          label: "Resume coordination",
+          icon: Play,
+          detail: "Updates from its agents go in again",
+          disabled: !canChange,
+          onSelect: () =>
+            void ui.perform("Couldn't resume coordination", () =>
+              cos.setStaffPaused(projectId, false),
+            ),
+        }
+      : {
+          label: "Pause coordination",
+          icon: Pause,
+          detail: "Updates wait until you resume; your messages still go through",
+          disabled: !canChange || !staff,
+          onSelect: () =>
+            void ui.perform("Couldn't pause coordination", () =>
+              cos.setStaffPaused(projectId, true),
+            ),
+        },
     "separator",
     {
       label: "All workspaces",
@@ -188,7 +214,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
 
   return (
     <div className="flex min-h-0 flex-1">
-      <section className="flex min-w-0 flex-1 flex-col" aria-label="Chief of Staff">
+      <section className="@container flex min-w-0 flex-1 flex-col" aria-label="Chief of Staff">
         <header
           data-tauri-drag-region
           className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5 select-none"
@@ -204,7 +230,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
                 <span
                   aria-label={`Claude account: ${account.account}`}
                   title={`The Claude account this project's agents use, from ${CLAUDE_CONFIG_DIR}${account.inherited ? " for all projects" : ""}`}
-                  className="inline-flex h-[18px] min-w-0 shrink items-center gap-1 rounded-full bg-subtle px-1.5 font-mono text-[10.5px] text-ink-3"
+                  className="hidden h-[18px] min-w-0 shrink items-center gap-1 rounded-full bg-subtle px-1.5 font-mono text-[10.5px] text-ink-3 @min-[34rem]:inline-flex"
                 >
                   <UserRound className="size-2.5 shrink-0" strokeWidth={2} aria-hidden />
                   <span className="truncate">{account.account}</span>
@@ -212,10 +238,12 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
               ) : null}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] leading-tight text-ink-3">
-              <p className="flex shrink-0 items-center gap-1.5" role="status">
-                <StateDot label={label} className="size-1.5" />
-                {label.title}
-                {working > 0 ? <span>· {pluralize(working, "agent")} working</span> : null}
+              <p className="flex min-w-0 items-center gap-1.5" role="status">
+                <StateDot label={label} className="size-1.5 shrink-0" />
+                <span className="truncate">
+                  <span>{label.title}</span>
+                  {working > 0 ? <span> · {pluralize(working, "agent")} working</span> : null}
+                </span>
               </p>
               {env ? (
                 <button
@@ -230,6 +258,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <ContextRing usage={transcript?.context} />
             <Menu
               align="end"
               width={220}
@@ -307,6 +336,9 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
 
         <div className="mx-auto w-full max-w-[740px] shrink-0 px-8 pb-5">
           <WaitingStrip requests={requests} chiefAgentId={agentId} />
+          {staff?.paused ? (
+            <PausedStrip projectId={projectId} waiting={staff.updatesWaiting} />
+          ) : null}
           <ChiefComposer
             ref={input}
             value={draft}
@@ -323,10 +355,11 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         </div>
       </section>
 
+      {terminalOpen && agentId !== null ? <SplitDivider /> : null}
       {terminalOpen && agentId !== null ? (
         <aside
           aria-label="The chief's terminal"
-          className="flex w-[46%] max-w-[760px] min-w-[360px] shrink-0 flex-col border-l border-line bg-page"
+          className="flex w-[46%] max-w-full min-w-0 shrink-0 flex-col bg-page"
         >
           <div
             data-tauri-drag-region

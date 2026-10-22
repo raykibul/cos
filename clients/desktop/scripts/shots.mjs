@@ -36,6 +36,13 @@ const shots = [
   ],
   ["chief-empty", "page=chief:2"],
   ["chief-terminal", "page=chief:1&terminal"],
+  ["chief-paused", "page=chief:1&paused"],
+  ["chief-context-high", "page=chief:1&context=92"],
+  [
+    "chief-menu-pause",
+    "page=chief:1",
+    (page) => page.getByRole("button", { name: "Chief of Staff actions" }).click(),
+  ],
   ["sidebar-expanded", "page=workspace:3"],
   ["waiting", "page=waiting"],
   [
@@ -66,17 +73,28 @@ const shots = [
   [
     "host-picker",
     "page=waiting",
-    (page) => page.getByRole("button", { name: "Mac: This Mac" }).click(),
+    (page) => page.getByRole("button", { name: "Machine: This Mac" }).click(),
   ],
   [
     "host-picker-tailnet",
     "page=waiting",
     async (page) => {
-      await page.getByRole("button", { name: "Mac: This Mac" }).click();
+      await page.getByRole("button", { name: "Machine: This Mac" }).click();
       await page.getByText("On your tailnet").waitFor();
     },
   ],
   ["sheet-add-host", "page=waiting&dialog=addHost"],
+  ["sheet-rename-host", "page=settings&dialog=renameHost:h1"],
+  [
+    "sheet-rename-host-taken",
+    "page=settings&dialog=renameHost:h1",
+    async (page) => {
+      const name = page.getByRole("dialog").getByLabel("Name", { exact: true });
+      await name.fill("Travel laptop");
+      await name.press("Enter");
+      await page.getByRole("dialog").getByRole("alert").waitFor();
+    },
+  ],
   [
     "sheet-add-host-picked",
     "page=waiting&dialog=addHost",
@@ -130,6 +148,22 @@ const shots = [
     "remote-access-firewall",
     "page=settings&firewall",
     (page) => page.getByRole("list", { name: "Devices" }).scrollIntoViewIfNeeded(),
+  ],
+  // Last, and held mid-drag: a released drag saves the width, which later
+  // shots in the same browser context would pick up.
+  [
+    "chief-terminal-wide",
+    "page=chief:1&terminal",
+    async (page) => {
+      const divider = page.getByRole("separator", { name: "Resize the chief's terminal" });
+      const box = await divider.boundingBox();
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x - 140, y, { steps: 4 });
+      await page.mouse.move(x - 260, y, { steps: 4 });
+    },
   ],
 ];
 

@@ -1,8 +1,9 @@
-// The host picker at the top of the sidebar (This Mac, the saved Macs, and
-// "Add a Mac…"), and the footer line saying which host the app talks to.
-// Self-contained, so the sidebar only mounts them.
+// The host picker at the top of the sidebar (This Mac, the saved machines,
+// "Rename…" for the one in use and "Add a machine…"), and the footer line
+// saying which host the app talks to. Self-contained, so the sidebar only
+// mounts them.
 
-import { ChevronDown, Globe, Laptop, Plus, Settings, Smartphone } from "lucide-react";
+import { ChevronDown, Globe, Laptop, Pencil, Plus, Settings, Smartphone } from "lucide-react";
 import { useState } from "react";
 import type { TailnetPeer } from "../api/models";
 import { useApp, useCos, useNow } from "../app/context";
@@ -61,7 +62,7 @@ export function HostAvatar({
   );
 }
 
-/** The host in use, as a menu of every host plus "Add a Mac…". */
+/** The host in use, as a menu of every host plus "Rename…" and "Add a machine…". */
 export function HostPicker() {
   const { cos, ui } = useApp();
   const host = useCos((s) => s.host) ?? thisMac;
@@ -109,11 +110,16 @@ export function HostPicker() {
         ]
       : []),
     "separator",
-    { label: "Add a Mac…", icon: Plus, onSelect: () => ui.open({ kind: "addHost" }) },
+    {
+      label: `Rename ${host.name}…`,
+      icon: Pencil,
+      onSelect: () => ui.open({ kind: "renameHost", hostId: host.id }),
+    },
+    { label: "Add a machine…", icon: Plus, onSelect: () => ui.open({ kind: "addHost" }) },
     {
       label: "Settings",
       icon: Settings,
-      detail: "Macs and remote access",
+      detail: "Machines and remote access",
       onSelect: () => ui.navigate({ kind: "settings" }),
     },
   ];
@@ -127,7 +133,7 @@ export function HostPicker() {
         trigger={(props) => (
           <button
             type="button"
-            aria-label={`Mac: ${host.name}`}
+            aria-label={`Machine: ${host.name}`}
             title={host.address ?? "This Mac, through its socket"}
             {...props}
             className="flex h-9 w-full items-center gap-2.5 rounded-lg px-1.5 text-left transition-colors hover:bg-subtle aria-expanded:bg-subtle"
