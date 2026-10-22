@@ -83,9 +83,18 @@ install-test: linux-image
 		done; \
 	done
 
-# The npm installer's tests (npm/), in Node's image.
+# `install.sh --app` on this Mac (natively: it needs ditto, xattr and
+# pgrep), against a fake release, with HOME and the app folder under
+# target/app-install-test. It never touches /Applications or a running app.
+.PHONY: app-install-test
+
+app-install-test:
+	sh scripts/test-install-app.sh
+
+# The npm installer's tests (npm/), in Node's image, as a normal user so
+# read-only folders are read-only.
 npm-test:
-	docker run --rm -v "$(CURDIR)/npm":/pkg:ro -w /pkg node:22 node --test
+	docker run --rm -u node -v "$(CURDIR)/npm":/pkg:ro -w /pkg node:22 node --test
 
 shellcheck:
 	docker run --rm -v "$(CURDIR)":/mnt:ro -w /mnt koalaman/shellcheck:v0.10.0 \
@@ -154,3 +163,37 @@ desktop: ui-build
 desktop-dev:
 	@echo "desktop-dev loads http://localhost:5173: run 'make ui-dev' in another terminal first."
 	cd $(TAURI_DIR) && cargo tauri dev
+
+# A release's assets, built here the way .github/workflows/release.yml
+# builds them, into dist/release, to check before tagging: the Linux
+# tarballs (make linux, in Docker), the Mac CLI for both CPUs and the
+# universal app zip (natively), and SHA256SUMS over all of them. Needs
+# `rustup target add aarch64-apple-darwin x86_64-apple-darwin` and the
+# Tauri CLI. The app gets the workspace version through --config, so no
+# file in the repo changes.
+RELEASE_DIR := dist/release
+MAC_TARGETS := aarch64-apple-darwin x86_64-apple-darwin
+UNIVERSAL_APP := $(TAURI_DIR)/target/universal-apple-darwin/release/bundle/macos/cos.app
+
+.PHONY: release-local release-linux release-mac release-desktop
+
+release-local: release-linux release-mac release-desktop
+	cd $(RELEASE_DIR) && shasum -a 256 cos-*.tar.gz cos-desktop-*.zip >SHA256SUMS && cat SHA256SUMS
+	@echo "Release assets for $(VERSION) in $(CURDIR)/$(RELEASE_DIR)"
+
+release-linux: linux
+	@for target in $(LINUX_TARGETS); do \
+		sh scripts/package-release.sh dist/cos-$(VERSION)-$$target $$target $(RELEASE_DIR) || exit 1; \
+	done
+
+release-mac:
+	@for target in $(MAC_TARGETS); do \
+		CARGO_PROFILE_RELEASE_STRIP=symbols MACOSX_DEPLOYMENT_TARGET=11.0 \
+			cargo build --release --locked -p cos --bin cos --target $$target || exit 1; \
+		sh scripts/package-release.sh target/$$target/release/cos $$target $(RELEASE_DIR) || exit 1; \
+	done
+
+release-desktop: ui-build
+	cd $(TAURI_DIR) && CARGO_PROFILE_RELEASE_STRIP=symbols cargo tauri build \
+		--target universal-apple-darwin --bundles app --config '{"version":"$(VERSION)"}'
+	sh scripts/package-desktop.sh $(UNIVERSAL_APP) $(VERSION) $(RELEASE_DIR)

@@ -15,10 +15,19 @@ It picks the build for your OS and CPU from the latest [release](https://github.
 - `COS_VERSION=v0.1.0` installs that release instead of the latest.
 - `COS_INSTALL_DIR=…` picks another folder.
 
+The Mac app (macOS 13 or later, Apple Silicon or Intel):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/raykibul/cos/main/install.sh | sh -s -- --app
+```
+
+It installs `cos.app` in `/Applications`, or in `~/Applications` when `/Applications` isn't writable, quitting a running copy first. Add `--with-cli` to install the CLI as well. The app isn't signed with an Apple Developer ID, so the installer clears macOS's quarantine flag. A copy downloaded with a browser and opened by double-click would be blocked by Gatekeeper. See [docs/releasing.md](docs/releasing.md#the-mac-app).
+
 With Node 18 or later, you can install through npm instead:
 
 ```sh
 npx cos-agent@latest           # install or upgrade cos in ~/.local/bin
+npx cos-agent@latest app       # install or upgrade the Mac app
 npx cos-agent status           # run cos, installing it first if needed
 ```
 
