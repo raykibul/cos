@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { isNotFound, messageOf } from "../api/errors";
-import type { Agent, Approval, Run, RunTask } from "../api/models";
+import { type Agent, type Approval, type Run, type RunTask, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { approvalDetail, approvalOutcome, approvalTone } from "../domain/approvals";
 import { agentLabel, isAlive, pluralize, presetTitle, runLabel, taskLabel } from "../domain/labels";
@@ -152,7 +152,7 @@ function RunView({ run }: { run: Run }) {
       >
         {project ? (
           <>
-            <Crumb onClick={() => ui.navigate({ kind: "project", id: project.id })}>
+            <Crumb onClick={() => ui.navigate({ kind: "chief", id: project.id })}>
               {project.name}
             </Crumb>
             <CrumbSep />
@@ -161,7 +161,7 @@ function RunView({ run }: { run: Run }) {
         {workspace ? (
           <>
             <Crumb onClick={() => ui.navigate({ kind: "workspace", id: workspace.id })}>
-              {workspace.title}
+              {workspaceName(workspace)}
             </Crumb>
             <CrumbSep />
           </>

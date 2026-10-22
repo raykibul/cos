@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { messageOf } from "../api/errors";
+import { projectSlug, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../app/context";
 import type { DialogState } from "../app/ui";
 import { presetExplanation, presetTitle, presets } from "../domain/labels";
@@ -117,7 +118,9 @@ function AddProject() {
     if (!trimmed) return;
     run(async () => {
       const project = await cos.addProject(trimmed);
-      ui.navigate({ kind: "project", id: project.id });
+      // A new project opens on its Chief of Staff, ready for a first message.
+      ui.navigate({ kind: "chief", id: project.id });
+      ui.setExpanded(project.id, true);
     });
   };
   return (
@@ -206,17 +209,22 @@ function NewWorkspace({ projectId }: { projectId: number }) {
   return (
     <Dialog
       title={`New workspace in ${project.name}`}
-      description="A worktree on its own branch, named after a city."
+      description={`A worktree on its own branch, ${projectSlug(project.name)}/<city>. cos picks the city.`}
       onClose={close}
       onSubmit={() =>
         run(async () => {
           const workspace = await cos.createWorkspace(projectId, base, title);
           ui.navigate({ kind: "workspace", id: workspace.id });
+          ui.setExpanded(projectId, true);
         })
       }
       footer={<Footer busy={busy} label="Create workspace" onCancel={close} />}
     >
-      <Field label="Title" htmlFor="workspace-title" hint="Optional. What you'll do there.">
+      <Field
+        label="Title"
+        htmlFor="workspace-title"
+        hint="Optional. Without one, the workspace goes by its city."
+      >
         <input
           id="workspace-title"
           className={inputClass}
@@ -330,7 +338,7 @@ function RemoveWorkspace({ workspaceId }: { workspaceId: number }) {
   return (
     <Dialog
       width="sm"
-      title={`Remove ${workspace.title}?`}
+      title={`Remove ${workspaceName(workspace)}?`}
       description={
         <>
           The folder is deleted only if it has no uncommitted changes. The branch{" "}
@@ -364,7 +372,7 @@ function NewAgentSheet({ workspaceId }: { workspaceId: number }) {
   return (
     <Dialog
       width="lg"
-      title={`New agent in ${workspace.title}`}
+      title={`New agent in ${workspaceName(workspace)}`}
       description="Claude Code starts in the workspace folder. Leave the prompt empty to start it idle."
       onClose={ui.close}
     >
@@ -412,7 +420,11 @@ function RemoveAgent({ agentId }: { agentId: number }) {
       onSubmit={() =>
         run(async () => {
           await cos.removeAgent(agentId);
-          ui.navigate({ kind: "workspace", id: agent.workspaceId });
+          ui.navigate(
+            agent.workspaceId !== null
+              ? { kind: "workspace", id: agent.workspaceId }
+              : { kind: "waiting" },
+          );
         })
       }
       footer={<Footer busy={busy} label="Remove" danger onCancel={close} />}
@@ -483,7 +495,7 @@ function NewRunSheet({ workspaceId }: { workspaceId: number }) {
     <Dialog
       width="lg"
       title="New run"
-      description={`A chief plans the goal in ${workspace.title} as tasks. You approve the plan before any worker starts.`}
+      description={`A chief plans the goal in ${workspaceName(workspace)} as tasks. You approve the plan before any worker starts.`}
       onClose={close}
       onSubmit={() =>
         ok &&
