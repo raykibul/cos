@@ -1,0 +1,25 @@
+[package]
+name = "cos-bridge"
+description = "The desktop app's link to the cos daemon: requests, the event stream and terminal streams over the Unix socket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+base64.workspace = true
+tempfile.workspace = true
+tokio-stream.workspace = true
+
+[lints]
+workspace = true

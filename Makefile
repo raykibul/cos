@@ -76,3 +76,18 @@ ui-dev: ui-install
 # .sandbox/desktop-shots (headless Chromium in Playwright's image).
 ui-shots: ui-build
 	$(NODE_RUN) -t -e SHOTS_DIR=/work/.sandbox/desktop-shots $(PLAYWRIGHT_IMAGE) node scripts/shots.mjs
+
+# The desktop app (Tauri), built natively on the Mac. `make desktop` builds
+# the UI in Docker, then bundles cos.app. `make desktop-dev` runs the app
+# against Vite's dev server, so start `make ui-dev` in another terminal first.
+TAURI_DIR := clients/desktop/src-tauri
+
+.PHONY: desktop desktop-dev
+
+desktop: ui-build
+	cd $(TAURI_DIR) && cargo tauri build --bundles app
+	@echo "Built $(CURDIR)/$(TAURI_DIR)/target/release/bundle/macos/cos.app"
+
+desktop-dev:
+	@echo "desktop-dev loads http://localhost:5173: run 'make ui-dev' in another terminal first."
+	cd $(TAURI_DIR) && cargo tauri dev
