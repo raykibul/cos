@@ -1,6 +1,6 @@
 # Releasing cos
 
-Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. Asset names carry no version, so `https://github.com/raykibul/cos/releases/latest/download/cos-<target>.tar.gz` always points at the newest build, and `.../cos-desktop-universal-apple-darwin.zip` at the newest Mac app. `install.sh` and the `cos-agent` npm package both depend on that.
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. Asset names carry no version, so `https://github.com/raykibul/cos/releases/latest/download/cos-<target>.tar.gz` always points at the newest build, and `.../cos-desktop-universal-apple-darwin.zip` at the newest Mac app. `install.sh`, `cos upgrade` and the `cos-agent` npm package all depend on that.
 
 ## Steps
 
@@ -75,6 +75,20 @@ With a Developer ID signature and notarization, Gatekeeper would accept a browse
 - **The bundle id** `local.cos.desktop` should become a reverse-DNS name you own before the first signed release. It also names the app's settings folder, so the hosts list would need moving.
 - The CLI binaries could be signed and notarized the same way (`codesign --options runtime`, then `notarytool` on a zip), though downloads with `curl` don't need it.
 
+## Upgrading with `cos upgrade`
+
+`cos upgrade` upgrades an installed `cos` to the latest release, along with the Mac app and the daemon's service. It reuses `install.sh` rather than downloading releases itself, so the checksum check lives in one place and `cos` needs no TLS stack. The steps:
+
+1. **The latest release:** the tag at the end of the `Location` header of `curl -fsSI https://github.com/raykibul/cos/releases/latest` (`wget` if there's no `curl`), compared with this binary's version as semver. Without `--version` it only goes forward: a build newer than the latest release is left alone. `--version v0.1.5` goes to that release, older ones included. `--check` prints the installed, latest, app and daemon versions and stops.
+2. **Where:** this binary's real path (`current_exe`, symlinks resolved). A binary inside a Cargo `target/` folder, or inside a git checkout of a Cargo project, is refused ("built from source at …; update it with `git pull && make build`"); `--force` overrides. A folder you can't write to is refused, with `sudo cos upgrade` or `COS_INSTALL_DIR` as the way out. Under `sudo`, only the CLI is upgraded.
+3. **The CLI:** it downloads `install.sh` from `https://raw.githubusercontent.com/raykibul/cos/<tag>/install.sh`, so the script matches its release, and runs it with `sh -s` on stdin, with `COS_VERSION=<tag>`, `COS_INSTALL_DIR=<this binary's folder>` and `COS_NO_SERVICE_HINT=1`. The installer's output goes straight to the terminal. Afterwards the binary must report the new version.
+4. **The Mac app** (macOS, unless `--no-app`): if `cos.app` is in `/Applications` (or `COS_APP_DIR`) or `~/Applications`, and its `CFBundleShortVersionString` isn't the new version, it runs `install.sh --app` with `COS_APP_DIR` set to that folder. It first notes whether `cos-desktop` is running for you (`pgrep -x -U`), since the installer quits it, and reopens it with `open` afterwards. An app you can't write to is left alone, and you get the `sudo` command.
+5. **The daemon** (unless `--no-restart`): if it answers on the socket with an older version and the installed plist or unit runs this binary, it is restarted with `launchctl kickstart -k gui/<uid>/local.cos.daemon` or `systemctl --user restart cos.service`, and `cos upgrade` waits up to 20 s for `/v1/status` to report the new version. A restart interrupts agents that aren't `idle`, `exited` or `interrupted`, so it lists them and asks first. `--yes` skips the question; with no terminal, it prints the command instead. A service that runs another binary, or a daemon that isn't a service, is left running, with a note. The same check runs when the CLI is already current, so `cos upgrade` after a manual `install.sh` restarts the daemon too.
+
+`cos upgrade --host` is refused: run it on that machine.
+
+For tests, `COS_DOWNLOAD_BASE` points at a release folder, as for `install.sh`. A `file://` folder has no redirect, so the latest tag is read from `<base>/latest/tag`, which `scripts/fake-release.sh` writes. `COS_INSTALL_SCRIPT` replaces the tag's `install.sh` with a path or URL. The Rust tests (`crates/cos/tests/upgrade.rs`, in `make test`) upgrade a copy of `cos` against such a folder, and `make install-test` runs `cos upgrade` from the released Linux builds. Only a real release shows that GitHub's redirect and the tag's `install.sh` are where `cos upgrade` expects them.
+
 ## npm
 
 The `cos-agent` package (`npm/`) is a small installer with no dependencies. `npx cos-agent@latest` installs or upgrades `cos` in `~/.local/bin`, `npx cos-agent app` installs the Mac app as above, and `npx cos-agent <args>` runs `cos <args>`, installing it first if needed. It never runs cos from npx's cache, because `cos daemon install` records the binary's path.
@@ -96,6 +110,8 @@ make app-install-test   # install.sh --app on this Mac, against a fake release
 make npm-test shellcheck actionlint
 make release-local      # every release asset, into dist/release
 ```
+
+`make test` includes `cos upgrade` against a fake release. `make install-test` also runs `cos upgrade` from the Linux builds: up to date, `--check`, and a tampered release.
 
 `make app-install-test` runs `scripts/test-install-app.sh` natively, since it needs `ditto`, `xattr` and `pgrep`. It builds a tiny fake `cos.app` and CLI, lays them out as a release, and points `HOME`, `COS_APP_DIR` and `COS_DOWNLOAD_BASE` into `target/app-install-test`. It covers an install, an upgrade (same folder, old files gone, quarantine cleared), a user-owned app in a read-only folder, the `~/Applications` fallbacks, a checksum mismatch, `--with-cli`, and quitting a running app. A process with another name plays the running app, so the real one is never touched.
 

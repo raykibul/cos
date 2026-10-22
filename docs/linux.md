@@ -51,7 +51,9 @@ Then log in on the headless box. Pick one:
 curl -fsSL https://raw.githubusercontent.com/raykibul/cos/main/install.sh | sh
 ```
 
-This puts the right static build for the box (`x86_64` or `aarch64`) in `~/.local/bin/cos` and checks it against the release's `SHA256SUMS`. If `~/.local/bin` isn't on your `PATH`, it says so. The Amazon Linux and Debian profiles add it once the folder exists, so log out and back in. `npx cos-agent@latest` does the same where Node is installed. Run either again later to upgrade, then restart the service as it tells you (`systemctl --user restart cos.service`).
+This puts the right static build for the box (`x86_64` or `aarch64`) in `~/.local/bin/cos` and checks it against the release's `SHA256SUMS`. If `~/.local/bin` isn't on your `PATH`, it says so. The Amazon Linux and Debian profiles add it once the folder exists, so log out and back in. `npx cos-agent@latest` does the same where Node is installed.
+
+To upgrade later, run `cos upgrade`. It installs the latest release over `~/.local/bin/cos` with the same installer, then restarts the service (`systemctl --user restart cos.service`) and waits for the new version to answer. If agents are at work, it lists them and asks first. With no terminal to ask in, as in a script or `ssh box cos upgrade`, it doesn't restart then and prints the command instead; add `--yes` to restart anyway. Chiefs of Staff resume by themselves after the restart, and other agents can be resumed. `cos upgrade --check` only compares versions.
 
 To build it yourself, run `make linux` on any machine with Docker (the Mac included). It writes `dist/cos-<version>-<target>.tar.gz`. Copy the file over and run `tar -xzf cos-*.tar.gz -C ~/.local/bin`.
 

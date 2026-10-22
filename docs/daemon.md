@@ -11,6 +11,7 @@ It runs on macOS and Linux. To run it on a Linux server such as EC2 and drive it
 | `cos daemon` | Run in the foreground. Ctrl-C or SIGTERM stops it cleanly, asking its agents to exit first. |
 | `cos daemon install` | Run it as a service: on macOS a launchd agent (`local.cos.daemon`) that starts now, at every login, and again about 10 s after a crash; on Linux a systemd user unit (`~/.config/systemd/user/cos.service`), enabled and started, restarted 10 s after a crash. See [Running as a service](#running-as-a-service). |
 | `cos daemon uninstall` | Stop the service and remove its plist or unit. |
+| `cos upgrade` | Upgrade `cos` to the latest release, and the Mac app with it, then restart the service on the new binary (asking first if agents are at work). `--check` only compares versions. See "Upgrading with `cos upgrade`" in [releasing.md](releasing.md#upgrading-with-cos-upgrade). |
 | `cos status` | Whether the daemon is running, and its pid, uptime, event count and service state. Exits 1 when it isn't running. |
 | `cos events` | The last 20 events. `-n 50` for more, `--after N` to start after event N, `--json` for one JSON object per line. |
 | `cos events -f` | Keep printing new events. If the daemon restarts, it waits and carries on from the last event it printed. |
@@ -42,6 +43,7 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 - **macOS:** a launchd agent, `~/Library/LaunchAgents/local.cos.daemon.plist`, in your login session (`gui/<uid>`).
 - **Linux:** a systemd user unit, `~/.config/systemd/user/cos.service` (`$XDG_CONFIG_HOME` if set). `install` runs `systemctl --user daemon-reload`, `enable` and `restart`; `uninstall` runs `disable --now`, removes the file and reloads. The unit has `Restart=on-failure`, `KillMode=mixed` (SIGTERM to the daemon alone, which stops its agents itself) and appends output to `logs/daemon.log`. systemd stops a user's services when their last session ends unless lingering is on, so `install` warns when `loginctl` says it's off; on a server, run `sudo loginctl enable-linger $USER`. `install` needs your user's systemd, so run it in an SSH login rather than a `su` shell. See [linux.md](linux.md).
 - **Elsewhere,** or without systemd (containers), `install` fails with a message; run `cos daemon` under your own supervisor.
+- **Upgrading:** `cos upgrade` replaces the binary, then restarts the service if its plist or unit runs that binary (`launchctl kickstart -k gui/<uid>/local.cos.daemon`, or `systemctl --user restart cos.service`) and waits for `/v1/status` to report the new version. The daemon stops as it does for any SIGTERM: agents are marked `interrupted`, and Chiefs of Staff resume by themselves.
 
 ## Event log
 
