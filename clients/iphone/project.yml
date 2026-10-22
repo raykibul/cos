@@ -1,0 +1,79 @@
+# The iPhone app. `xcodegen generate` writes Cos.xcodeproj from this file;
+# the project is generated, so it isn't committed. See README.md.
+name: Cos
+options:
+  bundleIdPrefix: local.cos
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+packages:
+  CosKit:
+    path: ../shared/CosKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.2"
+    CURRENT_PROJECT_VERSION: "1"
+    # Automatic signing with no team: the simulator needs none. To run on
+    # your own iPhone, pick your (free) personal team in Xcode, which only
+    # changes the generated project. Never commit a team id here.
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  Cos:
+    type: application
+    platform: iOS
+    sources:
+      - path: Cos
+    dependencies:
+      - package: CosKit
+    settings:
+      base:
+        PRODUCT_NAME: Cos
+        PRODUCT_BUNDLE_IDENTIFIER: local.cos.iphone
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: cos
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # Only asked if you add a host by a local (not tailnet) address.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "cos connects to the cos daemon on your Mac or server."
+
+  CosTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: CosTests
+    dependencies:
+      - target: Cos
+      - package: CosKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: local.cos.iphone.tests
+
+schemes:
+  Cos:
+    build:
+      targets:
+        Cos: all
+        CosTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - CosTests
+      gatherCoverageData: false
+    archive:
+      config: Release
