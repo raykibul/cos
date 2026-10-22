@@ -1,16 +1,13 @@
-// Pieces several pages share: approval buttons, question cards and agent rows.
+// Pieces several pages share: approval buttons and question cards.
 
 import { MessageCircleQuestion, SendHorizontal } from "lucide-react";
 import { useState } from "react";
 import { isConflict } from "../api/errors";
-import type { Agent, Approval, Question } from "../api/models";
+import type { Approval, Question } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
-import { approvalDetail } from "../domain/approvals";
-import { agentLabel } from "../domain/labels";
 import { run as runOf } from "../store/selectors";
-import { cx } from "../ui/cx";
 import { relativeTime } from "../ui/format";
-import { AutoTextarea, Button, StateBadge } from "../ui/kit";
+import { AutoTextarea, Button } from "../ui/kit";
 
 /** Deny and Allow. A request already answered in the terminal just goes away. */
 export function ApprovalButtons({
@@ -146,40 +143,5 @@ export function QuestionCard({
         </button>
       </div>
     </article>
-  );
-}
-
-/** One agent in a list: state, title, details and the last thing it said. */
-export function AgentListRow({ agent, approval }: { agent: Agent; approval?: Approval }) {
-  const { ui } = useApp();
-  const now = useNow();
-  const label = agentLabel(agent.state);
-  return (
-    <button
-      type="button"
-      onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
-      className="group flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-subtle/60"
-    >
-      <div className="flex w-full items-center gap-2.5">
-        <span className="truncate text-[13.5px] font-medium text-ink">{agent.title}</span>
-        <StateBadge label={label} />
-        <span className="ml-auto shrink-0 text-[12px] text-ink-3">
-          {[agent.role !== "user" ? agent.role : null, agent.model ?? "default model"]
-            .filter(Boolean)
-            .join(" · ")}
-          {" · "}
-          {relativeTime(agent.lastActivityMs ?? agent.startedMs, now)}
-        </span>
-      </div>
-      {approval ? (
-        <p className="truncate font-mono text-[12px] text-accent-ink">
-          Wants to run: {approvalDetail(approval)}
-        </p>
-      ) : agent.lastMessage ? (
-        <p className={cx("line-clamp-2 text-[12.5px] leading-snug text-ink-2")}>
-          {agent.lastMessage}
-        </p>
-      ) : null}
-    </button>
   );
 }

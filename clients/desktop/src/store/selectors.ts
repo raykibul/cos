@@ -12,7 +12,6 @@ import type {
   Workspace,
 } from "../api/models";
 import { CLAUDE_CONFIG_DIR, accountOf, sortedNames } from "../api/env";
-import type { Staff } from "../api/staff";
 import type { Page } from "../app/ui";
 import { isForYou } from "../domain/approvals";
 import { isAlive } from "../domain/labels";
@@ -159,10 +158,6 @@ export function waitingCountForRun(s: DaemonState, runId: number): number {
 /** A project's workspaces, newest first. */
 export function workspacesNewestFirst(project: Project): Workspace[] {
   return [...project.workspaces].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
-}
-
-export function staffOf(s: DaemonState, projectId: number): Staff | undefined {
-  return s.staffs[projectId];
 }
 
 /** The chief's runtime agent, once it has started. */
