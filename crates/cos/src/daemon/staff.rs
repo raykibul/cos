@@ -211,7 +211,11 @@ impl Staff {
             worktree,
             branch,
             working_agents: count(&[AgentState::Starting, AgentState::Working]),
-            waiting_on_you: count(&[AgentState::WaitingApproval, AgentState::NeedsTrust]),
+            waiting_on_you: count(&[
+                AgentState::WaitingApproval,
+                AgentState::NeedsTrust,
+                AgentState::NeedsLogin,
+            ]),
         })
     }
 

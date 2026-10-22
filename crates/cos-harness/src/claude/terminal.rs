@@ -14,7 +14,7 @@ use std::time::Duration;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{broadcast, mpsc};
 
-use super::{ClaudeOptions, SESSION_MARKERS, hooks, lock};
+use super::{ClaudeOptions, SESSION_MARKERS, TERMINAL_ENV, hooks, lock};
 use crate::HarnessError;
 
 /// How long to keep reading output after the process has exited.
@@ -184,13 +184,17 @@ impl ClaudeTerminal {
         let mut command = CommandBuilder::new(&options.claude.binary);
         command.args(options.args());
         command.cwd(&options.claude.cwd);
+        // The daemon's environment, then the extra variables, then cos's
+        // own, so nothing in `env` can replace what cos relies on (see
+        // `reserved_env_names`).
+        for (key, value) in &options.claude.env {
+            command.env(key, value);
+        }
         for name in SESSION_MARKERS {
             command.env_remove(name);
         }
-        command.env("TERM", "xterm-256color");
-        command.env("COLORTERM", "truecolor");
-        for (key, value) in &options.claude.env {
-            command.env(key, value);
+        for (name, value) in TERMINAL_ENV {
+            command.env(name, value);
         }
         if let Some(hooks) = &options.hooks {
             command.env(hooks::SOCKET_ENV, &hooks.socket);
@@ -369,6 +373,14 @@ impl ClaudeTerminal {
         self.screen().contains(TRUST_ANSWER)
     }
 
+    /// True while Claude shows its login screen, or says it isn't logged
+    /// in, which is what a session in a Claude config dir (`CLAUDE_CONFIG_DIR`)
+    /// nobody has logged into shows first. Read like [`Self::asks_for_trust`]:
+    /// this and the trust dialog are the only screen reads.
+    pub fn asks_for_login(&self) -> bool {
+        is_login_screen(&self.screen())
+    }
+
     /// Answers the trust dialog with yes. Only for folders the user has told
     /// cos to trust: Claude remembers the answer for every later session.
     ///
@@ -429,6 +441,19 @@ impl Drop for ClaudeTerminal {
     fn drop(&mut self) {
         self.kill();
     }
+}
+
+/// Text on Claude's first-run and login screens: the theme picker a new
+/// config dir starts with, the login method picker, and the notice a
+/// logged-out session shows.
+const LOGIN_MARKERS: [&str; 3] = [
+    "Select login method",
+    "Choose the text style",
+    "Not logged in · Please run /login",
+];
+
+fn is_login_screen(screen: &str) -> bool {
+    LOGIN_MARKERS.iter().any(|marker| screen.contains(marker))
 }
 
 fn size(value: u16) -> NonZeroU16 {
@@ -575,6 +600,18 @@ mod tests {
         assert!(!args.contains(&"--setting-sources".to_owned()));
         assert!(!args.contains(&"--strict-mcp-config".to_owned()));
         assert!(!args.contains(&"--".to_owned()));
+    }
+
+    #[test]
+    fn spots_the_login_screens() {
+        assert!(is_login_screen(
+            " Select login method:\n > 1. Claude account with subscription"
+        ));
+        assert!(is_login_screen(
+            "Let's get started.\n Choose the text style that looks best"
+        ));
+        assert!(is_login_screen("  Not logged in · Please run /login"));
+        assert!(!is_login_screen("> how do I log in to the app?\n"));
     }
 
     #[test]

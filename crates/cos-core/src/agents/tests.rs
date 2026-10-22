@@ -55,8 +55,11 @@ fn an_agent_goes_from_starting_to_exited() {
         "nothing is logged before the process is up"
     );
 
-    let agent = agents.started(agent.id, Some(42)).unwrap();
+    let agent = agents
+        .started(agent.id, Some(42), &["CLAUDE_CONFIG_DIR".to_owned()])
+        .unwrap();
     assert_eq!(agent.pid, Some(42));
+    assert_eq!(agent.env_names, ["CLAUDE_CONFIG_DIR"]);
     assert_eq!(
         agents.set_state(agent.id, AgentState::Working).unwrap(),
         Some(AgentState::Starting)

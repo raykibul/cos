@@ -15,7 +15,8 @@ use crate::home::CosHome;
 
 #[derive(clap::Args)]
 pub(crate) struct SessionsArgs {
-    /// Claude config dir to read. Repeatable. Default: $CLAUDE_CONFIG_DIR and ~/.claude.
+    /// Claude config dir to read. Repeatable. Default: $CLAUDE_CONFIG_DIR, ~/.claude, and
+    /// the CLAUDE_CONFIG_DIR set for agents in cos (`cos env`), globally or per project.
     #[arg(long = "claude-config", value_name = "DIR")]
     config_dirs: Vec<PathBuf>,
     /// Print JSON, one session per line.
@@ -28,14 +29,17 @@ pub(crate) async fn run(home: &CosHome, args: SessionsArgs) -> anyhow::Result<Ex
         !Client::new(home.socket()).is_remote(),
         "`cos sessions` reads this machine's Claude sessions; it doesn't work with --host"
     );
+    let client = Client::new(home.socket());
+    // Matching sessions to workspaces is a bonus; skip it if the daemon is down.
+    let projects = client.projects().await.unwrap_or_default();
     let config_dirs = if args.config_dirs.is_empty() {
-        registry::config_dirs()
+        let mut dirs = registry::config_dirs();
+        add_dirs(&mut dirs, agent_config_dirs(&client, &projects).await);
+        dirs
     } else {
         args.config_dirs
     };
     let sessions = registry::live_sessions(&config_dirs).await;
-    // Matching sessions to workspaces is a bonus; skip it if the daemon is down.
-    let projects = Client::new(home.socket()).projects().await.unwrap_or_default();
 
     if args.json {
         for session in &sessions {
@@ -68,6 +72,40 @@ pub(crate) async fn run(home: &CosHome, args: SessionsArgs) -> anyhow::Result<Ex
         print_session(session, &projects);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The Claude config dirs cos's agents use: `CLAUDE_CONFIG_DIR` in the
+/// global variables and each project's, with `~` expanded. Empty if the
+/// daemon is down.
+async fn agent_config_dirs(client: &Client, projects: &[Project]) -> Vec<PathBuf> {
+    const NAME: &str = "CLAUDE_CONFIG_DIR";
+    let mut values = Vec::new();
+    if let Ok(global) = client.global_env().await {
+        values.extend(global.variables.get(NAME).cloned());
+    }
+    for project in projects {
+        if let Ok(env) = client.project_env(project.id).await {
+            values.extend(env.variables.get(NAME).cloned());
+        }
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    values
+        .iter()
+        .map(|value| PathBuf::from(cos_core::env::expand_home(value, home.as_deref())))
+        .collect()
+}
+
+/// Adds the folders in `extra` that exist and aren't in `dirs` yet.
+fn add_dirs(dirs: &mut Vec<PathBuf>, extra: Vec<PathBuf>) {
+    let key = |dir: &PathBuf| dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    let mut seen: Vec<PathBuf> = dirs.iter().map(key).collect();
+    for dir in extra {
+        let canonical = key(&dir);
+        if dir.is_dir() && !seen.contains(&canonical) {
+            seen.push(canonical);
+            dirs.push(dir);
+        }
+    }
 }
 
 fn print_session(session: &RunningSession, projects: &[Project]) {
@@ -149,4 +187,25 @@ fn place(projects: &[Project], cwd: &Path) -> Option<Place> {
             workspace_id: None,
             label: format!("project {}", project.name),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_only_new_existing_config_dirs() {
+        let root = tempfile::tempdir().unwrap();
+        let [a, b] = ["a", "b"].map(|name| {
+            let dir = root.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            dir
+        });
+        let mut dirs = vec![a.clone()];
+        add_dirs(
+            &mut dirs,
+            vec![a.join("."), b.clone(), root.path().join("missing"), b.clone()],
+        );
+        assert_eq!(dirs, [a, b]);
+    }
 }

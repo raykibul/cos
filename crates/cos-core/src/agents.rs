@@ -58,6 +58,10 @@ pub struct Agent {
     /// Claude's transcript (JSONL), from the hooks.
     #[serde(default)]
     pub transcript_path: Option<PathBuf>,
+    /// The names of the extra environment variables (global and project,
+    /// see `docs/daemon.md`) it was last launched with, sorted. Never values.
+    #[serde(default)]
+    pub env_names: Vec<String>,
     /// `--append-system-prompt`, kept so a resume passes it again.
     #[serde(skip)]
     pub system_prompt: Option<String>,
@@ -108,6 +112,9 @@ pub enum AgentState {
     Starting,
     /// Claude is asking whether to trust the folder.
     NeedsTrust,
+    /// Claude is showing its login screen: the agent's Claude config dir
+    /// (`CLAUDE_CONFIG_DIR`) isn't logged in. Someone logs in in its terminal.
+    NeedsLogin,
     /// A prompt is running.
     Working,
     /// A permission request is open.
@@ -385,11 +392,14 @@ impl Agents {
         Ok(())
     }
 
-    /// The process is up: records its pid and logs `agent.started`.
-    pub fn started(&self, id: i64, pid: Option<u32>) -> Result<Agent, StoreError> {
-        self.store
-            .lock()
-            .execute("UPDATE agents SET pid = ?2 WHERE id = ?1", params![id, pid])?;
+    /// The process is up: records its pid and the names of the extra
+    /// environment variables it got, and logs `agent.started`.
+    pub fn started(&self, id: i64, pid: Option<u32>, env_names: &[String]) -> Result<Agent, StoreError> {
+        let names = serde_json::to_string(env_names).expect("strings serialize");
+        self.store.lock().execute(
+            "UPDATE agents SET pid = ?2, env_names = ?3 WHERE id = ?1",
+            params![id, pid, names],
+        )?;
         let agent = self.require(id)?;
         self.log.append(
             kind::AGENT_STARTED,
@@ -779,7 +789,7 @@ const AGENT_SELECT: &str =
         a.model, a.permission_mode, a.user_settings, a.term_rows, a.term_cols, a.started_ms, a.last_activity_ms, a.exited_ms,
         a.exit_code, a.last_message,
         (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending'),
-        a.task_id, a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path
+        a.task_id, a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path, a.env_names
     FROM agents a";
 
 const APPROVAL_COLUMNS: &str =
@@ -820,6 +830,11 @@ fn read_agent(row: &Row<'_>) -> rusqlite::Result<Agent> {
         mcp_config: row.get(22)?,
         spawned_by: row.get(23)?,
         transcript_path: row.get::<_, Option<String>>(24)?.map(PathBuf::from),
+        // Written by us; NULL before an agent's first launch with the column.
+        env_names: row
+            .get::<_, Option<String>>(25)?
+            .and_then(|names| serde_json::from_str(&names).ok())
+            .unwrap_or_default(),
     })
 }
 

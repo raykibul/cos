@@ -16,6 +16,6 @@ Rust chief of staff for coding agents. Read `docs/proposal.md` for the design an
 ## Conventions
 
 - `cos-harness` parses Claude's output leniently: unknown messages become `Event::Other`, never errors. The protocol is undocumented.
-- Agents run in a PTY (`ClaudeTerminal`) and cos follows them through per-session hooks (`claude/hooks.rs`), never by reading the screen. The one exception is detecting the trust dialog.
+- Agents run in a PTY (`ClaudeTerminal`) and cos follows them through per-session hooks (`claude/hooks.rs`), never by reading the screen. The exceptions are detecting the trust dialog and the login screen (`needs_login`, when a `CLAUDE_CONFIG_DIR` in a project's environment isn't logged in).
 - Integration tests run against `cos-fake-claude` (`crates/cos-harness/src/bin/cos-fake-claude/`). Without `-p` it plays the interactive UI and runs hooks. When a test needs new Claude behaviour, extend the fake instead of calling the real CLI.
 - Update the Progress section of `docs/proposal.md` when a milestone lands.

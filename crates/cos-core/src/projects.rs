@@ -588,7 +588,7 @@ impl Store {
 
     /// Deletes the project and its Chief of Staff's books. Its staff
     /// worktree must be gone already.
-    fn delete_project(&self, id: i64) -> Result<(), StoreError> {
+    pub(crate) fn delete_project(&self, id: i64) -> Result<(), StoreError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM staff_inbox WHERE project_id = ?1", [id])?;

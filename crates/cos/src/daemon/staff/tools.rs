@@ -258,6 +258,12 @@ impl Staff {
                         format!("agent {agent_id} waits for the user to trust its folder"),
                     ));
                 }
+                AgentState::NeedsLogin => {
+                    return Err(error(
+                        StatusCode::CONFLICT,
+                        format!("agent {agent_id} waits for the user to log in to Claude in its terminal"),
+                    ));
+                }
                 AgentState::Exited | AgentState::Interrupted => {
                     return Err(error(
                         StatusCode::CONFLICT,

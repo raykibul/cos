@@ -16,6 +16,8 @@
 //!   "Approvals policy" in `docs/daemon.md`.
 //! - The Chief of Staff: [`super::staff_api`], contract in
 //!   `docs/chief-of-staff.md`.
+//! - Environment variables for agents: [`super::env_api`], "Environment" in
+//!   `docs/daemon.md`.
 //!
 //! Errors are `{"error": "..."}` with a message meant for the user.
 
@@ -124,6 +126,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::approvals_api::routes())
         .merge(super::chief_api::routes())
         .merge(super::staff_api::routes())
+        .merge(super::env_api::routes())
         .with_state(state)
 }
 

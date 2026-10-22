@@ -8,7 +8,9 @@
 //! - Every agent's hooks report to one [`HookServer`] at `<home>/hooks.sock`,
 //!   routed to agents by session id (see [`hooks`]). That's how the daemon
 //!   follows state and turns permission requests into approvals. The screen
-//!   is read only to spot the trust dialog.
+//!   is read only to spot the trust dialog and the login screen.
+//! - Every launch and resume gets the environment set for the agent's
+//!   project (see [`cos_core::Environment`]), as it is at that moment.
 //! - Records live in the database ([`cos_core::Agents`]), so they survive a
 //!   restart; agents that were running come back as `interrupted`.
 
@@ -25,8 +27,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use cos_core::{
-    Agent, AgentState, Agents, Approval, ApprovalState, Launch, NewAgent, ProjectError, Projects, Role, Runs,
-    StoreError,
+    Agent, AgentState, Agents, Approval, ApprovalState, Environment, Launch, NewAgent, ProjectError,
+    Projects, Role, Runs, StoreError, Variables,
 };
 use cos_harness::claude::hooks::{HookEvent, HookServer};
 use cos_harness::{
@@ -83,7 +85,8 @@ pub(crate) struct AgentConfig {
     /// The shell command Claude's hooks run, such as `'/usr/local/bin/cos' hook`.
     pub hook_command: String,
     pub hook_socket: PathBuf,
-    /// Extra environment for every agent's process.
+    /// Extra environment for every agent's process, over the project's and
+    /// global variables (tests point the fake's files here).
     pub env: Vec<(String, String)>,
     /// How long approvals of non-`user` agents wait before they are denied.
     pub approval_timeout: Duration,
@@ -136,11 +139,18 @@ impl AgentConfig {
             hook_command: format!("{} hook", crate::try_pty::shell_quote(&fake)),
             claude: fake,
             hook_socket: dir.join("hooks.sock"),
-            // The fake's transcripts stay in the test's folder.
-            env: vec![(
-                "COS_FAKE_CLAUDE_TRANSCRIPTS".into(),
-                dir.join("transcripts").display().to_string(),
-            )],
+            // The fake's transcripts stay in the test's folder, and it
+            // writes what it was launched with next to them.
+            env: vec![
+                (
+                    "COS_FAKE_CLAUDE_TRANSCRIPTS".into(),
+                    dir.join("transcripts").display().to_string(),
+                ),
+                (
+                    "COS_FAKE_CLAUDE_ENV".into(),
+                    dir.join("env").display().to_string(),
+                ),
+            ],
             approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: Duration::from_secs(2),
             shutdown_timeout: Duration::from_secs(2),
@@ -238,6 +248,8 @@ pub(crate) struct AgentManager {
 struct Inner {
     agents: Agents,
     projects: Arc<Projects>,
+    /// The variables set for agents, global and per project.
+    env: Environment,
     /// Runs and tasks, for the approvals policy: limits, scopes, the audit.
     runs: Arc<Runs>,
     config: AgentConfig,
@@ -276,6 +288,8 @@ struct Running {
     heard: bool,
     /// The trust dialog was spotted, or answered through cos.
     trust_seen: bool,
+    /// Claude's login screen was spotted.
+    login_seen: bool,
     /// Tools that started (`PreToolUse`) and haven't finished, newest last.
     open_tools: Vec<hooks::OpenTool>,
     exited: bool,
@@ -290,6 +304,7 @@ impl AgentManager {
         agents: Agents,
         projects: Arc<Projects>,
         runs: Arc<Runs>,
+        env: Environment,
         config: AgentConfig,
     ) -> anyhow::Result<Self> {
         let (hook_server, hook_events) = HookServer::bind(&config.hook_socket).map_err(|error| {
@@ -303,6 +318,7 @@ impl AgentManager {
         let inner = Arc::new(Inner {
             agents,
             projects,
+            env,
             runs,
             config,
             live: Mutex::default(),
@@ -311,6 +327,11 @@ impl AgentManager {
         });
         tokio::spawn(follow_hooks(Arc::downgrade(&inner), hook_events));
         Ok(Self { inner })
+    }
+
+    /// The variables set for agents, global and per project.
+    pub(crate) fn env(&self) -> &Environment {
+        &self.inner.env
     }
 
     pub(crate) fn list(
@@ -742,7 +763,11 @@ impl Inner {
         claude.append_system_prompt = agent.system_prompt.clone();
         claude.mcp_config = agent.mcp_config.clone();
         claude.permission_mode = agent.permission_mode.parse().map_err(AgentError::Invalid)?;
-        claude.env = self.config.env.clone();
+        // The daemon's environment < global < project < cos's own: the
+        // terminal adds TERM, the hook socket and so on last.
+        let extra = self.agent_env(agent)?;
+        let env_names: Vec<String> = extra.keys().cloned().collect();
+        claude.env = extra.into_iter().chain(self.config.env.clone()).collect();
         // The chief's MCP server names the agent, so it's added here, where
         // the id is known, on every launch and resume.
         match agent.role {
@@ -785,18 +810,40 @@ impl Inner {
                 workspace_id: agent.workspace_id,
                 heard: false,
                 trust_seen: false,
+                login_seen: false,
                 open_tools: Vec::new(),
                 exited: false,
                 shutdown: false,
             },
         );
-        let started = self.agents.started(agent.id, terminal.pid());
+        let started = self.agents.started(agent.id, terminal.pid(), &env_names);
         drop(live);
         tokio::spawn(watch_output(Arc::downgrade(self), agent.id, output));
         Ok(started?)
     }
 
-    /// Output arrived. Before the first hook, check for the trust dialog.
+    /// The extra variables for an agent: its project's on top of the global
+    /// ones, as they are now, with a leading `~` expanded to the daemon
+    /// user's home. Names cos keeps for itself are skipped, in case the
+    /// database holds one from before they were refused.
+    fn agent_env(&self, agent: &Agent) -> Result<Variables, AgentError> {
+        let project_id = self.projects.workspace(agent.workspace_id)?.project_id;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let mut env = Variables::new();
+        for (name, value) in self.env.effective(project_id)? {
+            if cos_harness::claude::is_reserved_env(&name) {
+                // The name only: values are secrets.
+                tracing::warn!(agent = agent.id, %name, "skipping a variable cos sets itself");
+                continue;
+            }
+            let value = cos_core::env::expand_home(&value, home.as_deref());
+            env.insert(name, value);
+        }
+        Ok(env)
+    }
+
+    /// Output arrived. Before the first hook, check for the login screen
+    /// (the agent's Claude config dir isn't logged in) and the trust dialog.
     /// An agent a run or a Chief of Staff started works in a registered
     /// project, which counts as trusted, so the daemon answers the dialog for
     /// it (the one exception to "cos never answers the trust dialog by
@@ -806,7 +853,19 @@ impl Inner {
         let Some(running) = live.terminals.get_mut(&id) else {
             return;
         };
-        if running.heard || running.trust_seen || !running.terminal.asks_for_trust() {
+        if running.heard {
+            return;
+        }
+        if !running.login_seen && running.terminal.asks_for_login() {
+            // Nobody can log in for it; whoever opens the terminal does.
+            running.login_seen = true;
+            tracing::info!(agent = id, "Claude is asking to log in");
+            if let Err(error) = self.agents.set_state(id, AgentState::NeedsLogin) {
+                tracing::error!(%error, agent = id, "could not record the login screen");
+            }
+            return;
+        }
+        if running.trust_seen || !running.terminal.asks_for_trust() {
             return;
         }
         running.trust_seen = true;
@@ -881,7 +940,7 @@ async fn watch_output(inner: Weak<Inner>, id: i64, mut output: mpsc::UnboundedRe
 /// Ends a Claude session: Esc to end a running turn, then `/exit`, then a
 /// kill if it hasn't exited within `timeout`.
 async fn end_session(terminal: Arc<ClaudeTerminal>, state: AgentState, timeout: Duration) {
-    if state == AgentState::NeedsTrust {
+    if matches!(state, AgentState::NeedsTrust | AgentState::NeedsLogin) {
         // The dialog takes no commands, and nothing has run yet.
         terminal.kill();
         return;

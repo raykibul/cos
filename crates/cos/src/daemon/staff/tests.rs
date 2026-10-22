@@ -60,6 +60,7 @@ impl Fixture {
             Agents::new(store.clone(), log.clone()),
             projects.clone(),
             runs.clone(),
+            cos_core::Environment::new(store.clone(), log.clone()),
             AgentConfig::for_tests(dir.path()),
         )
         .unwrap();
@@ -773,4 +774,40 @@ async fn the_model_comes_from_the_project_else_the_daemon() {
         .unwrap();
     assert_eq!(cleared.model, None);
     let _ = StaffSettings::default();
+}
+
+#[tokio::test]
+async fn the_chief_of_staff_and_the_agents_it_spawns_get_the_project_env() {
+    use crate::daemon::agents::tests::{home, launched_env, var};
+
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+    client
+        .set_global_env("CLAUDE_CONFIG_DIR", "~/.claude".into())
+        .await
+        .unwrap();
+    client
+        .set_project_env(
+            fixture.project_id,
+            "CLAUDE_CONFIG_DIR",
+            "~/.claude-personal".into(),
+        )
+        .await
+        .unwrap();
+    let expected = format!("{}/.claude-personal", home());
+
+    let staff = fixture.idle_staff().await;
+    let env = launched_env(fixture.dir.path(), &staff.session_id);
+    assert_eq!(var(&env, "CLAUDE_CONFIG_DIR"), Some(expected.as_str()));
+    assert_eq!(staff.env_names, ["CLAUDE_CONFIG_DIR"]);
+
+    let spawn = json!({ "prompt": "say hi", "workspace_id": fixture.workspace_id });
+    let spawned = fixture.say(staff.id, &format!("mcp agent_spawn {spawn}")).await;
+    let agent_id = serde_json::from_str::<Value>(&spawned).unwrap()["agent_id"]
+        .as_i64()
+        .unwrap();
+    let agent = fixture.until_says(agent_id, "echo: say hi").await;
+    assert_eq!(agent.spawned_by, Some(staff.id));
+    let env = launched_env(fixture.dir.path(), &agent.session_id);
+    assert_eq!(var(&env, "CLAUDE_CONFIG_DIR"), Some(expected.as_str()));
 }
