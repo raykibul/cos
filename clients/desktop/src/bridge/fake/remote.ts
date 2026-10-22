@@ -68,6 +68,49 @@ export function makeDevices(now: number): Raw[] {
   ];
 }
 
+/** Why the daemon can't list the tailnet, when Tailscale is off (`?tailscale=off`). */
+export const tailscaleReason = "Tailscale is not running (the Tailscale app is not open)";
+
+/**
+ * The devices on this Mac's tailnet, as `GET /v1/tailnet/peers` lists them:
+ * cos running first, then online, then by name. Studio and the travel
+ * laptop are saved hosts too (by name and by address).
+ */
+export function makePeers(now: number, port = 7700): Raw[] {
+  const peer = (
+    name: string,
+    os: string,
+    n: number,
+    fields: { online: boolean; cos: string; agoMs?: number; mine?: boolean; tagged?: boolean },
+  ): Raw => ({
+    id: `n${name.replace(/[^a-z]/g, "")}${n}CNTRL`,
+    name,
+    hostname: name,
+    dns_name: `${name}.tail0000.ts.net`,
+    os,
+    ips: [`100.101.102.${n}`, `fd7a:115c:a1e0::${n}`],
+    online: fields.online,
+    last_seen_ms: fields.online ? null : now - (fields.agoMs ?? 0),
+    mine: fields.mine ?? true,
+    tagged: fields.tagged ?? false,
+    cos: fields.cos,
+    address: `100.101.102.${n}:${port}`,
+  });
+  return [
+    peer("mac-mini", "macOS", 112, { online: true, cos: "running" }),
+    peer("studio", "macOS", 110, { online: true, cos: "running" }),
+    peer("build-box", "linux", 115, { online: true, cos: "not_running" }),
+    peer("ci-runner", "linux", 130, {
+      online: true,
+      cos: "not_running",
+      mine: false,
+      tagged: true,
+    }),
+    peer("phone", "iOS", 103, { online: false, cos: "unknown", agoMs: 2 * 3_600_000 }),
+    peer("travel-laptop", "macOS", 105, { online: false, cos: "unknown", agoMs: 86_400_000 }),
+  ];
+}
+
 /** How a saved host answers in the fake. */
 export type Access =
   | { kind: "open" }

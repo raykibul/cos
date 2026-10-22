@@ -3,6 +3,7 @@
 // and kinds are open strings: a value a newer daemon adds still decodes.
 
 import {
+  DecodeError,
   type Json,
   asObject,
   bool,
@@ -655,5 +656,67 @@ export function decodeTailnet(value: unknown): TailnetStatus {
     reason: optStr(o.reason),
     host: optStr(o.host),
     owner: optStr(o.owner),
+  };
+}
+
+/** One device on this Mac's tailnet (`GET /v1/tailnet/peers`). */
+export interface TailnetPeer {
+  /** Tailscale's stable node ID. */
+  id: string;
+  name: string;
+  hostname: string;
+  dnsName: string;
+  /** `macOS`, `linux`, `iOS`, `windows`, `android`, … */
+  os: string;
+  ips: string[];
+  online: boolean;
+  /** When it was last online (ms epoch), for an offline device Tailscale knows. */
+  lastSeenMs: number | null;
+  /** Logged in as the same Tailscale user and not tagged: it could let this Mac in. */
+  mine: boolean;
+  tagged: boolean;
+  /** Whether cos answers at `address`, from the daemon's TCP probe. */
+  cos: "running" | "not_running" | "unknown" | (string & {});
+  /** `ip:port` where cos would listen. */
+  address: string;
+}
+
+export interface TailnetPeers {
+  /** Ordered by the daemon: cos running first, then online, then by name. */
+  peers: TailnetPeer[];
+  selfName: string | null;
+  /** Why Tailscale can't be asked (peers is then empty); null when it can. */
+  reason: string | null;
+}
+
+export function decodeTailnetPeer(value: unknown): TailnetPeer {
+  const o = asObject(value, "tailnet peer");
+  const ips = strings(o.ips);
+  const ipv4 = ips.find((ip) => !ip.includes(":"));
+  const address = str(o.address) || (ipv4 ? `${ipv4}:7700` : "");
+  const name = str(o.name) || str(o.hostname) || address;
+  if (!name) throw new DecodeError("tailnet peer has no name");
+  return {
+    id: str(o.id) || name,
+    name,
+    hostname: str(o.hostname),
+    dnsName: str(o.dns_name),
+    os: str(o.os),
+    ips,
+    online: bool(o.online, false),
+    lastSeenMs: optNum(o.last_seen_ms),
+    mine: bool(o.mine, false),
+    tagged: bool(o.tagged, false),
+    cos: str(o.cos, "unknown"),
+    address,
+  };
+}
+
+export function decodeTailnetPeers(value: unknown): TailnetPeers {
+  const o = asObject(value, "tailnet peers");
+  return {
+    peers: list(o.peers, decodeTailnetPeer),
+    selfName: optStr(o.self_name),
+    reason: optStr(o.reason),
   };
 }

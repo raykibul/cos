@@ -20,6 +20,7 @@ import { CosStore } from "./store/store";
 //   ?terminal        open the chief's terminal split
 //   ?host=h1         start on another Mac (h1 Studio waits for approval, h2 can't be reached)
 //   ?firewall        this Mac's tailnet listener is blocked by the macOS firewall
+//   ?tailscale=off   Tailscale is off on this Mac, so its tailnet's devices can't be listed
 //   ?theme=dark      force a colour scheme
 const params = new URLSearchParams(window.location.search);
 
@@ -79,6 +80,7 @@ async function main() {
     simulate: !params.has("static"),
     host: params.get("host") ?? undefined,
     firewall: params.has("firewall"),
+    tailscaleOff: params.get("tailscale") === "off",
   });
   const cos = new CosStore(bridge);
   const ui = createUiStore({

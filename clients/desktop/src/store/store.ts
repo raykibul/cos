@@ -18,12 +18,15 @@ import {
   type RunLimits,
   type RunTask,
   type Status,
+  type TailnetPeers,
   type TailnetStatus,
   type Workspace,
   decodeEvent,
   decodeStatus,
   decodeTailnet,
+  decodeTailnetPeers,
 } from "../api/models";
+import { DecodeError } from "../api/decode";
 import { type InboxItem, type Staff, type Transcript, type TranscriptMessage } from "../api/staff";
 import type { Bridge, DaemonInfo, EventMessage, Host, HostList } from "../bridge/types";
 import {
@@ -1175,6 +1178,28 @@ export class CosStore {
     const list = await this.bridge.hostsList();
     this.set({ hosts: list.hosts });
     return host;
+  }
+
+  /**
+   * The devices on this Mac's tailnet, always from This Mac's daemon, even
+   * while another host is in use. Not kept in the state: the add-host sheet
+   * and the host menu ask when they open (the daemon caches its probes).
+   */
+  async tailnetPeers(port?: number): Promise<TailnetPeers> {
+    let body;
+    try {
+      body = await this.bridge.tailnetPeers(port);
+    } catch (error) {
+      throw CosError.from(error);
+    }
+    try {
+      return decodeTailnetPeers(body);
+    } catch (error) {
+      if (error instanceof DecodeError) {
+        throw new CosError("bad_response", `Unexpected tailnet devices from cos: ${error.message}`);
+      }
+      throw error;
+    }
   }
 
   /** Forgets a host; if it was in use, goes back to this Mac. */
