@@ -69,6 +69,14 @@ grep -q "checksum mismatch" /tmp/out || { cat /tmp/out; fail "no checksum messag
 [ "$(sha256sum "$cos")" = "$before" ] || fail "a failed install replaced cos"
 say "tampered release: refused"
 
+# The app is for macOS only, and says so before downloading anything.
+if sh /src/install.sh --app >/tmp/out 2>&1; then
+    fail "--app installed on Linux"
+fi
+grep -q "the cos app is for macOS" /tmp/out || { cat /tmp/out; fail "no macOS message"; }
+grep -q "downloading" /tmp/out && fail "--app downloaded on Linux"
+say "--app on Linux: refused"
+
 # A release that doesn't exist.
 if COS_VERSION=v9.9.9 sh /src/install.sh >/tmp/out 2>&1; then
     fail "a missing release was accepted"
