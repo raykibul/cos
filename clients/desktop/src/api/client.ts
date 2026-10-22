@@ -29,6 +29,14 @@ import {
   decodeTailnet,
   decodeWorkspace,
 } from "./models";
+import {
+  type InboxItem,
+  type Staff,
+  type Transcript,
+  decodeInbox,
+  decodeStaff,
+  decodeTranscript,
+} from "./staff";
 
 export interface NewAgent {
   prompt?: string;
@@ -344,6 +352,41 @@ export class DaemonClient {
     if (limits.preset) body.preset = limits.preset;
     if (limits.approvalCap !== undefined) body.approval_cap = limits.approvalCap;
     return this.send("PUT", `/v1/runs/${runId}/limits`, body, decodeLimits);
+  }
+
+  // MARK: The Chief of Staff (docs/chief-of-staff.md)
+
+  /** It exists before it first starts, with a null `agent_id`. */
+  staff(projectId: number): Promise<Staff> {
+    return this.get(`/v1/projects/${projectId}/staff`, decodeStaff);
+  }
+
+  /** `null` goes back to the default model. */
+  setStaff(projectId: number, settings: { model: string | null }): Promise<Staff> {
+    return this.send("PUT", `/v1/projects/${projectId}/staff`, settings, decodeStaff);
+  }
+
+  /** Starts or resumes it; nothing happens if it's running. */
+  startStaff(projectId: number): Promise<Staff> {
+    return this.send("POST", `/v1/projects/${projectId}/staff/start`, undefined, decodeStaff);
+  }
+
+  /** Starts it if needed and types the text in. While it works, the text waits in its inbox. */
+  async messageStaff(projectId: number, text: string): Promise<void> {
+    await this.request("POST", `/v1/projects/${projectId}/staff/message`, { text });
+  }
+
+  /** What the agents it started reported, newest first. */
+  staffInbox(projectId: number): Promise<InboxItem[]> {
+    return this.get(`/v1/projects/${projectId}/staff/inbox`, decodeInbox);
+  }
+
+  /** An agent's conversation, read from Claude's transcript: messages after `after`. */
+  transcript(agentId: number, after?: number): Promise<Transcript> {
+    return this.get(
+      `/v1/agents/${agentId}/transcript${query({ after: after || undefined })}`,
+      decodeTranscript,
+    );
   }
 
   // MARK: Devices and the tailnet
