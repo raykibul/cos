@@ -154,6 +154,7 @@ cos remote on --port 7701
 cos remote               # where it listens, or why it can't
 cos devices              # who has tried to connect
 cos devices approve 2    # by number, MagicDNS name or Tailscale node ID
+cos remote peers         # the other devices on your tailnet; * marks those running cos
 ```
 
 ### How it works
@@ -170,7 +171,7 @@ Every request on the tailnet listener goes through two checks, in this order:
 1. **Same Tailscale user.** `tailscale whois --json <client ip:port>` must find the peer, the peer must not be a tagged device, and its `UserProfile.ID` must equal this machine's `Self.UserID` from `tailscale status --json`, with matching login names (case-insensitive) when both are known. Anything else gets 403. The answer is cached per client IP for 60 s, so the CLI runs about once a minute per device, not per request.
 2. **Approved device.** The first request from a new device (by Tailscale's stable node ID) records it as `pending` and logs `device.requested`. Pending and denied devices get 403 with a message naming the command to run on the host. Approval is read from the database on every request, so approving or denying takes effect at once.
 
-The Unix socket is trusted as before: only your user can open it. Device and listener management (`/v1/devices…`, `/v1/tailnet`) work **only** on the socket; over the tailnet they answer 403 `host_only`, so a device can't approve itself. Every other route is served on both, and the guard runs before routing, so an unapproved client can't even tell which paths exist.
+The Unix socket is trusted as before: only your user can open it. Device and listener management (`/v1/devices…`, `/v1/tailnet…`, peers included) work **only** on the socket; over the tailnet they answer 403 `host_only`, so a device can't approve itself. Every other route is served on both, and the guard runs before routing, so an unapproved client can't even tell which paths exist.
 
 A connection from this Mac to its own tailnet address is a tailnet peer too: whois names this machine, and it needs approving like any other device. It isn't approved automatically, because any local process, including other OS users' processes, can open that address, while the socket is private to you.
 
@@ -202,6 +203,7 @@ Over the tailnet, refusals carry a stable `code` next to the message, so apps ca
 | `DELETE /v1/devices/{id}` | | 204. If it connects again it starts over as pending. |
 | `GET /v1/tailnet` | | `TailnetStatus` |
 | `PUT /v1/tailnet` | `{"enabled": true, "port": 7700}` (`port` optional, 1–65535) | `TailnetStatus`, after waiting up to 15 s for the listener to start or stop |
+| `GET /v1/tailnet/peers?port=7700` | | `PeersPage`: the other devices on the tailnet. `port` (optional, 1–65535) is where to look for cos on them, default the listener's port. |
 
 Unknown device ids get 404, a bad port 400.
 
@@ -218,7 +220,25 @@ Unknown device ids get 404, a bad port 400.
  "reason": "…",            // why it isn't listening, or a warning; absent when there's nothing to say
  "host": "my-mac",         // this machine's MagicDNS name, once Tailscale has answered
  "owner": "me@example.com"} // the Tailscale user devices must be logged in as
+// PeersPage
+{"peers": [{
+   "id": "nPEER1stableIDCNTRL",            // Tailscale node ID
+   "name": "build-box",                     // first label of DNSName, else HostName
+   "hostname": "build-box",
+   "dns_name": "build-box.tail0000.ts.net", // trailing dot trimmed; "" if none
+   "os": "linux",                           // as Tailscale reports it: macOS, linux, iOS, windows, android…
+   "ips": ["100.100.2.2", "fd7a:115c:a1e0::2:2"],
+   "online": true,
+   "last_seen_ms": null,                    // ms since the epoch when offline and known, else null
+   "mine": true,                            // same Tailscale user as this machine and not tagged
+   "tagged": false,
+   "cos": "running",                        // "running", "not_running" or "unknown"
+   "address": "100.100.2.2:7700"}],         // first IPv4 (else first IP, bracketed for v6) and the port; "" if no IP
+ "self_name": "my-mac",                     // null when Tailscale is unavailable
+ "reason": null}                            // why there are no peers: the Tailscale error, still HTTP 200
 ```
+
+**Peers.** The list comes from the `Peer` map of the same `tailscale status --json` call, parsed leniently: missing fields default, an odd entry is skipped, Tailscale's zero `LastSeen` (`0001-01-01`) is null, and this machine is never listed. Only peers that are `mine` can be approved as devices. For each online peer that is `mine`, the daemon opens a plain TCP connection to `address` (all at once, 700 ms timeout) and closes it without sending anything: a connect is `running`, a refusal or timeout `not_running`. It never sends an HTTP request, which would register this Mac as a pending device over there. Offline and other peers are `unknown`. Answers are reused for 10 s per address and port, so a sheet that refetches doesn't probe again. Order: `running` first, then online, then by name.
 
 `last_seen_at` and `last_ip` are refreshed when the whois cache is (about once a minute while a device is active), not on every request.
 
