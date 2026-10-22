@@ -1,5 +1,6 @@
 import { ArrowUp, ChevronDown, ShieldCheck, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useFocusOnOpen } from "../app/focus";
 import { models, permissionModes } from "../domain/labels";
 import { cx } from "../ui/cx";
 import { AutoTextarea, Spinner } from "../ui/kit";
@@ -16,12 +17,15 @@ export function Composer({
   disabled,
   placeholder = "What should Claude work on?",
   autoFocus,
+  focusOnOpen = false,
   allowEmpty = true,
 }: {
   onSend: (value: ComposerValue) => Promise<unknown>;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
+  /** Put the cursor here whenever the page it's on is opened. */
+  focusOnOpen?: boolean;
   /** An empty prompt starts Claude idle, waiting in its own input. */
   allowEmpty?: boolean;
 }) {
@@ -29,6 +33,8 @@ export function Composer({
   const [model, setModel] = useState("");
   const [permissionMode, setPermissionMode] = useState("default");
   const [sending, setSending] = useState(false);
+  const input = useRef<HTMLTextAreaElement>(null);
+  useFocusOnOpen(input, focusOnOpen);
   const canSend = !disabled && !sending && (allowEmpty || prompt.trim().length > 0);
 
   const send = () => {
@@ -55,6 +61,7 @@ export function Composer({
       )}
     >
       <AutoTextarea
+        ref={input}
         aria-label="Prompt"
         value={prompt}
         autoFocus={autoFocus}

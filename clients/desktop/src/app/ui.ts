@@ -68,6 +68,11 @@ export interface UiState {
   project: number | null;
   /** Whether the ⌘K switcher is open. */
   switcher: boolean;
+  /**
+   * Counts page opens (a click, ⌘K, a shortcut), so the page puts the cursor
+   * in its input each time, even when it was already showing.
+   */
+  opened: number;
   dialog: DialogState | null;
   toasts: Toast[];
   /** Whether the chief page shows its agent's terminal in a split. */
@@ -117,6 +122,7 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     chiefTerminal: false,
     project: null,
     switcher: false,
+    opened: 0,
     ...initial,
     page,
     tabs: initial.tabs && initial.tabs.some((t) => samePage(t, page)) ? initial.tabs : [page],
@@ -125,7 +131,11 @@ export function createUiStore(initial: Partial<UiState> = {}) {
   const actions = {
     /** Shows a page: selects the tab that has it, or opens a new tab. */
     navigate(page: Page) {
-      store.setState((s) => ({ page, tabs: openTab(s.tabs, s.page, page) }));
+      store.setState((s) => ({
+        page,
+        tabs: openTab(s.tabs, s.page, page),
+        opened: s.opened + 1,
+      }));
     },
     /** Closes a tab; the selected one when none is given. */
     closeTab(page?: Page) {
@@ -136,7 +146,7 @@ export function createUiStore(initial: Partial<UiState> = {}) {
       store.setState((s) => {
         const at = s.tabs.findIndex((t) => samePage(t, s.page));
         const next = s.tabs[(at + step + s.tabs.length * 2) % s.tabs.length];
-        return next ? { page: next } : {};
+        return next ? { page: next, opened: s.opened + 1 } : {};
       });
     },
     /** Remembers the project the sidebar shows. */

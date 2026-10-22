@@ -141,6 +141,7 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
         <section className="mb-9">
           <SectionTitle>New agent</SectionTitle>
           <Composer
+            focusOnOpen
             disabled={!canChange || !agentsSupported}
             placeholder={
               agentsSupported
