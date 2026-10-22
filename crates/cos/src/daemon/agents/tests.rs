@@ -123,6 +123,7 @@ impl Fixture {
             projects: self.projects.clone(),
             devices: Arc::new(Devices::new(self.store.clone(), self.log.clone())),
             tailnet: Tailnet::load(self.store.clone(), self.log.clone()),
+            peers: crate::daemon::peers::Peers::without_tailscale(),
             runs,
             agents: self.manager.clone(),
             chief,

@@ -19,11 +19,12 @@ use tokio::task::JoinHandle;
 
 use super::agents::{AgentConfig, AgentManager};
 use super::chief::{Chief, ChiefConfig};
+use super::peers::{CosState, Peers, Probe};
 use super::tailnet::{ListenerState, Tailnet, Timing};
 use super::{api, run_until, run_with, serve};
 use crate::client::{Client, DaemonError, NotRunning};
 use crate::home::CosHome;
-use crate::tailscale::{BoxFuture, LocalNode, Peer, Tailscale, TailscaleError};
+use crate::tailscale::{BoxFuture, LocalNode, Peer, PeerNode, TailnetNodes, Tailscale, TailscaleError};
 
 async fn within<T>(what: &str, future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), future)
@@ -43,6 +44,10 @@ struct TestServer {
 
 impl TestServer {
     fn start() -> Self {
+        Self::start_with(Peers::without_tailscale())
+    }
+
+    fn start_with(peers: Peers) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("cos.sock");
         let store = Arc::new(Store::open_in_memory().unwrap());
@@ -87,6 +92,7 @@ impl TestServer {
             projects,
             devices,
             tailnet,
+            peers,
             runs,
             agents,
             chief,
@@ -473,6 +479,8 @@ struct FakeTailscale {
     local: Mutex<Result<LocalNode, TailscaleError>>,
     peer: Mutex<Option<Peer>>,
     whois_calls: AtomicUsize,
+    /// What `peers()` lists next to this machine.
+    nodes: Mutex<Vec<PeerNode>>,
 }
 
 impl FakeTailscale {
@@ -481,7 +489,12 @@ impl FakeTailscale {
             local: Mutex::new(Ok(fake_local())),
             peer: Mutex::new(Some(fake_peer())),
             whois_calls: AtomicUsize::new(0),
+            nodes: Mutex::new(Vec::new()),
         })
+    }
+
+    fn set_nodes(&self, nodes: Vec<PeerNode>) {
+        *self.nodes.lock().unwrap() = nodes;
     }
 
     fn set_local(&self, local: Result<LocalNode, TailscaleError>) {
@@ -503,6 +516,12 @@ impl Tailscale for FakeTailscale {
         self.whois_calls.fetch_add(1, Ordering::SeqCst);
         let peer = self.peer.lock().unwrap().clone();
         Box::pin(async move { Ok(peer) })
+    }
+
+    fn peers(&self) -> BoxFuture<'_, Result<TailnetNodes, TailscaleError>> {
+        let local = self.local.lock().unwrap().clone();
+        let peers = self.nodes.lock().unwrap().clone();
+        Box::pin(async move { local.map(|local| TailnetNodes { local, peers }) })
     }
 }
 
@@ -528,6 +547,149 @@ fn fake_peer() -> Peer {
         login_name: "me@example.com".into(),
         tagged: false,
     }
+}
+
+fn fake_node(name: &str, ip: &str, online: bool) -> PeerNode {
+    PeerNode {
+        node_id: format!("n{name}"),
+        name: name.into(),
+        hostname: name.into(),
+        dns_name: format!("{name}.tail0000.ts.net"),
+        os: "macOS".into(),
+        ips: vec![ip.parse().unwrap()],
+        online,
+        last_seen: None,
+        user_id: 1,
+        tagged: false,
+        mine: true,
+    }
+}
+
+/// Says cos runs at the given addresses and nowhere else.
+struct FakeProbe(Vec<SocketAddr>);
+
+impl Probe for FakeProbe {
+    fn accepts(&self, addr: SocketAddr) -> BoxFuture<'static, bool> {
+        let running = self.0.contains(&addr);
+        Box::pin(async move { running })
+    }
+}
+
+/// A server whose peers come from `tailscale`, with cos running at `running`.
+fn peers_server(tailscale: Arc<FakeTailscale>, running: &[&str]) -> TestServer {
+    let probe = FakeProbe(running.iter().map(|addr| addr.parse().unwrap()).collect());
+    TestServer::start_with(Peers::with_probe(
+        tailscale,
+        Arc::new(probe),
+        Duration::from_secs(10),
+    ))
+}
+
+/// The status code and JSON body of a GET over the socket.
+async fn get_json(socket: &std::path::Path, path: &str) -> (u16, serde_json::Value) {
+    let response = raw_request(
+        socket,
+        &format!("GET {path} HTTP/1.1\r\nHost: cos\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    let status = response[9..12].parse().unwrap();
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
+    (status, serde_json::from_str(body).unwrap_or(json!(null)))
+}
+
+#[tokio::test]
+async fn tailnet_peers_lists_the_other_devices_running_cos_first() {
+    let tailscale = FakeTailscale::new();
+    tailscale.set_nodes(vec![
+        PeerNode {
+            last_seen: Some("2026-10-21T15:28:21.1Z".parse().unwrap()),
+            os: "iOS".into(),
+            ..fake_node("laptop", "100.100.2.3", false)
+        },
+        fake_node("alpha", "100.100.2.1", true),
+        PeerNode {
+            ips: vec![
+                "100.100.2.2".parse().unwrap(),
+                "fd7a:115c:a1e0::2:2".parse().unwrap(),
+            ],
+            os: "linux".into(),
+            ..fake_node("build-box", "100.100.2.2", true)
+        },
+        PeerNode {
+            user_id: 2,
+            mine: false,
+            ..fake_node("stranger", "100.100.2.9", true)
+        },
+    ]);
+    let server = peers_server(tailscale, &["100.100.2.2:7701"]);
+
+    let (status, body) = get_json(&server.socket, "/v1/tailnet/peers?port=7701").await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["self_name"], "my-mac");
+    assert_eq!(body["reason"], json!(null));
+    assert_eq!(
+        body["peers"][0],
+        json!({
+            "id": "nbuild-box",
+            "name": "build-box",
+            "hostname": "build-box",
+            "dns_name": "build-box.tail0000.ts.net",
+            "os": "linux",
+            "ips": ["100.100.2.2", "fd7a:115c:a1e0::2:2"],
+            "online": true,
+            "last_seen_ms": null,
+            "mine": true,
+            "tagged": false,
+            "cos": "running",
+            "address": "100.100.2.2:7701"
+        })
+    );
+    let order: Vec<(&str, &str)> = body["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|peer| (peer["name"].as_str().unwrap(), peer["cos"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("build-box", "running"),
+            ("alpha", "not_running"),
+            ("stranger", "unknown"),
+            ("laptop", "unknown"),
+        ]
+    );
+    let laptop = &body["peers"][3];
+    assert_eq!(laptop["last_seen_ms"], 1_792_596_501_100_i64);
+    assert_eq!(laptop["address"], "100.100.2.3:7701");
+
+    // The port defaults to the listener's, 7700 here: nothing answers there.
+    let page = server.client().tailnet_peers(None).await.unwrap();
+    assert_eq!(page.peers[0].address, "100.100.2.1:7700");
+    assert!(page.peers.iter().all(|peer| peer.cos != CosState::Running));
+
+    for bad in ["/v1/tailnet/peers?port=0", "/v1/tailnet/peers?port=nope"] {
+        let (status, body) = get_json(&server.socket, bad).await;
+        assert_eq!(status, 400, "{bad}");
+        assert!(body["error"].is_string(), "{bad}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn tailnet_peers_says_why_when_tailscale_is_down() {
+    let tailscale = FakeTailscale::new();
+    tailscale.set_nodes(vec![fake_node("alpha", "100.100.2.1", true)]);
+    tailscale.set_local(Err(TailscaleError::NotRunning("it is switched off".into())));
+    let server = peers_server(tailscale, &[]);
+
+    let (status, body) = get_json(&server.socket, "/v1/tailnet/peers").await;
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        body,
+        json!({"peers": [], "self_name": null, "reason": "Tailscale is not running (it is switched off)"})
+    );
 }
 
 /// Fast retries and rechecks. A zero `whois_ttl` asks the fake every time.
@@ -699,6 +861,8 @@ async fn a_new_device_waits_for_approval_on_the_host() {
         ("DELETE", "/v1/devices/1"),
         ("GET", "/v1/tailnet"),
         ("PUT", "/v1/tailnet"),
+        ("GET", "/v1/tailnet/peers"),
+        ("GET", "/v1/tailnet/peers?port=7700"),
     ] {
         let (status, body) = tcp_request(addr, method, path).await;
         assert_eq!(

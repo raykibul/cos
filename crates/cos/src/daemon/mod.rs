@@ -9,6 +9,7 @@ pub(crate) mod api;
 pub(crate) mod approvals_api;
 pub(crate) mod chief;
 pub(crate) mod chief_api;
+pub(crate) mod peers;
 pub(crate) mod pipeline;
 pub(crate) mod remote_api;
 pub(crate) mod runs_api;
@@ -118,6 +119,7 @@ pub(crate) async fn run_with(
         projects,
         devices,
         tailnet,
+        peers: peers::Peers::new(tailscale.clone()),
         runs,
         agents: agents.clone(),
         chief,
