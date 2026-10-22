@@ -42,6 +42,20 @@ const shots = [
   ["sheet-new-run", "page=workspace:4&dialog=newRun:4"],
   ["sheet-add-project", "page=waiting&dialog=addProject"],
   ["sheet-new-workspace", "page=project:1&dialog=newWorkspace:1"],
+  [
+    "host-picker",
+    "page=waiting",
+    (page) => page.getByRole("button", { name: "Mac: This Mac" }).click(),
+  ],
+  ["sheet-add-host", "page=waiting&dialog=addHost"],
+  ["host-device-pending", "host=h1"],
+  ["host-unreachable", "host=h2"],
+  ["remote-access", "page=settings"],
+  [
+    "remote-access-firewall",
+    "page=settings&firewall",
+    (page) => page.getByRole("list", { name: "Devices" }).scrollIntoViewIfNeeded(),
+  ],
 ];
 
 const server = createServer((req, res) => {

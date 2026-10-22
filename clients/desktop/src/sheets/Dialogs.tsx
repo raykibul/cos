@@ -18,6 +18,7 @@ import {
 import { cx } from "../ui/cx";
 import { Dialog, ErrorText } from "../ui/Dialog";
 import { Button, Field, inputClass } from "../ui/kit";
+import { AddHostSheet, RemoveHostSheet } from "./HostSheets";
 
 export function Dialogs() {
   const dialog = useUi((s) => s.dialog);
@@ -49,6 +50,10 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
       return <TaskAction runId={dialog.runId} taskId={dialog.taskId} action={dialog.action} />;
     case "limits":
       return <LimitsSheet runId={dialog.runId} />;
+    case "addHost":
+      return <AddHostSheet />;
+    case "removeHost":
+      return <RemoveHostSheet hostId={dialog.hostId} />;
   }
 }
 

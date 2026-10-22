@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Agent, Project, Run, Workspace } from "../api/models";
-import { useApp, useCanChange, useCos, useNow, useUi } from "../app/context";
+import { useApp, useCanChange, useCos, useUi } from "../app/context";
 import { type Page, samePage } from "../app/ui";
 import { agentLabel, isAlive, runLabel } from "../domain/labels";
 import { isRunFinished } from "../domain/tasks";
@@ -25,11 +25,11 @@ import {
   waitingCountForRun,
 } from "../store/selectors";
 import { cx } from "../ui/cx";
-import { duration } from "../ui/format";
 import { type MenuItem, Menu } from "../ui/Menu";
 import { StateDot } from "../ui/kit";
 import { toneClasses } from "../ui/tones";
 import { folderItems } from "./common";
+import { HostPicker, HostStatus } from "./Hosts";
 
 export function Sidebar() {
   const { ui } = useApp();
@@ -43,7 +43,8 @@ export function Sidebar() {
   return (
     <aside className="flex w-[264px] shrink-0 flex-col bg-sidebar select-none" aria-label="Sidebar">
       {/* Under the traffic lights; drags the window. */}
-      <div data-tauri-drag-region className="h-[52px] shrink-0" />
+      <div data-tauri-drag-region className="h-[46px] shrink-0" />
+      <HostPicker />
       <nav className="flex flex-col gap-px px-2.5">
         <NavRow
           icon={Inbox}
@@ -445,24 +446,7 @@ function AgentRow({ agent, page }: { agent: Agent; page: Page }) {
 
 function SidebarFooter() {
   const { ui } = useApp();
-  const connection = useCos((s) => s.connection);
-  const status = useCos((s) => s.status);
   const canChange = useCanChange();
-  const now = useNow(60_000);
-  const title =
-    connection === "running"
-      ? "cos is running"
-      : connection === "not_running"
-        ? "cos is not running"
-        : connection === "reconnecting"
-          ? "Reconnecting…"
-          : "Connecting…";
-  const dot =
-    connection === "running"
-      ? "bg-tone-green"
-      : connection === "not_running"
-        ? "bg-tone-red"
-        : "bg-ink-3 animate-breathe";
   return (
     <div className="shrink-0 border-t border-line px-2.5 py-2.5">
       <button
@@ -474,22 +458,7 @@ function SidebarFooter() {
         <Plus className="size-4" strokeWidth={1.8} />
         Add project
       </button>
-      <button
-        type="button"
-        onClick={() => ui.navigate({ kind: "events" })}
-        className="mt-0.5 flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-subtle"
-        title={status ? `pid ${status.pid} · ${status.home}` : undefined}
-      >
-        <span className={cx("ml-1 size-2 shrink-0 rounded-full", dot)} aria-hidden />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12.5px] font-medium text-ink-2">{title}</span>
-          {status ? (
-            <span className="block truncate text-[11.5px] text-ink-3">
-              v{status.version} · up {duration(status.startedAt, now)}
-            </span>
-          ) : null}
-        </span>
-      </button>
+      <HostStatus />
     </div>
   );
 }

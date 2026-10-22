@@ -12,7 +12,9 @@ export type Page =
   | { kind: "project"; id: number }
   | { kind: "workspace"; id: number }
   | { kind: "agent"; id: number }
-  | { kind: "run"; id: number };
+  | { kind: "run"; id: number }
+  /** Settings: your Macs, and remote access to this one. */
+  | { kind: "settings" };
 
 export type DialogState =
   | { kind: "addProject" }
@@ -25,7 +27,9 @@ export type DialogState =
   | { kind: "newRun"; workspaceId: number }
   | { kind: "cancelRun"; runId: number }
   | { kind: "taskAction"; runId: number; taskId: number; action: TaskActionKind }
-  | { kind: "limits"; runId: number };
+  | { kind: "limits"; runId: number }
+  | { kind: "addHost" }
+  | { kind: "removeHost"; hostId: string };
 
 export interface Toast {
   id: number;

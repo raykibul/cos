@@ -7,6 +7,7 @@ import { pluralize } from "../domain/labels";
 import {
   agent as agentOf,
   approvalsForYou,
+  pendingDevices,
   plansAwaitingApproval,
   trustAgents,
   waitingCount,
@@ -15,6 +16,7 @@ import {
 import { relativeTime } from "../ui/format";
 import { Button, EmptyState, PathText, SectionTitle } from "../ui/kit";
 import { PageBody, PageHeader, PageTitle } from "../ui/Page";
+import { DeviceRequestCard } from "./Devices";
 import { ApprovalButtons, QuestionCard } from "./shared";
 
 /**
@@ -28,6 +30,7 @@ export function WaitingPage() {
   const questions = useCos((s) => s.questions);
   const approvals = useCos(approvalsForYou);
   const trusting = useCos(trustAgents);
+  const devices = useCos(pendingDevices);
   const count = useCos(waitingCount);
 
   return (
@@ -94,6 +97,17 @@ export function WaitingPage() {
             <div className="flex flex-col gap-3">
               {trusting.map((agent) => (
                 <TrustCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {devices.length > 0 ? (
+          <section className="mb-8">
+            <SectionTitle>Devices asking to reach this Mac</SectionTitle>
+            <div className="flex flex-col gap-3">
+              {devices.map((device) => (
+                <DeviceRequestCard key={device.id} device={device} />
               ))}
             </div>
           </section>

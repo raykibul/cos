@@ -1,11 +1,13 @@
 import { X } from "lucide-react";
 import { useMemo } from "react";
-import type { CosStore } from "../store/store";
+import { type CosStore, isThisMac } from "../store/store";
 import { AgentPage } from "../screens/AgentPage";
 import { EventLogPage } from "../screens/EventLogPage";
+import { HostRefused, HostUnreachable } from "../screens/HostUnavailable";
 import { NotRunning } from "../screens/NotRunning";
 import { ProjectPage } from "../screens/ProjectPage";
 import { RunPage } from "../screens/RunPage";
+import { SettingsPage } from "../screens/SettingsPage";
 import { Sidebar } from "../screens/Sidebar";
 import { WaitingPage } from "../screens/WaitingPage";
 import { WorkspacePage } from "../screens/WorkspacePage";
@@ -41,7 +43,11 @@ function Shell() {
 function Content() {
   const page = useUi((s) => s.page);
   const connection = useCos((s) => s.connection);
-  if (connection === "not_running") return <NotRunning />;
+  const remote = useCos((s) => !isThisMac(s.host));
+  // Settings works without a daemon: it's where hosts are managed.
+  if (page.kind === "settings") return <SettingsPage />;
+  if (connection === "not_running") return remote ? <HostUnreachable /> : <NotRunning />;
+  if (connection === "refused") return <HostRefused />;
   switch (page.kind) {
     case "waiting":
       return <WaitingPage />;
