@@ -57,6 +57,9 @@ struct ChiefChatView: View {
             .background(Palette.page.opacity(0.96).ignoresSafeArea(edges: .bottom))
         }
         .navigationBarTitleDisplayMode(.inline)
+        // An opaque bar: the two-line title is unreadable over scrolled text.
+        .toolbarBackground(Palette.page, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
