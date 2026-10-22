@@ -52,6 +52,12 @@ pub struct Agent {
     pub last_message: Option<String>,
     /// The newest approval of this agent that is still pending.
     pub pending_approval_id: Option<i64>,
+    /// The agent that started this one: a Chief of Staff.
+    #[serde(default)]
+    pub spawned_by: Option<i64>,
+    /// Claude's transcript (JSONL), from the hooks.
+    #[serde(default)]
+    pub transcript_path: Option<PathBuf>,
     /// `--append-system-prompt`, kept so a resume passes it again.
     #[serde(skip)]
     pub system_prompt: Option<String>,
@@ -69,17 +75,30 @@ pub struct Launch {
     pub cwd: Option<PathBuf>,
     pub system_prompt: Option<String>,
     pub mcp_config: Option<String>,
+    /// The Chief of Staff that started it.
+    pub spawned_by: Option<i64>,
 }
 
 /// Who started an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    /// Someone started it from an app or the CLI.
+    /// Someone started it from an app or the CLI, or a Chief of Staff did
+    /// for them.
     User,
     Chief,
     Worker,
     Reviewer,
+    /// A project's Chief of Staff.
+    Staff,
+}
+
+impl Role {
+    /// Whether you answer its permission requests yourself, whenever you
+    /// like: your own agents and your Chief of Staff, not a run's.
+    pub fn asks_you(self) -> bool {
+        matches!(self, Self::User | Self::Staff)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -281,16 +300,63 @@ impl Agents {
     /// between [`Self::create`] and the launch. Logs nothing.
     pub fn set_launch(&self, id: i64, launch: &Launch) -> Result<Agent, StoreError> {
         self.store.lock().execute(
-            "UPDATE agents SET task_id = ?2, cwd = ?3, system_prompt = ?4, mcp_config = ?5 WHERE id = ?1",
+            "UPDATE agents SET task_id = ?2, cwd = ?3, system_prompt = ?4, mcp_config = ?5, spawned_by = ?6
+             WHERE id = ?1",
             params![
                 id,
                 launch.task_id,
                 launch.cwd.as_ref().map(|cwd| cwd.to_string_lossy()),
                 launch.system_prompt,
                 launch.mcp_config,
+                launch.spawned_by,
             ],
         )?;
         self.require(id)
+    }
+
+    /// Replaces `--append-system-prompt` for the next launch. Logs nothing.
+    pub fn set_system_prompt(&self, id: i64, prompt: Option<&str>) -> Result<(), StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET system_prompt = ?2 WHERE id = ?1",
+            params![id, prompt],
+        )?;
+        Ok(())
+    }
+
+    /// Replaces the model for the next launch. Logs nothing.
+    pub fn set_model(&self, id: i64, model: Option<&str>) -> Result<(), StoreError> {
+        self.store
+            .lock()
+            .execute("UPDATE agents SET model = ?2 WHERE id = ?1", params![id, model])?;
+        Ok(())
+    }
+
+    /// Records where Claude keeps the agent's transcript. Logs nothing.
+    pub fn set_transcript_path(&self, id: i64, path: &std::path::Path) -> Result<(), StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET transcript_path = ?2 WHERE id = ?1",
+            params![id, path.to_string_lossy()],
+        )?;
+        Ok(())
+    }
+
+    /// Logs `agent.transcript`: the transcript grew to `next` messages.
+    pub fn log_transcript(&self, id: i64, next: usize) -> Result<(), StoreError> {
+        self.log.append(
+            kind::AGENT_TRANSCRIPT,
+            None,
+            json!({ "agent_id": id, "next": next }),
+        )?;
+        Ok(())
+    }
+
+    /// The agents `spawner` started, oldest first.
+    pub fn spawned_by(&self, spawner: i64) -> Result<Vec<Agent>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!("{AGENT_SELECT} WHERE a.spawned_by = ?1 ORDER BY a.id"))?
+            .query_map([spawner], read_agent)?
+            .collect::<Result<_, _>>()?)
     }
 
     /// The agents of a task, oldest first.
@@ -713,7 +779,7 @@ const AGENT_SELECT: &str =
         a.model, a.permission_mode, a.user_settings, a.term_rows, a.term_cols, a.started_ms, a.last_activity_ms, a.exited_ms,
         a.exit_code, a.last_message,
         (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending'),
-        a.task_id, a.cwd, a.system_prompt, a.mcp_config
+        a.task_id, a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path
     FROM agents a";
 
 const APPROVAL_COLUMNS: &str =
@@ -752,6 +818,8 @@ fn read_agent(row: &Row<'_>) -> rusqlite::Result<Agent> {
         cwd: row.get::<_, Option<String>>(20)?.map(PathBuf::from),
         system_prompt: row.get(21)?,
         mcp_config: row.get(22)?,
+        spawned_by: row.get(23)?,
+        transcript_path: row.get::<_, Option<String>>(24)?.map(PathBuf::from),
     })
 }
 

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cos_core::{
-    AgentState, Approval, ApprovalRoute, ApprovalState, DecidedBy, NewApproval, Role, StoreError,
+    AgentState, Approval, ApprovalRoute, ApprovalState, DecidedBy, NewApproval, StoreError,
 };
 use cos_harness::Decision;
 use cos_harness::claude::hooks::{Hook, HookEvent};
@@ -205,7 +205,7 @@ impl Inner {
         self.agents.set_state(id, AgentState::WaitingApproval)?;
         // A person can always answer in their own terminal; the agents runs
         // start can't wait forever.
-        if role != Role::User {
+        if !role.asks_you() {
             tokio::spawn(expire(
                 Arc::downgrade(self),
                 approval.id,

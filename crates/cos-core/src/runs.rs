@@ -389,6 +389,31 @@ impl Runs {
         self.run(run_id)
     }
 
+    /// Records the Chief of Staff agent that started the run. Logs nothing.
+    pub fn set_spawned_by(&self, run_id: i64, agent_id: i64) -> Result<(), RunError> {
+        let changed = self.store.lock().execute(
+            "UPDATE runs SET spawned_by = ?2 WHERE id = ?1",
+            rusqlite::params![run_id, agent_id],
+        )?;
+        if changed == 0 {
+            return Err(no_run(run_id));
+        }
+        Ok(())
+    }
+
+    /// The Chief of Staff agent that started the run, if one did.
+    pub fn spawned_by(&self, run_id: i64) -> Result<Option<i64>, RunError> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .store
+            .lock()
+            .query_row("SELECT spawned_by FROM runs WHERE id = ?1", [run_id], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .flatten())
+    }
+
     /// Records the branch and worktree the git side made for a task.
     pub fn assign_worktree(&self, task_id: i64, branch: &str, worktree: &Path) -> Result<Task, RunError> {
         let run_id = storage::task_run(&self.store.lock(), task_id)?.ok_or_else(|| no_task(task_id))?;

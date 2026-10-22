@@ -47,7 +47,7 @@ impl Inner {
         let role = policy_role(agent.role);
         let request = self.policy_request(agent, role, tool, input, cwd);
         let verdict = classify_with(&request, &Filesystem);
-        let (route, why) = if agent.role == Role::User {
+        let (route, why) = if agent.role.asks_you() {
             (ApprovalRoute::User, None)
         } else {
             self.route(agent, role, &verdict)
@@ -102,7 +102,7 @@ impl Inner {
         let workspace = self.projects.workspace(agent.workspace_id).ok();
         let task = match agent.role {
             Role::Worker | Role::Reviewer => self.task_of(agent),
-            Role::User | Role::Chief => None,
+            Role::User | Role::Chief | Role::Staff => None,
         };
         let (root, scope, test_command) = match (task, workspace) {
             (Some(task), _) if task.worktree.is_some() => (
@@ -111,7 +111,7 @@ impl Inner {
                 task.test_command,
             ),
             (_, Some(Workspace { path, .. })) => {
-                let scope = (agent.role != Role::User).then(Vec::new);
+                let scope = (!agent.role.asks_you()).then(Vec::new);
                 (path, scope, None)
             }
             // No folder to judge against: every path counts as unknown.
@@ -273,7 +273,7 @@ impl Inner {
 /// The agent's role as `cos-policy` knows it.
 fn policy_role(role: Role) -> PolicyRole {
     match role {
-        Role::User => PolicyRole::UserSession,
+        Role::User | Role::Staff => PolicyRole::UserSession,
         Role::Chief => PolicyRole::Chief,
         Role::Worker => PolicyRole::Worker,
         Role::Reviewer => PolicyRole::Reviewer,

@@ -207,11 +207,17 @@ impl Inbox {
 /// [`MAX_WAKEUP_ITEMS`] and [`MAX_WAKEUP_BYTES`] of text, and always at least
 /// one if any wait.
 pub fn next_batch(waiting: &[InboxItem]) -> &[InboxItem] {
-    let mut bytes = 0;
+    next_batch_by(waiting, |item| item.text.len())
+}
+
+/// [`next_batch`] for any kind of item, `bytes` giving each one's size.
+/// The Chief of Staff's inbox uses it too.
+pub fn next_batch_by<T>(waiting: &[T], bytes: impl Fn(&T) -> usize) -> &[T] {
+    let mut total = 0;
     let mut count = 0;
     for item in waiting.iter().take(MAX_WAKEUP_ITEMS) {
-        bytes += item.text.len();
-        if count > 0 && bytes > MAX_WAKEUP_BYTES {
+        total += bytes(item);
+        if count > 0 && total > MAX_WAKEUP_BYTES {
             break;
         }
         count += 1;

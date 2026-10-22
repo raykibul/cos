@@ -587,6 +587,7 @@ impl Driver {
             cwd: Some(worktree.path.clone()),
             system_prompt: Some(system_prompt.to_owned()),
             mcp_config: None,
+            spawned_by: None,
         };
         let agent = self
             .shared
@@ -799,5 +800,6 @@ fn role_name(role: Role) -> &'static str {
         Role::Reviewer => "reviewer",
         Role::Chief => "chief",
         Role::User => "agent",
+        Role::Staff => "chief of staff",
     }
 }

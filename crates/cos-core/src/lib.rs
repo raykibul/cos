@@ -11,6 +11,7 @@ pub mod events;
 mod git;
 pub mod projects;
 pub mod runs;
+pub mod staff;
 mod store;
 pub mod taskgit;
 
@@ -28,6 +29,7 @@ pub use runs::{
     TestsStatus, render_board,
 };
 pub use runs::{LimitsChange, RunLimits};
+pub use staff::{StaffBooks, StaffItem, StaffItemKind, StaffRecord};
 pub use store::{Store, StoreError};
 pub use taskgit::{
     Change, ChangeStatus, DiffSummary, MergeOutcome, Scope, ScopeReport, TaskGitError, TaskWorktree,

@@ -50,6 +50,10 @@ pub mod kind {
     pub const QUESTION_ASKED: &str = "question.asked";
     pub const QUESTION_ANSWERED: &str = "question.answered";
     pub const RUN_REPORT_WRITTEN: &str = "run.report_written";
+    // The Chief of Staff; see `docs/chief-of-staff.md`.
+    pub const STAFF_STARTED: &str = "staff.started";
+    pub const STAFF_INBOX: &str = "staff.inbox";
+    pub const AGENT_TRANSCRIPT: &str = "agent.transcript";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
