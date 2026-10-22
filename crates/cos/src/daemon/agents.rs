@@ -728,10 +728,15 @@ impl Inner {
         running.trust_seen = true;
         if running.role != Role::User {
             let terminal = running.terminal.clone();
+            let agents = self.agents.clone();
             tracing::info!(agent = id, "answering the trust dialog for a run agent");
             tokio::spawn(async move {
                 if let Err(error) = terminal.trust_folder().await {
+                    // Leave it to the user rather than stuck where nobody looks.
                     tracing::error!(%error, agent = id, "could not answer the trust dialog");
+                    if let Err(error) = agents.set_state(id, AgentState::NeedsTrust) {
+                        tracing::error!(%error, agent = id, "could not record the trust dialog");
+                    }
                 }
             });
             return;

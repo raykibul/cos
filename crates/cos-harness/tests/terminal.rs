@@ -243,6 +243,32 @@ async fn answers_the_trust_dialog_when_told_to() {
 }
 
 #[tokio::test]
+async fn trusting_survives_keys_dropped_while_claude_starts() {
+    // Longer than the quiet wait, so the first down arrow is lost, as it was
+    // live with Claude 2.1.306. Return must not land on "No, exit".
+    let mut harness = start(
+        "hello",
+        |options| {
+            options.claude.env.extend([
+                ("COS_FAKE_CLAUDE_UNTRUSTED".into(), "1".into()),
+                ("COS_FAKE_CLAUDE_TRUST_DELAY_MS".into(), "800".into()),
+            ])
+        },
+        None,
+    );
+
+    harness.screen_shows("Yes, I trust this folder").await;
+    harness.terminal.trust_folder().await.unwrap();
+
+    assert_eq!(
+        harness.hooks_until("Stop").await,
+        ["SessionStart", "UserPromptSubmit", "Stop"]
+    );
+    harness.screen_shows("echo: hello").await;
+    assert_eq!(harness.exit().await, Some(0));
+}
+
+#[tokio::test]
 async fn kill_ends_the_session() {
     let mut harness = start("hello", |_| {}, None);
     harness.screen_shows("echo: hello").await;
