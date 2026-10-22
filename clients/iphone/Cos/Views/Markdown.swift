@@ -70,7 +70,7 @@ enum MarkdownBlock: Equatable {
 }
 
 /// Inline markdown as an `AttributedString`; the text as it is when it
-/// doesn't parse. `code` spans get a monospaced font a step smaller than
+/// doesn't parse. `code` spans get a monospaced font a step or two smaller than
 /// the text around them (`base`), on a subtle background.
 func inlineMarkdown(_ text: String, base: Font = .body) -> AttributedString {
     let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
@@ -89,8 +89,8 @@ func inlineMarkdown(_ text: String, base: Font = .body) -> AttributedString {
 /// The monospaced font for inline code next to `font`.
 func codeFont(for font: Font) -> Font {
     let style: Font.TextStyle = switch font {
-    case .title3, .headline: .body
-    case .body: .callout
+    case .title3, .headline: .callout
+    case .body: .subheadline
     case .callout, .subheadline: .footnote
     case .footnote: .caption
     default: .caption2
