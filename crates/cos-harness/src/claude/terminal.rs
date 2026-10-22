@@ -26,6 +26,15 @@ const SCROLLBACK: usize = 5_000;
 const SUBMIT_PAUSE: Duration = Duration::from_millis(150);
 /// The answer that marks Claude's "do you trust this folder" dialog.
 const TRUST_ANSWER: &str = "Yes, I trust this folder";
+/// How often the trust answer looks at the screen.
+const POLL: Duration = Duration::from_millis(50);
+/// How long the screen must stay unchanged before the first key.
+const QUIET: Duration = Duration::from_millis(400);
+/// The most the trust answer waits for the screen to settle.
+const QUIET_MAX: Duration = Duration::from_secs(3);
+/// How long a down arrow gets to show up as "Yes" selected before it's sent again.
+const TRUST_SELECT_WAIT: Duration = Duration::from_millis(1500);
+const TRUST_TRIES: usize = 4;
 /// Updates buffered per [`ClaudeTerminal::attach`] watcher. One that falls
 /// further behind gets `Lagged` and should attach again for a fresh snapshot.
 const UPDATE_BUFFER: usize = 1024;
@@ -362,11 +371,52 @@ impl ClaudeTerminal {
 
     /// Answers the trust dialog with yes. Only for folders the user has told
     /// cos to trust: Claude remembers the answer for every later session.
+    ///
+    /// Claude draws the dialog a moment before it reads keys, and drops keys
+    /// typed before that. So this waits for the screen to settle, moves to
+    /// "Yes" (one row down from "No, exit"), and presses Return only once
+    /// "Yes" shows as selected. Return on "No, exit" would end the session.
     pub async fn trust_folder(&self) -> Result<(), HarnessError> {
-        // The dialog starts on "No, exit"; yes is one row down.
-        self.write(b"\x1b[B")?;
-        tokio::time::sleep(SUBMIT_PAUSE).await;
-        self.write(b"\r")
+        self.wait_until_quiet().await;
+        for _ in 0..TRUST_TRIES {
+            self.write(b"\x1b[B")?;
+            let deadline = tokio::time::Instant::now() + TRUST_SELECT_WAIT;
+            while tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(POLL).await;
+                if self.trust_answer_selected() {
+                    tokio::time::sleep(SUBMIT_PAUSE).await;
+                    return self.write(b"\r");
+                }
+            }
+        }
+        Err(HarnessError::Terminal(
+            "the trust dialog never selected \"Yes, I trust this folder\"".into(),
+        ))
+    }
+
+    /// Whether the trust dialog's selection marker is on "Yes".
+    fn trust_answer_selected(&self) -> bool {
+        self.screen()
+            .lines()
+            .any(|line| line.contains(TRUST_ANSWER) && line.contains('❯'))
+    }
+
+    /// Waits until the screen has stopped changing for a moment, up to a few
+    /// seconds.
+    async fn wait_until_quiet(&self) {
+        let deadline = tokio::time::Instant::now() + QUIET_MAX;
+        let mut last = self.screen();
+        let mut quiet = Duration::ZERO;
+        while quiet < QUIET && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(POLL).await;
+            let now = self.screen();
+            if now == last {
+                quiet += POLL;
+            } else {
+                quiet = Duration::ZERO;
+                last = now;
+            }
+        }
     }
 
     /// Kills the process right away.

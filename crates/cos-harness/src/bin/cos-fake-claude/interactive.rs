@@ -23,7 +23,10 @@
 //!
 //! `--resume <id>` continues session `<id>`; its `SessionStart` says
 //! `resume`. `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
-//! shows the trust dialog and only carries on after a down arrow and Return.
+//! shows the trust dialog, reading keys one at a time like the real CLI: the
+//! arrows move the selection, which is redrawn, and Return confirms it.
+//! `COS_FAKE_CLAUDE_TRUST_DELAY_MS` drops keys typed that soon after the dialog
+//! appears, as the real CLI does while it's still starting.
 //!
 //! **Scripted turns**, for pipeline tests: with `COS_FAKE_CLAUDE_SCRIPT`
 //! naming a JSON file, a session whose prompt holds a marker `[fake:<name>]`
@@ -35,7 +38,7 @@ use std::io::{BufRead, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -64,6 +67,10 @@ pub(crate) fn run(args: &[String]) {
     } else {
         "worker"
     };
+    if std::env::var_os("COS_FAKE_CLAUDE_UNTRUSTED").is_some() && !trust() {
+        std::process::exit(1);
+    }
+
     let mut session = Session {
         script: Script::from_env(&id, role),
         id,
@@ -73,10 +80,6 @@ pub(crate) fn run(args: &[String]) {
         mcp: flag("--mcp-config").and_then(|config| Server::from_config(&config)),
         tool_uses: 0,
     };
-
-    if std::env::var_os("COS_FAKE_CLAUDE_UNTRUSTED").is_some() && !session.trust() {
-        std::process::exit(1);
-    }
 
     show(&format!(
         "fake claude · TERM={}",
@@ -116,14 +119,6 @@ struct Session {
 }
 
 impl Session {
-    fn trust(&mut self) -> bool {
-        show("Accessing workspace:\r\n\r\n ❯ No, exit\r\n   Yes, I trust this folder");
-        // The terminal is in line mode, so the arrow key arrives with the Return.
-        let trusted = self.next_line(None).is_some_and(|line| line.contains("\x1b[B"));
-        show(if trusted { "trusted" } else { "not trusted" });
-        trusted
-    }
-
     fn turn(&mut self, prompt: &str) {
         self.hook("UserPromptSubmit", json!({ "prompt": prompt }));
         if prompt.contains("hang forever") {
@@ -328,6 +323,73 @@ fn terminal_answer(line: &str) -> String {
 
 /// Lines typed into the terminal, read on a thread so a hook can run meanwhile.
 /// A bracketed paste (`ESC[200~` … `ESC[201~`) comes out as one line.
+/// The trust dialog. Runs before [`read_lines`] starts, with the terminal in
+/// character mode so each key arrives on its own.
+fn trust() -> bool {
+    let stty = |args: &[&str]| {
+        Command::new("stty")
+            .args(args)
+            .stdin(Stdio::inherit())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    let saved = stty(&["-g"]);
+    stty(&["-icanon", "-echo", "min", "1"]);
+    let delay = std::env::var("COS_FAKE_CLAUDE_TRUST_DELAY_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(Duration::ZERO, Duration::from_millis);
+
+    let draw = |yes: bool| {
+        let (no_mark, yes_mark) = if yes { (" ", "❯") } else { ("❯", " ") };
+        show(&format!(
+            "\x1b[2J\x1b[HAccessing workspace:\r\n\r\n {no_mark} No, exit\r\n {yes_mark} Yes, I trust this folder"
+        ));
+    };
+    draw(false);
+    let ignore_until = Instant::now() + delay;
+    let mut yes = false;
+    let mut stdin = std::io::stdin().lock();
+    let mut buffer = [0u8; 64];
+    let confirmed = 'keys: loop {
+        let Ok(read) = stdin.read(&mut buffer) else {
+            break false;
+        };
+        if read == 0 {
+            break false;
+        }
+        if Instant::now() < ignore_until {
+            continue;
+        }
+        let keys = &buffer[..read];
+        let mut at = 0;
+        while at < keys.len() {
+            match &keys[at..] {
+                [b'\x1b', b'[', b'B', ..] => {
+                    yes = true;
+                    draw(yes);
+                    at += 3;
+                }
+                [b'\x1b', b'[', b'A', ..] => {
+                    yes = false;
+                    draw(yes);
+                    at += 3;
+                }
+                [b'\r' | b'\n', ..] => break 'keys true,
+                _ => at += 1,
+            }
+        }
+    };
+    if let Some(saved) = saved.filter(|saved| !saved.is_empty()) {
+        stty(&[saved.as_str()]);
+    }
+    let trusted = confirmed && yes;
+    show(if trusted { "trusted" } else { "not trusted" });
+    trusted
+}
+
 fn read_lines() -> Receiver<String> {
     let (lines, receiver) = mpsc::channel();
     std::thread::spawn(move || {
