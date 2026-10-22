@@ -370,7 +370,8 @@ async fn bind(tailscale: &dyn Tailscale, port: u16) -> Bound {
     };
     if local.tagged {
         return unavailable(
-            "this machine is a tagged Tailscale device, so it has no owner to match other devices against"
+            "this machine is a tagged Tailscale device, so it has no owner to match other devices against. \
+             Log it in as yourself instead: `sudo tailscale logout`, then `sudo tailscale up` without an auth key"
                 .into(),
             Some(local),
         );
