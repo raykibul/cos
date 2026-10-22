@@ -11,16 +11,17 @@
 //! - `GET /v1/tailnet/peers?port=N`: [`PeersPage`], the other devices on the
 //!   tailnet and whether cos answers on port `N` (default: the listener's)
 //!
-//! Over the tailnet these answer 403 `host_only`, so a remote device can't
-//! approve itself or switch the listener. Every other route is served there
-//! too, including ones added later, once the guard lets the request in.
+//! Over the tailnet the device and listener routes answer 403 `host_only`, so
+//! a remote device can't approve itself or switch the listener. Every other
+//! route is served there too, peers included, once the guard lets the request
+//! in; there the peer list marks the asking device with `is_you`.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
-use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Extension, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -37,6 +38,16 @@ use super::tailnet::{Guard, Refusal, TailnetSettings, TailnetStatus};
 const SETTLE: Duration = Duration::from_secs(15);
 /// Path prefixes only the Unix socket may use.
 const HOST_ONLY: &[&str] = &["/v1/devices", "/v1/tailnet"];
+/// Under a host-only prefix, but served to approved devices too.
+const SHARED: &[&str] = &["/v1/tailnet/peers"];
+
+/// The approved device behind a tailnet request, put in the request's
+/// extensions by the guard. Absent on the Unix socket.
+#[derive(Debug, Clone)]
+struct RemoteClient {
+    node_id: String,
+    ip: IpAddr,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct DevicesPage {
@@ -87,7 +98,14 @@ async fn admit(
     next: Next,
 ) -> Response {
     match guard.admit(addr).await {
-        Ok(_) => next.run(request).await,
+        Ok(device) => {
+            let mut request = request;
+            request.extensions_mut().insert(RemoteClient {
+                node_id: device.node_id,
+                ip: addr.ip(),
+            });
+            next.run(request).await
+        }
         Err(refusal) => refusal.into_response(),
     }
 }
@@ -107,10 +125,14 @@ async fn refuse_host_only(request: Request, next: Next) -> Response {
 }
 
 fn is_host_only(path: &str) -> bool {
-    HOST_ONLY.iter().any(|prefix| {
-        path.strip_prefix(prefix)
+    let under = |prefix: &&str| {
+        path.strip_prefix(*prefix)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    }) || super::chief_api::is_tool_route(path)
+    };
+    let shared = SHARED
+        .iter()
+        .any(|route| path.strip_suffix('/').unwrap_or(path) == *route);
+    (HOST_ONLY.iter().any(under) && !shared) || super::chief_api::is_tool_route(path)
 }
 
 impl IntoResponse for Refusal {
@@ -159,9 +181,11 @@ async fn tailnet_status(State(state): State<AppState>) -> Json<TailnetStatus> {
 }
 
 /// The other devices on the tailnet. When Tailscale can't be used this is
-/// still 200, with no peers and the reason.
+/// still 200, with no peers and the reason. Over the tailnet the asking
+/// device is marked.
 async fn tailnet_peers(
     State(state): State<AppState>,
+    client: Option<Extension<RemoteClient>>,
     query: Result<Query<PeersQuery>, QueryRejection>,
 ) -> Result<Json<PeersPage>, ApiError> {
     let Query(query) = query.map_err(|rejection| ApiError {
@@ -172,7 +196,11 @@ async fn tailnet_peers(
     if port == 0 {
         return Err(port_out_of_range());
     }
-    Ok(Json(state.peers.list(port).await))
+    let mut page = state.peers.list(port).await;
+    if let Some(Extension(client)) = client {
+        page.mark_requester(&client.node_id, client.ip);
+    }
+    Ok(Json(page))
 }
 
 fn port_out_of_range() -> ApiError {
@@ -224,12 +252,15 @@ mod tests {
             "/v1/devices/3/approve",
             "/v1/tailnet",
             "/v1/tailnet/",
-            "/v1/tailnet/peers",
+            "/v1/tailnet/peersx",
+            "/v1/tailnet/peers/1",
             "/v1/agents/3/tools/board_get",
         ] {
             assert!(is_host_only(path), "{path}");
         }
         for path in [
+            "/v1/tailnet/peers",
+            "/v1/tailnet/peers/",
             "/v1/status",
             "/v1/devicesx",
             "/v1/tailnetwork",

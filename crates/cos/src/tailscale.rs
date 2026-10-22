@@ -51,6 +51,9 @@ pub(crate) struct LocalNode {
     pub node_id: String,
     /// MagicDNS name, such as `my-mac`.
     pub name: String,
+    /// The full MagicDNS name without the trailing dot, such as
+    /// `my-mac.tail0000.ts.net`; empty if there is none.
+    pub dns_name: String,
     pub os: String,
     /// The owner: the Tailscale user this machine is logged in as.
     pub user_id: i64,
@@ -265,8 +268,10 @@ pub(crate) fn parse_status(json: &[u8]) -> Result<LocalNode, TailscaleError> {
         .map(|user| user.login_name)
         .unwrap_or_default();
     let ips = tailnet_ips(node.tailscale_ips);
+    let dns_name = node.dns_name.trim_end_matches('.').to_owned();
     Ok(LocalNode {
-        name: short_name(&node.dns_name).unwrap_or(node.host_name),
+        name: short_name(&dns_name).unwrap_or(node.host_name),
+        dns_name,
         node_id: node.id,
         os: node.os,
         user_id: node.user_id,
@@ -518,6 +523,7 @@ mod tests {
             LocalNode {
                 node_id: "nSELFstableID1CNTRL".into(),
                 name: "my-mac".into(),
+                dns_name: "my-mac.tail0000.ts.net".into(),
                 os: "macOS".into(),
                 user_id: 1111111111111111,
                 login_name: "me@example.com".into(),

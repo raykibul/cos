@@ -33,8 +33,27 @@ pub(crate) struct PeersPage {
     pub peers: Vec<TailnetPeer>,
     /// This machine's MagicDNS name, once Tailscale has answered.
     pub self_name: Option<String>,
+    /// This machine, the host answering, once Tailscale has answered, so an
+    /// app can say which host the list came from.
+    #[serde(rename = "self", default)]
+    pub host: Option<SelfNode>,
     /// Why there are no peers: Tailscale isn't usable.
     pub reason: Option<String>,
+}
+
+/// The machine answering `GET /v1/tailnet/peers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SelfNode {
+    pub name: String,
+    /// Without the trailing dot; empty if there is none.
+    #[serde(default)]
+    pub dns_name: String,
+    #[serde(default)]
+    pub os: String,
+    /// Its first tailnet IPv4 (else first address) and the port asked about.
+    /// Empty if Tailscale lists no address.
+    #[serde(default)]
+    pub address: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +77,9 @@ pub(crate) struct TailnetPeer {
     /// Where cos would listen on it: the first IPv4 (else the first address)
     /// and the port. Empty if Tailscale lists no address.
     pub address: String,
+    /// The device asking, over the tailnet. Always false on the socket.
+    #[serde(default)]
+    pub is_you: bool,
 }
 
 /// Whether cos's tailnet listener answers on a peer.
@@ -145,6 +167,7 @@ impl Peers {
                 return PeersPage {
                     peers: Vec::new(),
                     self_name: None,
+                    host: None,
                     reason: Some(error.to_string()),
                 };
             }
@@ -179,13 +202,24 @@ impl Peers {
                     tagged: peer.tagged,
                     cos,
                     address: address.map(|address| address.to_string()).unwrap_or_default(),
+                    is_you: false,
                 }
             })
             .collect();
         sort(&mut peers);
+        let local = nodes.local;
+        let host = SelfNode {
+            address: first_address(&local.ips, port)
+                .map(|address| address.to_string())
+                .unwrap_or_default(),
+            name: local.name.clone(),
+            dns_name: local.dns_name,
+            os: local.os,
+        };
         PeersPage {
             peers,
-            self_name: Some(nodes.local.name),
+            self_name: Some(local.name),
+            host: Some(host),
             reason: None,
         }
     }
@@ -235,12 +269,27 @@ impl Peers {
 /// Where cos would listen on `peer`: its first IPv4 address, else its first
 /// address, on `port`.
 fn address(peer: &PeerNode, port: u16) -> Option<SocketAddr> {
-    let ip = peer
-        .ips
-        .iter()
-        .find(|ip| ip.is_ipv4())
-        .or_else(|| peer.ips.first())?;
+    first_address(&peer.ips, port)
+}
+
+fn first_address(ips: &[IpAddr], port: u16) -> Option<SocketAddr> {
+    let ip = ips.iter().find(|ip| ip.is_ipv4()).or_else(|| ips.first())?;
     Some(SocketAddr::new(*ip, port))
+}
+
+impl PeersPage {
+    /// Marks the device asking, by its Tailscale node ID or else the address
+    /// it connected from, so an app can leave itself out.
+    pub(crate) fn mark_requester(&mut self, node_id: &str, ip: IpAddr) {
+        let by_id = self
+            .peers
+            .iter()
+            .position(|peer| !node_id.is_empty() && peer.id == node_id);
+        let found = by_id.or_else(|| self.peers.iter().position(|peer| peer.ips.contains(&ip)));
+        if let Some(index) = found {
+            self.peers[index].is_you = true;
+        }
+    }
 }
 
 /// Running cos first, then online, then by name.
@@ -326,6 +375,7 @@ mod tests {
         LocalNode {
             node_id: "nHOST".into(),
             name: "my-mac".into(),
+            dns_name: "my-mac.tail0000.ts.net".into(),
             os: "macOS".into(),
             user_id: 1,
             login_name: "me@example.com".into(),
@@ -394,8 +444,18 @@ mod tests {
         // zebra, Mango and beta; never the stranger or the offline one.
         assert_eq!(probe.calls.load(Ordering::SeqCst), 3);
         assert_eq!(page.self_name.as_deref(), Some("my-mac"));
+        assert_eq!(
+            page.host,
+            Some(SelfNode {
+                name: "my-mac".into(),
+                dns_name: "my-mac.tail0000.ts.net".into(),
+                os: "macOS".into(),
+                address: "100.100.1.1:7700".into(),
+            })
+        );
         assert_eq!(page.reason, None);
         assert_eq!(page.peers[0].address, "100.100.2.9:7700");
+        assert!(page.peers.iter().all(|peer| !peer.is_you));
     }
 
     #[tokio::test]
@@ -437,14 +497,60 @@ mod tests {
             PeersPage {
                 peers: Vec::new(),
                 self_name: None,
+                host: None,
                 reason: Some("Tailscale is not logged in".into()),
             }
         );
         let json = serde_json::to_value(&page).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"peers": [], "self_name": null, "reason": "Tailscale is not logged in"})
+            serde_json::json!({"peers": [], "self_name": null, "self": null, "reason": "Tailscale is not logged in"})
         );
+    }
+
+    #[tokio::test]
+    async fn the_requester_is_marked_by_node_id_else_by_address() {
+        let (peers, _) = peers_with(
+            vec![
+                node("phone", "100.100.2.1", true, true),
+                node("tablet", "100.100.2.2", true, true),
+            ],
+            &[],
+            PROBE_TTL,
+        );
+        let page = peers.list(7700).await;
+        let yours = |page: &PeersPage| -> Vec<String> {
+            page.peers
+                .iter()
+                .filter(|peer| peer.is_you)
+                .map(|peer| peer.name.clone())
+                .collect()
+        };
+
+        let mut by_id = page.clone();
+        by_id.mark_requester("nphone", "100.100.9.9".parse().unwrap());
+        assert_eq!(yours(&by_id), ["phone"]);
+
+        let mut by_ip = page.clone();
+        by_ip.mark_requester("nGONE", "100.100.2.2".parse().unwrap());
+        assert_eq!(yours(&by_ip), ["tablet"]);
+
+        let mut neither = page;
+        neither.mark_requester("", "100.100.9.9".parse().unwrap());
+        assert!(yours(&neither).is_empty());
+    }
+
+    #[test]
+    fn an_older_page_without_self_or_is_you_still_parses() {
+        let page: PeersPage = serde_json::from_value(serde_json::json!({
+            "peers": [{"id": "n1", "name": "box", "hostname": "box", "dns_name": "", "os": "linux",
+                       "ips": [], "online": true, "last_seen_ms": null, "mine": true, "tagged": false,
+                       "cos": "running", "address": ""}],
+            "self_name": "my-mac", "reason": null
+        }))
+        .unwrap();
+        assert_eq!(page.host, None);
+        assert!(!page.peers[0].is_you);
     }
 
     #[test]

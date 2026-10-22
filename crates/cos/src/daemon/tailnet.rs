@@ -687,6 +687,7 @@ mod tests {
         LocalNode {
             node_id: "nHOST".into(),
             name: "my-mac".into(),
+            dns_name: "my-mac.tail0000.ts.net".into(),
             os: "macOS".into(),
             user_id: 1,
             login_name: "me@example.com".into(),

@@ -313,6 +313,7 @@ mod tests {
             tagged: false,
             cos,
             address: "100.100.2.2:7700".into(),
+            is_you: false,
         }
     }
 
@@ -342,6 +343,7 @@ mod tests {
                 },
             ],
             self_name: Some("my-mac".into()),
+            host: None,
             reason: None,
         };
 
@@ -364,6 +366,7 @@ mod tests {
         let empty = PeersPage {
             peers: Vec::new(),
             self_name: Some("my-mac".into()),
+            host: None,
             reason: None,
         };
         assert_eq!(
@@ -373,6 +376,7 @@ mod tests {
         let down = PeersPage {
             peers: Vec::new(),
             self_name: None,
+            host: None,
             reason: Some("Tailscale is not logged in".into()),
         };
         assert_eq!(

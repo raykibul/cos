@@ -540,6 +540,7 @@ fn fake_local() -> LocalNode {
     LocalNode {
         node_id: "nHOST".into(),
         name: "my-mac".into(),
+        dns_name: "my-mac.tail0000.ts.net".into(),
         os: "macOS".into(),
         user_id: 1,
         login_name: "me@example.com".into(),
@@ -653,8 +654,13 @@ async fn tailnet_peers_lists_the_other_devices_running_cos_first() {
             "mine": true,
             "tagged": false,
             "cos": "running",
-            "address": "100.100.2.2:7701"
+            "address": "100.100.2.2:7701",
+            "is_you": false
         })
+    );
+    assert_eq!(
+        body["self"],
+        json!({"name": "my-mac", "dns_name": "my-mac.tail0000.ts.net", "os": "macOS", "address": "127.0.0.1:7701"})
     );
     let order: Vec<(&str, &str)> = body["peers"]
         .as_array()
@@ -699,7 +705,7 @@ async fn tailnet_peers_says_why_when_tailscale_is_down() {
     assert_eq!(status, 200);
     assert_eq!(
         body,
-        json!({"peers": [], "self_name": null, "reason": "Tailscale is not running (it is switched off)"})
+        json!({"peers": [], "self_name": null, "self": null, "reason": "Tailscale is not running (it is switched off)"})
     );
 }
 
@@ -872,8 +878,6 @@ async fn a_new_device_waits_for_approval_on_the_host() {
         ("DELETE", "/v1/devices/1"),
         ("GET", "/v1/tailnet"),
         ("PUT", "/v1/tailnet"),
-        ("GET", "/v1/tailnet/peers"),
-        ("GET", "/v1/tailnet/peers?port=7700"),
     ] {
         let (status, body) = tcp_request(addr, method, path).await;
         assert_eq!(
@@ -941,6 +945,48 @@ async fn other_users_unknown_peers_and_tagged_devices_never_become_devices() {
     assert_eq!((status, body["code"].as_str()), (403, Some("unknown_peer")));
 
     assert!(daemon.local().devices().await.unwrap().is_empty());
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn an_approved_device_lists_the_tailnet_and_finds_itself() {
+    let tailscale = FakeTailscale::new();
+    tailscale.set_nodes(vec![
+        // The phone asking: fake_peer's node ID.
+        fake_node("PHONE", "100.100.2.1", true),
+        fake_node("build-box", "100.100.2.2", true),
+    ]);
+    let daemon = RemoteDaemon::start(tailscale, fast(Duration::ZERO)).await;
+    let addr = daemon.listen().await;
+
+    // Pending devices don't get the list.
+    let (status, body) = tcp_request(addr, "GET", "/v1/tailnet/peers").await;
+    assert_eq!((status, body["code"].as_str()), (403, Some("device_pending")));
+
+    daemon.local().approve_device(1).await.unwrap();
+    let (status, body) = tcp_request(addr, "GET", "/v1/tailnet/peers").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["self"]["name"], "my-mac");
+    assert_eq!(body["self"]["address"], format!("127.0.0.1:{}", addr.port()));
+    let marked: Vec<(&str, bool)> = body["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|peer| (peer["name"].as_str().unwrap(), peer["is_you"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(marked, [("build-box", false), ("PHONE", true)]);
+
+    // Matched by address when the node ID isn't listed.
+    daemon.tailscale.set_nodes(vec![PeerNode {
+        node_id: "nOTHER".into(),
+        ..fake_node("phone-old", "127.0.0.1", true)
+    }]);
+    let (_, body) = tcp_request(addr, "GET", "/v1/tailnet/peers?port=7700").await;
+    assert_eq!(body["peers"][0]["is_you"], true);
+
+    // On the socket nobody is "you".
+    let page = daemon.local().tailnet_peers(None).await.unwrap();
+    assert!(page.peers.iter().all(|peer| !peer.is_you));
     daemon.stop().await;
 }
 
