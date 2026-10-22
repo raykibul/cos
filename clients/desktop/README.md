@@ -53,7 +53,8 @@ cargo test
 
 ## The shell
 
-- **Commands:** `daemon_info`, `daemon_request`, `follow_events`, `attach_terminal`, `close_stream`, `set_waiting_count`, `notify`, `reveal_path` and `open_in_terminal` (Ghostty if it's in an Applications folder, else Terminal). Streams live until `close_stream`, or until the page reloads.
+- **Commands:** `daemon_info`, `daemon_request`, `follow_events`, `attach_terminal`, `close_stream`, `hosts_list`, `host_add`, `host_remove`, `host_select`, `set_waiting_count`, `notify`, `reveal_path` and `open_in_terminal` (Ghostty if it's in an Applications folder, else Terminal). Streams live until `close_stream`, `host_select`, or a page reload.
+- **Hosts:** the app talks to this Mac's daemon through its socket, or to another Mac's over Tailscale (TCP, port 7700 unless you pick another). Saved Macs, and the one in use, are in `~/Library/Application Support/local.cos.desktop/hosts.json`. Add one from the picker at the top of the sidebar. On the other Mac, run `cos remote on`, then approve this Mac there (`cos devices approve <id>`, or in its app under Waiting on you) the first time it connects. Settings > Remote access does the same for this Mac.
 - **Permissions:** `capabilities/default.json` allows the cos commands, dragging the window and double-click to zoom, nothing else. `build.rs` lists the commands; a new command needs adding to both.
 - **CSP:** scripts from the app only, plus `wasm-unsafe-eval` for ghostty-web's WASM. Styles may be inline. No CSP in dev, so Vite's hot reload works.
 - **Window:** an overlay title bar, with the traffic lights centered in the UI's 52 px header (`trafficLightPosition` in `tauri.conf.json`).
