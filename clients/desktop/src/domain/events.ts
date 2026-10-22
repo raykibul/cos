@@ -9,6 +9,11 @@ export function changesProjects(kind: string): boolean {
   return kind.startsWith("project.") || kind.startsWith("workspace.");
 }
 
+/** `device.requested`, `.approved`, `.denied` and `.removed`. */
+export function changesDevices(kind: string): boolean {
+  return kind.startsWith("device.");
+}
+
 /**
  * An approval changes its agent's state and `pending_approval_id`; a removed
  * workspace takes its agents with it.

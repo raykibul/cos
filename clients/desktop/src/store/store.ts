@@ -10,6 +10,7 @@ import {
   type Agent,
   type Approval,
   type Board,
+  type Device,
   type LoggedEvent,
   type Project,
   type Question,
@@ -17,14 +18,17 @@ import {
   type RunLimits,
   type RunTask,
   type Status,
+  type TailnetStatus,
   type Workspace,
   decodeEvent,
   decodeStatus,
+  decodeTailnet,
 } from "../api/models";
-import type { Bridge, DaemonInfo, EventMessage } from "../bridge/types";
+import type { Bridge, DaemonInfo, EventMessage, Host, HostList } from "../bridge/types";
 import {
   changesAgents,
   changesApprovals,
+  changesDevices,
   changesProjects,
   changesQuestions,
   changesRuns,
@@ -32,7 +36,20 @@ import {
 } from "../domain/events";
 import { CoalescedRefresh, type Result } from "./coalesce";
 
-export type Connection = "connecting" | "running" | "not_running" | "reconnecting";
+/**
+ * `refused`: a remote daemon answers but won't let this Mac in (see
+ * `refusal`). `not_running`: nothing answers, on the socket or at the host's
+ * address.
+ */
+export type Connection = "connecting" | "running" | "not_running" | "reconnecting" | "refused";
+
+/** Why a remote daemon turned this Mac away, from its 403 or 503. */
+export interface Refusal {
+  /** `device_pending`, `device_denied`, `wrong_user`, `tagged_device`, `unknown_peer`, `tailscale_unavailable`, … */
+  code: string;
+  /** The daemon's message, which names the command to run on the host. */
+  message: string;
+}
 
 export type ReportState =
   | { kind: "not_written" }
@@ -43,8 +60,22 @@ export interface DaemonState {
   connection: Connection;
   /** Why the stream dropped, while reconnecting or not running. */
   connectionReason: string | null;
+  /** Set while `connection` is `refused`. */
+  refusal: Refusal | null;
   status: Status | null;
   info: DaemonInfo | null;
+  /** The host in use; null until the shell says (taken as this Mac). */
+  host: Host | null;
+  /** This Mac and the saved hosts. */
+  hosts: Host[];
+  /** Devices that tried this Mac's tailnet listener, oldest first. Only for This Mac. */
+  devices: Device[];
+  devicesLoaded: boolean;
+  /** This Mac's tailnet listener; null on a remote host or before it loads. */
+  tailnet: TailnetStatus | null;
+  /** False when the daemon has no remote access routes (404). */
+  remoteAccessSupported: boolean;
+  remoteAccessError: string | null;
   /** The most recent events, oldest first. */
   events: LoggedEvent[];
   /** In the order they were added, each with its workspaces. Kept while the daemon is away. */
@@ -82,8 +113,16 @@ export function initialState(): DaemonState {
   return {
     connection: "connecting",
     connectionReason: null,
+    refusal: null,
     status: null,
     info: null,
+    host: null,
+    hosts: [],
+    devices: [],
+    devicesLoaded: false,
+    tailnet: null,
+    remoteAccessSupported: true,
+    remoteAccessError: null,
     events: [],
     projects: [],
     projectsLoaded: false,
@@ -131,6 +170,11 @@ function message(error: unknown): string {
   return CosError.from(error).message;
 }
 
+/** Whether the host is this Mac (a missing host, from an older shell, is too). */
+export function isThisMac(host: Host | null): boolean {
+  return host === null || host.address === null;
+}
+
 export class CosStore {
   readonly state: StoreApi<DaemonState>;
   readonly client: DaemonClient;
@@ -139,16 +183,24 @@ export class CosStore {
   private readonly runsDebounceMs: number;
   private streamId: number | null = null;
   private started = false;
+  /**
+   * Bumped by `stop` and on each switch of host, so answers and stream
+   * messages from before are dropped.
+   */
+  private generation = 0;
   private pendingEvents: LoggedEvent[] = [];
   private flushScheduled = false;
   private readonly watches = new Map<number, RunWatch>();
 
-  private readonly projectsRefresh: CoalescedRefresh<Project[]>;
-  private readonly agentsRefresh: CoalescedRefresh<Agent[]>;
-  private readonly approvalsRefresh: CoalescedRefresh<Approval[]>;
-  private readonly runsRefresh: CoalescedRefresh<Run[]>;
-  private readonly questionsRefresh: CoalescedRefresh<Question[]>;
-  private readonly allApprovalsRefresh: CoalescedRefresh<Approval[]>;
+  // Made again for each host, so an answer from the last one is never applied.
+  private projectsRefresh!: CoalescedRefresh<Project[]>;
+  private agentsRefresh!: CoalescedRefresh<Agent[]>;
+  private approvalsRefresh!: CoalescedRefresh<Approval[]>;
+  private runsRefresh!: CoalescedRefresh<Run[]>;
+  private questionsRefresh!: CoalescedRefresh<Question[]>;
+  private allApprovalsRefresh!: CoalescedRefresh<Approval[]>;
+  private devicesRefresh!: CoalescedRefresh<Device[]>;
+  private tailnetRefresh!: CoalescedRefresh<TailnetStatus>;
 
   constructor(
     readonly bridge: Bridge,
@@ -159,7 +211,50 @@ export class CosStore {
     this.keep = options.keep ?? 1000;
     this.backlog = options.backlog ?? 200;
     this.runsDebounceMs = options.runsDebounceMs ?? 120;
+    this.createRefreshes();
+  }
+
+  private disposeRefreshes(): void {
+    for (const refresh of [
+      this.projectsRefresh,
+      this.agentsRefresh,
+      this.approvalsRefresh,
+      this.runsRefresh,
+      this.questionsRefresh,
+      this.allApprovalsRefresh,
+      this.devicesRefresh,
+      this.tailnetRefresh,
+    ]) {
+      refresh.dispose();
+    }
+  }
+
+  private createRefreshes(): void {
     const client = this.client;
+    this.devicesRefresh = new CoalescedRefresh(
+      () => client.devices(),
+      (result) => {
+        if (result.ok) {
+          this.set({ devices: result.value, devicesLoaded: true, remoteAccessError: null });
+        } else if (isNotFound(result.error)) {
+          this.set({ devices: [], devicesLoaded: true, remoteAccessSupported: false });
+        } else {
+          this.set({ remoteAccessError: message(result.error) });
+        }
+      },
+    );
+    this.tailnetRefresh = new CoalescedRefresh(
+      () => client.tailnet(),
+      (result) => {
+        if (result.ok) {
+          this.set({ tailnet: result.value, remoteAccessSupported: true, remoteAccessError: null });
+        } else if (isNotFound(result.error)) {
+          this.set({ remoteAccessSupported: false });
+        } else {
+          this.set({ remoteAccessError: message(result.error) });
+        }
+      },
+    );
 
     this.projectsRefresh = new CoalescedRefresh(
       () => client.projects(),
@@ -247,22 +342,26 @@ export class CosStore {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    this.bridge.daemonInfo().then(
-      (info) => this.set({ info }),
-      () => undefined,
-    );
+    const generation = this.generation;
+    const current = () => this.started && this.generation === generation;
+    // Which host this is decides what's fetched (devices only on This Mac).
+    await this.loadHosts();
+    if (!current()) return;
     // Start a backlog before the newest event, so the log has some history
     // without replaying all of it.
     const after = await this.client.status().then(
       (status) => Math.max(0, status.lastSeq - this.backlog),
       () => null,
     );
-    if (!this.started) return;
+    if (!current()) return;
     try {
-      const id = await this.bridge.followEvents(after, (message) => this.handle(message));
-      if (this.started) this.streamId = id;
+      const id = await this.bridge.followEvents(after, (message) => {
+        if (this.generation === generation) this.handle(message);
+      });
+      if (current()) this.streamId = id;
       else void this.bridge.closeStream(id);
     } catch (error) {
+      if (!current()) return;
       const failure = CosError.from(error);
       this.set({
         connection: failure.kind === "not_running" ? "not_running" : "reconnecting",
@@ -273,8 +372,38 @@ export class CosStore {
 
   stop(): void {
     this.started = false;
+    this.generation += 1;
     if (this.streamId !== null) void this.bridge.closeStream(this.streamId);
     this.streamId = null;
+  }
+
+  /** Follows the same host again from scratch: "Try now" on a refusal. */
+  async reconnect(): Promise<void> {
+    this.stop();
+    await this.start();
+  }
+
+  /** Where the daemon is and which host is in use, from the shell. */
+  private async loadHosts(): Promise<void> {
+    const [info, list] = await Promise.allSettled([
+      this.bridge.daemonInfo(),
+      this.bridge.hostsList(),
+    ]);
+    const partial: Partial<DaemonState> = {};
+    if (info.status === "fulfilled") partial.info = info.value;
+    if (list.status === "fulfilled") partial.hosts = list.value.hosts;
+    const host =
+      (info.status === "fulfilled" ? info.value.host : undefined) ??
+      (list.status === "fulfilled"
+        ? list.value.hosts.find((h) => h.id === list.value.current)
+        : undefined);
+    if (host) partial.host = host;
+    this.set(partial);
+  }
+
+  /** Whether the host in use is this Mac, where devices and the listener are managed. */
+  isThisMac(): boolean {
+    return isThisMac(this.get().host);
   }
 
   /** One message from `follow_events`. */
@@ -287,10 +416,11 @@ export class CosStore {
         } catch {
           status = null;
         }
-        this.set({ status, connection: "running", connectionReason: null });
+        this.set({ status, connection: "running", connectionReason: null, refusal: null });
         this.refreshProjects();
         this.refreshAgents();
         this.refreshRuns();
+        this.refreshRemoteAccess();
         break;
       }
       case "event": {
@@ -310,8 +440,13 @@ export class CosStore {
       case "disconnected":
         this.set({
           status: null,
-          connection: message.notRunning ? "not_running" : "reconnecting",
+          connection: message.code
+            ? "refused"
+            : message.notRunning
+              ? "not_running"
+              : "reconnecting",
           connectionReason: message.reason,
+          refusal: message.code ? { code: message.code, message: message.reason } : null,
         });
         break;
     }
@@ -319,6 +454,14 @@ export class CosStore {
 
   private applyEvent(event: LoggedEvent): void {
     const kind = event.kind;
+    if (changesDevices(kind) && this.isThisMac()) this.devicesRefresh.request();
+    if (kind === "tailnet.changed" && this.isThisMac()) {
+      try {
+        this.set({ tailnet: decodeTailnet(event.data) });
+      } catch {
+        this.tailnetRefresh.request();
+      }
+    }
     if (changesProjects(kind)) this.projectsRefresh.request();
     if (changesAgents(kind)) this.agentsRefresh.request();
     if (changesApprovals(kind)) this.approvalsRefresh.request();
@@ -365,6 +508,13 @@ export class CosStore {
 
   refreshProjects(): void {
     this.projectsRefresh.request();
+  }
+
+  /** Devices and the tailnet listener, which only This Mac's socket serves. */
+  refreshRemoteAccess(): void {
+    if (!this.isThisMac()) return;
+    this.devicesRefresh.request();
+    this.tailnetRefresh.request();
   }
 
   refreshAgents(): void {
@@ -674,5 +824,81 @@ export class CosStore {
     this.watches.get(runId)?.board.request();
     this.runsRefresh.request();
     return limits;
+  }
+
+  // MARK: Hosts
+
+  /**
+   * Switches to another Mac's daemon. The shell closes every stream; the
+   * state starts over, and the new host's events are followed.
+   */
+  async switchHost(id: string): Promise<void> {
+    const list = await this.bridge.hostSelect(id);
+    await this.restartOn(list);
+  }
+
+  /** Saves a host; `switchHost` to use it. */
+  async addHost(name: string, address: string): Promise<Host> {
+    const host = await this.bridge.hostAdd(name, address);
+    const list = await this.bridge.hostsList();
+    this.set({ hosts: list.hosts });
+    return host;
+  }
+
+  /** Forgets a host; if it was in use, goes back to this Mac. */
+  async removeHost(id: string): Promise<void> {
+    const wasCurrent = this.get().host?.id === id;
+    const list = await this.bridge.hostRemove(id);
+    if (wasCurrent || list.current !== this.get().host?.id) await this.restartOn(list);
+    else this.set({ hosts: list.hosts });
+  }
+
+  private async restartOn(list: HostList): Promise<void> {
+    this.stop();
+    this.streamId = null;
+    this.disposeRefreshes();
+    for (const watch of this.watches.values()) {
+      watch.board.dispose();
+      watch.limits.dispose();
+      watch.report.dispose();
+    }
+    this.watches.clear();
+    this.pendingEvents = [];
+    const host = list.hosts.find((h) => h.id === list.current) ?? null;
+    this.state.setState(
+      { ...initialState(), info: this.get().info, hosts: list.hosts, host },
+      true,
+    );
+    this.createRefreshes();
+    await this.start();
+  }
+
+  // MARK: Remote access (This Mac only)
+
+  async setTailnet(enabled: boolean, port?: number): Promise<TailnetStatus> {
+    const tailnet = await this.client.setTailnet(enabled, port);
+    this.set({ tailnet });
+    return tailnet;
+  }
+
+  approveDevice(id: number): Promise<Device> {
+    return this.decideDevice(id, () => this.client.approveDevice(id));
+  }
+
+  denyDevice(id: number): Promise<Device> {
+    return this.decideDevice(id, () => this.client.denyDevice(id));
+  }
+
+  async removeDevice(id: number): Promise<void> {
+    await this.client.removeDevice(id);
+    this.set((s) => ({ devices: s.devices.filter((d) => d.id !== id) }));
+    this.devicesRefresh.request();
+  }
+
+  private async decideDevice(id: number, decide: () => Promise<Device>): Promise<Device> {
+    const device = await decide();
+    this.set((s) => ({ devices: s.devices.map((d) => (d.id === id ? device : d)) }));
+    this.devicesRefresh.request();
+    return device;
   }
 }

@@ -1,7 +1,7 @@
 // Lookups over the store's state. Pure functions, so components and tests
 // share them.
 
-import type { Agent, Approval, Project, Question, Run, Workspace } from "../api/models";
+import type { Agent, Approval, Device, Project, Question, Run, Workspace } from "../api/models";
 import { isForYou } from "../domain/approvals";
 import { isRunFinished } from "../domain/tasks";
 import type { DaemonState } from "./store";
@@ -51,16 +51,23 @@ export function plansAwaitingApproval(s: DaemonState): Run[] {
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
+/** Devices asking to reach this Mac over Tailscale, oldest first. */
+export function pendingDevices(s: DaemonState): Device[] {
+  return s.devices.filter((d) => d.state === "pending");
+}
+
 /**
  * Everything blocked on you: approvals routed to you (not to a chief),
- * agents on the trust dialog, chiefs' open questions, and plans to approve.
+ * agents on the trust dialog, chiefs' open questions, plans to approve, and
+ * devices asking to reach this Mac.
  */
 export function waitingCount(s: DaemonState): number {
   return (
     approvalsForYou(s).length +
     trustAgents(s).length +
     s.questions.length +
-    plansAwaitingApproval(s).length
+    plansAwaitingApproval(s).length +
+    pendingDevices(s).length
   );
 }
 

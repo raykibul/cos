@@ -4,6 +4,8 @@ import type {
   DaemonInfo,
   DaemonResponse,
   EventMessage,
+  Host,
+  HostList,
   HttpMethod,
   TerminalMessage,
 } from "./types";
@@ -34,6 +36,22 @@ export class TauriBridge implements Bridge {
 
   closeStream(id: number): Promise<void> {
     return invoke("close_stream", { id });
+  }
+
+  hostsList(): Promise<HostList> {
+    return invoke<HostList>("hosts_list");
+  }
+
+  hostAdd(name: string, address: string): Promise<Host> {
+    return invoke<Host>("host_add", { name, address });
+  }
+
+  hostRemove(id: string): Promise<HostList> {
+    return invoke<HostList>("host_remove", { id });
+  }
+
+  hostSelect(id: string): Promise<HostList> {
+    return invoke<HostList>("host_select", { id });
   }
 
   setWaitingCount(count: number): Promise<void> {
