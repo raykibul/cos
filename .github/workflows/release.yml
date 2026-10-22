@@ -1,9 +1,10 @@
 # Builds cos for Linux (static musl, x86_64 and aarch64) and macOS (arm64
-# and x86_64) and publishes them as a GitHub Release, on a `v*` tag or by
-# hand for an existing tag. Asset names carry no version, so
+# and x86_64), and the Mac app (one universal cos.app, zipped), and
+# publishes them as a GitHub Release, on a `v*` tag or by hand for an
+# existing tag. Asset names carry no version, so
 # https://github.com/raykibul/cos/releases/latest/download/cos-<target>.tar.gz
-# always names the newest build; install.sh and the npm package rely on it.
-# See docs/releasing.md.
+# (and .../cos-desktop-universal-apple-darwin.zip) always names the newest
+# build; install.sh and the npm package rely on it. See docs/releasing.md.
 name: Release
 
 on:
@@ -103,8 +104,58 @@ jobs:
           path: out/
           if-no-files-found: error
 
+  desktop:
+    name: Desktop app (macOS, universal)
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # The Tauri CLI, from npm (prebuilt), at the version `make desktop`
+      # uses through `cargo tauri`.
+      TAURI_CLI: "2.12.4"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: Rust 1.99 for both Mac CPUs
+        run: |
+          rustup toolchain install 1.99 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup default 1.99
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Build the UI (pnpm, at package.json's packageManager version)
+        working-directory: clients/desktop
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+      # One app for both CPUs: Tauri builds each target and joins them with
+      # lipo. The version comes from the tag (checked against Cargo.toml by
+      # the version job) through --config, so the files in the repo can
+      # stay as they are, as npm/package.json does. Signed ad hoc
+      # (signingIdentity "-"), not with a Developer ID.
+      - name: Bundle cos.app
+        working-directory: clients/desktop
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: |
+          npx --yes "@tauri-apps/cli@$TAURI_CLI" build --target universal-apple-darwin --bundles app \
+            --config "{\"version\":\"$VERSION\"}"
+      - name: Check and package
+        run: |
+          sh scripts/package-desktop.sh \
+            clients/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/cos.app "$VERSION" out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cos-desktop
+          path: out/
+          if-no-files-found: error
+
   release:
-    needs: [linux, macos]
+    needs: [linux, macos, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,10 +164,18 @@ jobs:
         with:
           path: out
           merge-multiple: true
+      # Every job's assets land in out/, and SHA256SUMS is written here, once,
+      # over all of them.
       - name: SHA256SUMS
         working-directory: out
         run: |
-          sha256sum cos-*.tar.gz >SHA256SUMS
+          for asset in \
+            cos-x86_64-unknown-linux-musl.tar.gz cos-aarch64-unknown-linux-musl.tar.gz \
+            cos-aarch64-apple-darwin.tar.gz cos-x86_64-apple-darwin.tar.gz \
+            cos-desktop-universal-apple-darwin.zip; do
+            [ -f "$asset" ] || { echo "::error::$asset is missing"; exit 1; }
+          done
+          sha256sum cos-*.tar.gz cos-desktop-*.zip >SHA256SUMS
           cat SHA256SUMS
       - name: Create or update the GitHub Release
         env:

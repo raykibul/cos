@@ -67,6 +67,18 @@ async function fetchBytes(url) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+/** Downloads the release file `asset` from `url` and checks it against the release's SHA256SUMS. */
+export async function fetchVerified(url, asset) {
+  const [bytes, sums] = await Promise.all([fetchBytes(`${url}/${asset}`), fetchBytes(`${url}/SHA256SUMS`)]);
+  const expected = expectedSum(sums.toString("utf8"), asset);
+  if (!expected) throw new Error(`SHA256SUMS has no entry for ${asset}`);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected) {
+    throw new Error(`checksum mismatch for ${asset}: expected ${expected}, got ${actual}`);
+  }
+  return bytes;
+}
+
 /**
  * Installs cos and returns the binary's path. `env` takes COS_VERSION,
  * COS_INSTALL_DIR and COS_DOWNLOAD_BASE, as install.sh does.
@@ -78,16 +90,7 @@ export async function install({ env = process.env, platform = process.platform, 
   const url = releaseUrl(env.COS_DOWNLOAD_BASE || DEFAULT_BASE, version);
 
   log(`downloading ${asset} (${version})`);
-  const [archive, sums] = await Promise.all([
-    fetchBytes(`${url}/${asset}`),
-    fetchBytes(`${url}/SHA256SUMS`),
-  ]);
-  const expected = expectedSum(sums.toString("utf8"), asset);
-  if (!expected) throw new Error(`SHA256SUMS has no entry for ${asset}`);
-  const actual = createHash("sha256").update(archive).digest("hex");
-  if (actual !== expected) {
-    throw new Error(`checksum mismatch for ${asset}: expected ${expected}, got ${actual}`);
-  }
+  const archive = await fetchVerified(url, asset);
 
   const binary = extractFile(gunzipSync(archive), "cos");
   if (!binary) throw new Error(`${asset} has no cos binary`);

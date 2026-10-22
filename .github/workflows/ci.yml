@@ -1,6 +1,7 @@
 # Format, lint and tests, the same as `make lint` and `make test` (in the
-# cos-dev Docker image), plus the install scripts and the npm installer.
-# The desktop app (clients/desktop) isn't built here.
+# cos-dev Docker image), plus the install scripts and the npm installer,
+# and `install.sh --app` on macOS. The desktop app (clients/desktop) isn't
+# built here; release.yml builds it.
 name: CI
 
 on:
@@ -33,3 +34,11 @@ jobs:
         run: make shellcheck
       - name: npm installer tests
         run: make npm-test
+
+  app-installer:
+    name: install.sh --app (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install.sh --app against a fake release
+        run: make app-install-test

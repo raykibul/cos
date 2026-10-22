@@ -6,6 +6,17 @@ The Mac app for the cos daemon: a Tauri 2 app with a web UI. It has one window, 
 - `src-tauri/`: the shell (Rust). It has its own Cargo workspace, so `make test` and Docker never build it. It builds natively on the Mac.
 - `../../crates/cos-bridge/`: everything that talks to the daemon (requests, the event stream, terminal streams). It has no Tauri code and is tested in Docker by `make test`.
 
+## Install
+
+Each release has the app as one universal (Apple Silicon and Intel) zip, ad-hoc signed. To install or upgrade it in `/Applications` (or `~/Applications`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/raykibul/cos/main/install.sh | sh -s -- --app
+npx cos-agent@latest app    # the same, through npm
+```
+
+The installer quits a running copy first and clears the quarantine flag, since the app isn't notarized; a copy downloaded with a browser would be blocked by Gatekeeper. Add `--with-cli` for the CLI too. See "The Mac app" in [docs/releasing.md](../../docs/releasing.md#the-mac-app). The release workflow builds it with `tauri build --target universal-apple-darwin`, and `make release-local` does the same here.
+
 ## Build
 
 You need Rust and the Tauri CLI on the Mac, and Docker for the UI:
