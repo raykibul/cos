@@ -141,17 +141,29 @@ describe("a project's environment", () => {
   it("shows the daemon's reason inline when it refuses a name", async () => {
     const { user, daemon } = await renderApp({ kind: "projectEnv", id: 1 });
     await user.click(main().getByRole("button", { name: "Add environment variable" }));
-    await user.type(sheet().getByLabelText("Name"), "COS_HOOK_SOCKET");
-    await user.type(sheet().getByLabelText("Value"), "/tmp/hooks.sock");
+    // A name cos keeps that only the daemon knows: Claude's session marker.
+    await user.type(sheet().getByLabelText("Name"), "CLAUDECODE");
+    await user.type(sheet().getByLabelText("Value"), "1");
     await user.click(sheet().getByRole("button", { name: "Add variable" }));
     await act(() => settle());
     expect(sheet().getByRole("alert")).toHaveTextContent(
-      "COS_HOOK_SOCKET is cos's own: agents use it to reach cos's hooks, so it can't be set.",
+      "cos sets CLAUDECODE itself for every agent, so it can't be set here",
     );
-    expect(daemon.env.projects[1]?.COS_HOOK_SOCKET).toBeUndefined();
+    expect(daemon.env.projects[1]?.CLAUDECODE).toBeUndefined();
     // Editing clears it.
     await user.type(sheet().getByLabelText("Name"), "X");
     expect(sheet().queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("refuses COS_ names before asking the daemon", async () => {
+    const { user, daemon } = await renderApp({ kind: "projectEnv", id: 1 });
+    await user.click(main().getByRole("button", { name: "Add environment variable" }));
+    await user.type(sheet().getByLabelText("Name"), "COS_HOOK_SOCKET");
+    expect(sheet().getByRole("alert")).toHaveTextContent(
+      "Names starting with COS_ are kept for cos itself.",
+    );
+    await user.click(sheet().getByRole("button", { name: "Add variable" }));
+    expect(daemon.requests.some((r) => r.method === "PUT")).toBe(false);
   });
 
   it("edits a value with the name fixed", async () => {
@@ -330,5 +342,55 @@ describe("environment hints", () => {
     expect(main().getAllByRole("tab")[0]?.getAttribute("title")).toMatch(
       /env: CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL, DISABLE_TELEMETRY/,
     );
+  });
+});
+
+describe("an agent waiting for a Claude login", () => {
+  const LOGIN = "CLAUDE_CONFIG_DIR=~/.claude-personal claude";
+
+  it("waits on you, with how to log in and Open terminal", async () => {
+    const { user, ui, cos } = await renderApp({ kind: "waiting" });
+    expect(cos.get().agents.find((a) => a.id === 11)?.state).toBe("needs_login");
+    const section = main().getByRole("heading", { name: "Claude logins" }).closest("section")!;
+    const card = within(section).getByRole("article");
+    expect(card).toHaveTextContent("Check the docs for broken links");
+    expect(card).toHaveTextContent("Claude needs you to log in");
+    expect(card).toHaveTextContent(`Open its terminal and log in, or run ${LOGIN} once.`);
+    await user.click(within(card).getByRole("button", { name: "Open terminal" }));
+    expect(ui.store.getState().page).toEqual({ kind: "agent", id: 11 });
+  });
+
+  it("shows its state and a banner over its terminal", async () => {
+    await renderApp({ kind: "agent", id: 11 });
+    expect(main().getByText("Needs Claude login")).toBeInTheDocument();
+    const banner = main().getByRole("region", { name: "Waiting" });
+    expect(banner).toHaveTextContent("Claude needs you to log in");
+    expect(banner).toHaveTextContent(`Log in in the terminal below, or run ${LOGIN} once.`);
+  });
+
+  it("shows in the chief's waiting strip when the chief started it", async () => {
+    const harness = fakeStore();
+    harness.daemon.agents.find((a) => a.id === 11)!.spawned_by = 40;
+    const ui = createUiStore({ page: { kind: "chief", id: 1 } });
+    render(<App cos={harness.cos} ui={ui} />);
+    await act(async () => {
+      await harness.cos.start();
+      await settle();
+    });
+    const strip = within(main().getByRole("region", { name: "Agents waiting on you" }));
+    expect(strip.getByText("2 agents waiting on you")).toBeInTheDocument();
+    expect(strip.getByText(/needs a Claude login/)).toBeInTheDocument();
+    await userEvent.setup().click(strip.getByRole("button", { name: "Open terminal" }));
+    expect(ui.store.getState().page).toEqual({ kind: "agent", id: 11 });
+  });
+
+  it("carries on once logged in in its terminal", async () => {
+    const { cos } = await renderApp({ kind: "agent", id: 11 });
+    await act(async () => {
+      await cos.client.sendKeys(11, new TextEncoder().encode("\r"));
+      await settle();
+    });
+    expect(cos.get().agents.find((a) => a.id === 11)?.state).toBe("idle");
+    expect(main().queryByRole("region", { name: "Waiting" })).not.toBeInTheDocument();
   });
 });

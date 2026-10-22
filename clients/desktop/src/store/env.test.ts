@@ -9,8 +9,22 @@ import {
   valueProblem,
 } from "../api/env";
 import { decodeAgent } from "../api/models";
+import { loginCommand } from "../domain/env";
+import { agentLabel } from "../domain/labels";
+import { staffLabel } from "../pages/chief/staffState";
 import { fakeStore, rawEvent, requestLines, settle } from "../test/harness";
-import { claudeAccount, projectEnvNames } from "./selectors";
+import {
+  agentNeedsYou,
+  approvalsForYou,
+  claudeAccount,
+  configDirOf,
+  loginAgents,
+  pendingDevices,
+  plansAwaitingApproval,
+  projectEnvNames,
+  trustAgents,
+  waitingCount,
+} from "./selectors";
 
 async function startedStore() {
   const harness = fakeStore();
@@ -51,6 +65,9 @@ describe("environment decoding and helpers", () => {
     expect(nameProblem("A B")).toMatch(/Letters, digits and _/);
     expect(nameProblem("A".repeat(128))).toBeNull();
     expect(nameProblem("A".repeat(129))).toBe("At most 128 characters.");
+    expect(nameProblem("COS_HOME")).toBe("Names starting with COS_ are kept for cos itself.");
+    // The rest of what cos keeps is the daemon's to refuse.
+    expect(nameProblem("CLAUDECODE")).toBeNull();
     expect(valueProblem("x".repeat(32 * 1024))).toBeNull();
     expect(valueProblem("x".repeat(32 * 1024 + 1))).toBe("At most 32 KiB.");
     // Bytes, not characters.
@@ -152,9 +169,33 @@ describe("environment in the store", () => {
   it("throws the daemon's reason for a name cos keeps to itself", async () => {
     const { cos } = await startedStore();
     await expect(cos.setEnv(1, "COS_HOOK_SOCKET", "/tmp/x")).rejects.toThrow(
-      /COS_HOOK_SOCKET is cos's own/,
+      "names starting with COS_ are kept for cos itself, so COS_HOOK_SOCKET can't be set",
+    );
+    await expect(cos.setEnv(null, "TERM", "dumb")).rejects.toThrow(
+      "cos sets TERM itself for every agent, so it can't be set here",
     );
     expect(cos.get().projectEnvs[1]?.variables.COS_HOOK_SOCKET).toBeUndefined();
+    expect(cos.get().globalEnv?.TERM).toBeUndefined();
+  });
+
+  it("takes the lists from the daemon's answer to PUT and DELETE", async () => {
+    const { cos, daemon } = await startedStore();
+    // Changed behind the store's back: the answer brings it along.
+    daemon.env.projects[2] = { FROM_CLI: "x" };
+    await cos.setEnv(2, "A", "1");
+    expect(cos.get().projectEnvs[2]?.variables).toEqual({ FROM_CLI: "x", A: "1" });
+    // Removing a name that isn't set is fine.
+    await cos.removeEnv(null, "NOT_SET");
+    expect(cos.get().globalEnv).toEqual({ DISABLE_TELEMETRY: "1" });
+    // An empty answer (an older daemon) still shows the change.
+    const original = daemon.env.route.bind(daemon.env);
+    daemon.env.route = (method, path, b) => {
+      const answer = original(method, path, b);
+      return answer && method !== "GET" ? { ...answer, body: null } : answer;
+    };
+    await cos.setEnv(null, "B", "2");
+    expect(cos.get().globalEnv).toEqual({ DISABLE_TELEMETRY: "1", B: "2" });
+    expect(cos.get().projectEnvs[1]?.effective.B).toBe("2");
   });
 
   it("marks environment unsupported when the daemon has no env routes", async () => {
@@ -164,6 +205,39 @@ describe("environment in the store", () => {
     await settle();
     expect(harness.cos.get().envSupported).toBe(false);
     expect(harness.cos.get().globalEnv).toBeNull();
+  });
+
+  it("counts an agent on Claude's login screen as waiting on you", async () => {
+    const { cos } = await startedStore();
+    const s = cos.get();
+    const agent = s.agents.find((a) => a.id === 11)!;
+    expect(agent.state).toBe("needs_login");
+    expect(agentLabel(agent.state)).toMatchObject({ title: "Needs Claude login", attention: true });
+    expect(staffLabel("needs_login").attention).toBe(true);
+    expect(loginAgents(s).map((a) => a.id)).toEqual([11]);
+    expect(agentNeedsYou(s, agent)).toBe(true);
+    expect(waitingCount(s)).toBe(
+      approvalsForYou(s).length +
+        trustAgents(s).length +
+        1 +
+        s.questions.length +
+        plansAwaitingApproval(s).length +
+        pendingDevices(s).length,
+    );
+    expect(configDirOf(s, agent)).toBe("~/.claude-personal");
+    expect(
+      configDirOf(
+        s,
+        s.agents.find((a) => a.id === 3)!,
+      ),
+    ).toBeNull();
+  });
+
+  it("says how to log a config dir in from a shell", () => {
+    expect(loginCommand("~/.claude-personal")).toBe("CLAUDE_CONFIG_DIR=~/.claude-personal claude");
+    expect(loginCommand(null)).toBe("claude");
+    expect(loginCommand("~/My Claude")).toBe("CLAUDE_CONFIG_DIR=~/'My Claude' claude");
+    expect(loginCommand("/tmp/it's")).toBe("CLAUDE_CONFIG_DIR='/tmp/it'\\''s' claude");
   });
 
   it("stamps agents with the names they launched with", async () => {

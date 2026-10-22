@@ -1,6 +1,13 @@
 import type { Bridge, HttpMethod } from "../bridge/types";
 import { DecodeError, isObject, page } from "./decode";
-import { type EnvVars, type ProjectEnv, decodeGlobalEnv, decodeProjectEnv } from "./env";
+import {
+  type EnvAnswer,
+  type EnvVars,
+  type ProjectEnv,
+  decodeEnvAnswer,
+  decodeGlobalEnv,
+  decodeProjectEnv,
+} from "./env";
 import { CosError } from "./errors";
 import {
   type Agent,
@@ -407,13 +414,19 @@ export class DaemonClient {
     return this.get(`/v1/projects/${projectId}/env`, decodeProjectEnv);
   }
 
-  /** Sets a variable for all projects (`projectId` null) or one. It applies to agents launched or resumed after. */
-  async setEnv(projectId: number | null, name: string, value: string): Promise<void> {
-    await this.request("PUT", envPath(projectId, name), { value });
+  /**
+   * Sets a variable for all projects (`projectId` null) or one. It applies
+   * to agents launched or resumed after. Answers the scope's lists.
+   */
+  async setEnv(projectId: number | null, name: string, value: string): Promise<EnvAnswer> {
+    const body = await this.request("PUT", envPath(projectId, name), { value });
+    return decodeEnvAnswer(projectId, body);
   }
 
-  async removeEnv(projectId: number | null, name: string): Promise<void> {
-    await this.request("DELETE", envPath(projectId, name));
+  /** Removing a name that isn't set is fine. Answers the scope's lists. */
+  async removeEnv(projectId: number | null, name: string): Promise<EnvAnswer> {
+    const body = await this.request("DELETE", envPath(projectId, name));
+    return decodeEnvAnswer(projectId, body);
   }
 
   // MARK: Devices and the tailnet

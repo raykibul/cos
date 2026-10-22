@@ -54,6 +54,19 @@ export function decodeProjectEnv(value: unknown): ProjectEnv {
   return { variables, global, effective };
 }
 
+/**
+ * What `PUT` and `DELETE` answer: the global list, or the project's lists.
+ * Null for an empty or unreadable body, so the caller works it out itself.
+ */
+export type EnvAnswer = { global: EnvVars } | { project: ProjectEnv } | null;
+
+export function decodeEnvAnswer(projectId: number | null, body: unknown): EnvAnswer {
+  if (!isObject(body) || body.variables === undefined) return null;
+  return projectId === null
+    ? { global: decodeGlobalEnv(body) }
+    : { project: decodeProjectEnv(body) };
+}
+
 // MARK: Names and values
 
 export const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -64,12 +77,17 @@ export const MAX_VALUE_BYTES = 32 * 1024;
 /** Which Claude account an agent uses. */
 export const CLAUDE_CONFIG_DIR = "CLAUDE_CONFIG_DIR";
 
-/** Why a name can't be used, or null. The daemon also refuses names cos uses itself. */
+/**
+ * Why a name can't be used, or null. The daemon refuses more names cos sets
+ * itself, with its own reason.
+ */
 export function nameProblem(name: string): string | null {
   if (name === "") return "Give it a name.";
   if (name.length > MAX_NAME) return `At most ${MAX_NAME} characters.`;
   if (/^[0-9]/.test(name)) return "A name can't start with a digit.";
   if (!NAME_PATTERN.test(name)) return "Letters, digits and _ only, as in CLAUDE_CONFIG_DIR.";
+  // The daemon refuses these too, with others it keeps (TERM, CLAUDECODE, …).
+  if (name.startsWith("COS_")) return "Names starting with COS_ are kept for cos itself.";
   return null;
 }
 

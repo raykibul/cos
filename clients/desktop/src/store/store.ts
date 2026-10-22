@@ -27,7 +27,7 @@ import {
   decodeTailnetPeers,
 } from "../api/models";
 import { DecodeError } from "../api/decode";
-import { type EnvVars, type ProjectEnv } from "../api/env";
+import { type EnvAnswer, type EnvVars, type ProjectEnv } from "../api/env";
 import { type InboxItem, type Staff, type Transcript, type TranscriptMessage } from "../api/staff";
 import type { Bridge, DaemonInfo, EventMessage, Host, HostList } from "../bridge/types";
 import {
@@ -1076,20 +1076,33 @@ export class CosStore {
    * A refused name throws the daemon's reason.
    */
   async setEnv(projectId: number | null, name: string, value: string): Promise<void> {
-    await this.client.setEnv(projectId, name, value);
-    this.applyEnv(projectId, name, value);
+    const answer = await this.client.setEnv(projectId, name, value);
+    this.applyEnv(projectId, name, value, answer);
     this.refreshEnv(projectId);
   }
 
   async removeEnv(projectId: number | null, name: string): Promise<void> {
-    await this.client.removeEnv(projectId, name);
-    this.applyEnv(projectId, name, null);
+    const answer = await this.client.removeEnv(projectId, name);
+    this.applyEnv(projectId, name, null, answer);
     this.refreshEnv(projectId);
   }
 
-  /** Shows a change at once, before the refetch confirms it. */
-  private applyEnv(projectId: number | null, name: string, value: string | null): void {
+  /**
+   * Shows a change at once: the daemon's answer when it has the lists, else
+   * the change worked out here. The refetch after confirms it.
+   */
+  private applyEnv(
+    projectId: number | null,
+    name: string,
+    value: string | null,
+    answer: EnvAnswer,
+  ): void {
+    if (answer && "project" in answer && projectId !== null) {
+      this.set((s) => ({ projectEnvs: { ...s.projectEnvs, [projectId]: answer.project } }));
+      return;
+    }
     const put = (vars: EnvVars): EnvVars => {
+      if (answer && "global" in answer) return answer.global;
       const next = { ...vars };
       if (value === null) delete next[name];
       else next[name] = value;

@@ -42,14 +42,33 @@ class EnvError {
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const encoder = new TextEncoder();
 
-/** Why cos keeps a name to itself, or null. */
+/**
+ * What cos sets or removes itself for every agent: the terminal's, the hook
+ * socket and Claude's session markers (`cos_harness::claude::reserved_env_names`).
+ */
+const RESERVED = new Set([
+  "TERM",
+  "COLORTERM",
+  "COS_HOOK_SOCKET",
+  "CLAUDECODE",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SSE_PORT",
+  "CLAUDE_CODE_TMPDIR",
+]);
+
+/** Why cos keeps a name to itself, or null; the daemon's wording. */
 function reserved(name: string): string | null {
-  if (name === "COS_HOOK_SOCKET")
-    return "COS_HOOK_SOCKET is cos's own: agents use it to reach cos's hooks, so it can't be set.";
   if (name.startsWith("COS_"))
-    return `${name} is cos's own: names starting with COS_ can't be set.`;
-  if (name === "TERM" || name === "COLORTERM")
-    return `${name} is cos's own: it describes the terminal cos runs agents in, so it can't be set.`;
+    return `names starting with COS_ are kept for cos itself, so ${name} can't be set`;
+  if (RESERVED.has(name)) return `cos sets ${name} itself for every agent, so it can't be set here`;
   return null;
 }
 
@@ -114,17 +133,21 @@ export class FakeEnv {
     if (projectId !== null && !this.host.projects.some((p) => p.id === projectId)) {
       throw new EnvError(404, `no project ${projectId}`);
     }
+    // Every route answers with the scope's lists, as the daemon does.
+    const lists = (): DaemonResponse => ({
+      status: 200,
+      body:
+        projectId === null
+          ? { variables: { ...this.global } }
+          : {
+              variables: { ...(this.projects[projectId] ?? {}) },
+              global: { ...this.global },
+              effective: this.effective(projectId),
+            },
+    });
     if (name === null) {
       if (method !== "GET") throw new EnvError(404, `no route for ${method}`);
-      if (projectId === null) return { status: 200, body: { variables: { ...this.global } } };
-      return {
-        status: 200,
-        body: {
-          variables: { ...(this.projects[projectId] ?? {}) },
-          global: { ...this.global },
-          effective: this.effective(projectId),
-        },
-      };
+      return lists();
     }
     const list =
       projectId === null
@@ -140,14 +163,14 @@ export class FakeEnv {
         throw new EnvError(400, "value is over 32 KiB");
       list[name] = b.value;
       this.host.log("env.changed", { project_id: projectId, name, action: "set" });
-      return { status: 200, body: null };
+      return lists();
     }
     if (method === "DELETE") {
       if (name in list) {
         delete list[name];
         this.host.log("env.changed", { project_id: projectId, name, action: "removed" });
       }
-      return { status: 200, body: null };
+      return lists();
     }
     throw new EnvError(404, `no route for ${method}`);
   }
