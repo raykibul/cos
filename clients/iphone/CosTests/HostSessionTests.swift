@@ -12,9 +12,8 @@ import Testing
         #expect(session.connection == .live)
         #expect(session.projects.map(\.name) == ["atlas", "harbor", "opal"])
         #expect(session.staffs.keys.sorted() == [1, 2, 3])
-        // The chief's approval (decided_by route "chief") is not yours.
-        #expect(session.waiting.map(\.id) == ["approval-12", "question-5", "plan-4", "trust-12", "login-11"])
-        #expect(session.waitingCount == 5)
+        #expect(session.waiting.map(\.id) == ["approval-12", "trust-12", "login-11"])
+        #expect(session.waitingCount == 3)
     }
 
     @Test func decidingAnApprovalTakesItOffTheList() async throws {
@@ -26,27 +25,6 @@ import Testing
 
         #expect(!session.waiting.contains { $0.id == "approval-12" })
         #expect(await eventually { session.agent(id: 8)?.state == .working })
-    }
-
-    @Test func approvingAPlanStartsTheRun() async throws {
-        let session = await liveSession()
-        defer { session.stop() }
-
-        let board = try await session.approvePlan(runId: 4)
-
-        #expect(board.run.state == .running)
-        #expect(session.run(id: 4)?.state == .running)
-        #expect(!session.waiting.contains { $0.id == "plan-4" })
-    }
-
-    @Test func answeringAQuestionClosesIt() async throws {
-        let session = await liveSession()
-        defer { session.stop() }
-        let question = try #require(session.questions.first)
-
-        try await session.answer(question, "  At startup ")
-
-        #expect(await eventually { session.questions.isEmpty })
     }
 
     @Test func eventsRefreshTheLists() async {
@@ -64,17 +42,17 @@ import Testing
         let notes = RecordingNotifications()
         let session = await liveSession(fake, notifications: notes)
         defer { session.stop() }
-        _ = await eventually { session.waitingCount == 5 }
+        _ = await eventually { session.waitingCount == 3 }
 
         await fake.setAgentState(7, .needsTrust)
-        _ = await eventually { session.waitingCount == 6 }
+        _ = await eventually { session.waitingCount == 4 }
         try? await Task.sleep(for: .milliseconds(100))
 
         // What already waited at launch isn't announced; the new one is.
         let notified = await notes.notified
         #expect(notified.map(\.kind) == [.trust])
         #expect(notified.first?.title.contains("Fix the session timeout") == true)
-        #expect(await notes.badges.last == 6)
+        #expect(await notes.badges.last == 4)
     }
 
     @Test func aPendingDeviceIsRefusedThenLetInOnceApproved() async {

@@ -25,17 +25,6 @@ public protocol CosService: EventSource {
     func approvals(state: ApprovalState?) async throws -> [Approval]
     func decide(approvalId: Int, _ decision: ApprovalDecision, message: String?) async throws -> Approval
 
-    // Runs
-    func runs() async throws -> [Run]
-    func createRun(_ request: NewRun) async throws -> Run
-    func board(runId: Int) async throws -> Board
-    func approvePlan(runId: Int) async throws -> Board
-    func cancelRun(id: Int, reason: String?) async throws -> Board
-    func questions(state: QuestionState?) async throws -> [Question]
-    func answer(questionId: Int, _ answer: String) async throws -> Question
-    func messageChief(runId: Int, text: String) async throws
-    func report(runId: Int) async throws -> String
-
     // The Chief of Staff and transcripts
     func staff(projectId: Int) async throws -> Staff
     func startStaff(projectId: Int) async throws -> Staff

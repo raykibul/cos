@@ -7,7 +7,7 @@ import Testing
 enum AgentSamples {
     static let agent = #"{"id":7,"workspace_id":3,"run_id":null,"role":"user","title":"fix login bug","session_id":"5504b543-4897-4751-add5-f81f24a6316c","pid":25615,"state":"working","model":"sonnet","permission_mode":"default","rows":40,"cols":120,"started_ms":1792611174811,"last_activity_ms":1792611180000,"exited_ms":null,"exit_code":null,"last_message":"Done. I created hello.txt …","pending_approval_id":null}"#
     static let waiting = #"{"id":8,"workspace_id":3,"run_id":null,"role":"user","title":"add left-pad","session_id":"e9ad2a0b-ef73-410c-9f41-d208b12d4a5b","pid":25700,"state":"waiting_approval","model":null,"permission_mode":"default","rows":30,"cols":100,"started_ms":1792611100000,"last_activity_ms":1792611190000,"exited_ms":null,"exit_code":null,"last_message":null,"pending_approval_id":12}"#
-    static let exited = #"{"id":5,"workspace_id":4,"run_id":null,"role":"worker","title":"Agent 5","session_id":"0b6f","pid":null,"state":"exited","model":"haiku","permission_mode":"default","rows":40,"cols":120,"started_ms":1792611000000,"last_activity_ms":1792611050000,"exited_ms":1792611060000,"exit_code":0,"last_message":"All tests pass.","pending_approval_id":null}"#
+    static let exited = #"{"id":5,"workspace_id":4,"role":"user","title":"Agent 5","session_id":"0b6f","pid":null,"state":"exited","model":"haiku","permission_mode":"default","rows":40,"cols":120,"started_ms":1792611000000,"last_activity_ms":1792611050000,"exited_ms":1792611060000,"exit_code":0,"last_message":"All tests pass.","pending_approval_id":null}"#
     static let page = #"{"agents":[\#(agent),\#(waiting),\#(exited)]}"#
     static let approval = #"{"id":12,"agent_id":8,"workspace_id":3,"tool_name":"Bash","tool_input":{"command":"npm install left-pad"},"tool_use_id":"toolu_01ABC","summary":"Bash npm install left-pad","state":"pending","decided_by":null,"message":null,"created_ms":1792611174811,"decided_ms":null}"#
     static let approvals = #"{"approvals":[\#(approval)]}"#
@@ -32,7 +32,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 
         let agent = agents[0]
         #expect(agent.workspaceId == 3)
-        #expect(agent.runId == nil)
         #expect(agent.role == .user)
         #expect(agent.title == "fix login bug")
         #expect(agent.sessionId == "5504b543-4897-4751-add5-f81f24a6316c")
@@ -53,23 +52,18 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 
         let exited = agents[2]
         #expect(exited.state == .exited && exited.state.canResume && !exited.state.isAlive)
-        #expect(exited.role == .worker)
+        #expect(exited.role == .user)
         #expect(exited.exitCode == 0)
         #expect(exited.pid == nil)
     }
 
-    @Test func toleratesNewStatesRolesAndRunIds() throws {
+    @Test func toleratesNewStatesAndRoles() throws {
         let future = try decode(Agent.self, AgentSamples.agent
             .replacingOccurrences(of: #""state":"working""#, with: #""state":"compacting""#)
-            .replacingOccurrences(of: #""role":"user""#, with: #""role":"planner""#)
-            .replacingOccurrences(of: #""run_id":null"#, with: #""run_id":42"#))
+            .replacingOccurrences(of: #""role":"user""#, with: #""role":"planner""#))
         #expect(future.state.rawValue == "compacting")
         #expect(future.state.isAlive)
         #expect(future.role.rawValue == "planner")
-        #expect(future.runId == "42")
-
-        let named = try decode(Agent.self, AgentSamples.agent.replacingOccurrences(of: #""run_id":null"#, with: #""run_id":"r-1""#))
-        #expect(named.runId == "r-1")
     }
 
     @Test func generationChangesWithANewProcess() throws {

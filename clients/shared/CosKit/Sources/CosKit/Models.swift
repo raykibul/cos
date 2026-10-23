@@ -44,22 +44,19 @@ public struct LoggedEvent: Codable, Equatable, Sendable, Identifiable {
     public var ts: Date
     /// Dotted name such as `daemon.started`.
     public var kind: String
-    /// The run this event belongs to, if any.
-    public var runId: String?
     public var data: JSONValue
 
     public var id: Int { seq }
 
-    public init(seq: Int, ts: Date, kind: String, runId: String? = nil, data: JSONValue) {
+    public init(seq: Int, ts: Date, kind: String, data: JSONValue) {
         self.seq = seq
         self.ts = ts
         self.kind = kind
-        self.runId = runId
         self.data = data
     }
 
     private enum CodingKeys: String, CodingKey {
-        case seq, ts, kind, runId, data
+        case seq, ts, kind, data
     }
 
     public init(from decoder: Decoder) throws {
@@ -67,7 +64,6 @@ public struct LoggedEvent: Codable, Equatable, Sendable, Identifiable {
         seq = try c.id(.seq)
         ts = c.optional(Date.self, .ts) ?? Date(timeIntervalSince1970: 0)
         kind = c.string(.kind) ?? "unknown"
-        runId = c.string(.runId)
         data = c.optional(JSONValue.self, .data) ?? .null
     }
 

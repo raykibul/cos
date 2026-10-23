@@ -10,10 +10,8 @@ import Foundation
 /// - atlas's Chief of Staff (agent 40) has a conversation and started
 ///   agents 7 and 8; harbor's hasn't started; opal's (agent 41) is idle
 ///   with no conversation
-/// - an approval waiting for you (agent 8) and one with a run's chief
+/// - an approval waiting for you (agent 8)
 /// - agents needing a Claude login (11) and the trust dialog (12)
-/// - runs: 3 running (tasks in several states, with a question), 4 with a
-///   plan waiting, 2 done with a report, 1 cancelled
 /// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
 ///   saved, mini runs no cos, the iPhone itself, an offline iPad, and a
 ///   tagged CI server
@@ -36,13 +34,9 @@ actor FakeCos: CosService {
     private var projectList: [Project] = []
     private var agentList: [Agent] = []
     private var approvalList: [Approval] = []
-    private var runList: [Run] = []
-    private var tasks: [RunTask] = []
-    private var questionList: [Question] = []
     private var staffs: [Int: Staff] = [:]
     private var transcripts: [Int: [TranscriptMessage]] = [:]
     private var inboxes: [Int: [StaffItem]] = [:]
-    private var reports: [Int: String] = [:]
     private var log: [LoggedEvent] = []
     private var subscribers: [UUID: AsyncThrowingStream<LoggedEvent, Error>.Continuation] = [:]
     /// Open terminal streams, by agent.
@@ -70,13 +64,9 @@ actor FakeCos: CosService {
         projectList = data.projects
         agentList = data.agents
         approvalList = data.approvals
-        runList = data.runs
-        tasks = data.tasks
-        questionList = data.questions
         staffs = data.staffs
         transcripts = data.transcripts
         inboxes = data.inboxes
-        reports = data.reports
         log = [LoggedEvent(seq: 1, ts: Date(unixMilliseconds: self.now - 3_600_000), kind: "daemon.started", data: .object(["version": .string("0.1.2")]))]
     }
 
@@ -116,10 +106,8 @@ actor FakeCos: CosService {
         subscribers[id] = nil
     }
 
-    private func emit(_ kind: String, _ data: [String: JSONValue], runId: Int? = nil) {
-        let event = LoggedEvent(
-            seq: (log.last?.seq ?? 0) + 1, ts: Date(), kind: kind, runId: runId.map(String.init), data: .object(data)
-        )
+    private func emit(_ kind: String, _ data: [String: JSONValue]) {
+        let event = LoggedEvent(seq: (log.last?.seq ?? 0) + 1, ts: Date(), kind: kind, data: .object(data))
         log.append(event)
         for continuation in subscribers.values { continuation.yield(event) }
     }
@@ -282,89 +270,6 @@ actor FakeCos: CosService {
         emit("approval.decided", ["approval_id": .number(Double(approvalId)), "state": .string(approvalList[index].state.rawValue), "decided_by": .string("user")])
         setState(agentId, .working)
         return approvalList[index]
-    }
-
-    // MARK: Runs
-
-    func runs() async throws -> [Run] {
-        try check("GET /v1/runs")
-        return runList.map { run in
-            var run = run
-            run.counts = TaskCounts(tasks.filter { $0.runId == run.id })
-            return run
-        }.sorted { $0.createdAt > $1.createdAt }
-    }
-
-    func createRun(_ request: NewRun) async throws -> Run {
-        try check("POST /v1/runs")
-        if runList.contains(where: { $0.workspaceId == request.workspaceId && !$0.state.isFinished }) {
-            throw CosError.conflict("workspace \(request.workspaceId) already has an unfinished run")
-        }
-        let run = Run(id: newId(), workspaceId: request.workspaceId, goal: request.goal, state: .planning, createdAt: Date())
-        runList.append(run)
-        emit("run.created", ["run_id": .number(Double(run.id)), "workspace_id": .number(Double(run.workspaceId))], runId: run.id)
-        return run
-    }
-
-    func board(runId: Int) async throws -> Board {
-        try check("GET /v1/runs/\(runId)")
-        guard let run = runList.first(where: { $0.id == runId }) else { throw CosError.notFound("unknown run \(runId)") }
-        let workspace = projectList.lazy.flatMap(\.workspaces).first { $0.id == run.workspaceId }
-        return Board(run: run, workspace: workspace, tasks: tasks.filter { $0.runId == runId })
-    }
-
-    func approvePlan(runId: Int) async throws -> Board {
-        try check("POST /v1/runs/\(runId)/approve-plan")
-        guard let index = runList.firstIndex(where: { $0.id == runId }) else { throw CosError.notFound("unknown run \(runId)") }
-        guard runList[index].state == .awaitingPlanApproval else { throw CosError.conflict("run \(runId) has no plan waiting") }
-        runList[index].state = .running
-        runList[index].updatedAt = Date()
-        for task in tasks.indices where tasks[task].runId == runId && tasks[task].dependsOn.isEmpty {
-            tasks[task].state = .ready
-        }
-        emit("plan.approved", ["run_id": .number(Double(runId))], runId: runId)
-        emit("run.state_changed", ["run_id": .number(Double(runId)), "from": .string("awaiting_plan_approval"), "to": .string("running")], runId: runId)
-        return try await board(runId: runId)
-    }
-
-    func cancelRun(id: Int, reason: String?) async throws -> Board {
-        try check("POST /v1/runs/\(id)/cancel")
-        guard let index = runList.firstIndex(where: { $0.id == id }) else { throw CosError.notFound("unknown run \(id)") }
-        guard !runList[index].state.isFinished else { throw CosError.conflict("run \(id) is already finished") }
-        let from = runList[index].state
-        runList[index].state = .cancelled
-        runList[index].reason = reason ?? "Cancelled from the iPhone"
-        for task in tasks.indices where tasks[task].runId == id && !tasks[task].state.isFinished {
-            tasks[task].state = .cancelled
-        }
-        emit("run.state_changed", ["run_id": .number(Double(id)), "from": .string(from.rawValue), "to": .string("cancelled")], runId: id)
-        return try await board(runId: id)
-    }
-
-    func questions(state: QuestionState?) async throws -> [Question] {
-        try check("GET /v1/questions")
-        return questionList.filter { state == nil || $0.state == state }
-    }
-
-    func answer(questionId: Int, _ answer: String) async throws -> Question {
-        try check("POST /v1/questions/\(questionId)/answer")
-        guard let index = questionList.firstIndex(where: { $0.id == questionId }) else { throw CosError.notFound("unknown question \(questionId)") }
-        guard questionList[index].state == .open else { throw CosError.conflict("question \(questionId) is already answered") }
-        questionList[index].state = .answered
-        questionList[index].answer = answer
-        questionList[index].answeredMs = clock
-        emit("question.answered", ["question_id": .number(Double(questionId)), "run_id": .number(Double(questionList[index].runId ?? 0))])
-        return questionList[index]
-    }
-
-    func messageChief(runId: Int, text: String) async throws {
-        try check("POST /v1/runs/\(runId)/message")
-    }
-
-    func report(runId: Int) async throws -> String {
-        try check("GET /v1/runs/\(runId)/report")
-        guard let report = reports[runId] else { throw CosError.notFound("run \(runId) has no report yet") }
-        return report
     }
 
     // MARK: The Chief of Staff

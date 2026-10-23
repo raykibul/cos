@@ -72,35 +72,33 @@ public struct Staff: Codable, Equatable, Sendable {
     }
 }
 
-/// One piece of news in a chief's inbox: what an agent or run it started
+/// One piece of news in a chief's inbox: what an agent it started
 /// reported. The first line of `text` is its heading.
 public struct StaffItem: Codable, Equatable, Sendable, Identifiable {
     public var id: Int
     public var projectId: Int?
-    /// `agent`, `run`, `message`, or something newer.
+    /// `agent`, `message`, or something newer.
     public var kind: String
     public var agentId: Int?
-    public var runId: Int?
     public var text: String
     public var createdMs: Int64
     public var deliveredMs: Int64?
 
     public init(
-        id: Int, projectId: Int? = nil, kind: String, agentId: Int? = nil, runId: Int? = nil, text: String,
+        id: Int, projectId: Int? = nil, kind: String, agentId: Int? = nil, text: String,
         createdMs: Int64, deliveredMs: Int64? = nil
     ) {
         self.id = id
         self.projectId = projectId
         self.kind = kind
         self.agentId = agentId
-        self.runId = runId
         self.text = text
         self.createdMs = createdMs
         self.deliveredMs = deliveredMs
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, projectId, kind, type, agentId, runId, text, message, createdMs, tsMs, deliveredMs
+        case id, projectId, kind, type, agentId, text, message, createdMs, tsMs, deliveredMs
     }
 
     public init(from decoder: Decoder) throws {
@@ -109,7 +107,6 @@ public struct StaffItem: Codable, Equatable, Sendable, Identifiable {
         projectId = c.int(.projectId)
         kind = c.string(.kind).nilIfBlank ?? c.string(.type).nilIfBlank ?? "update"
         agentId = c.int(.agentId)
-        runId = c.int(.runId)
         text = c.string(.text) ?? c.string(.message) ?? ""
         createdMs = c.int64(.createdMs) ?? c.int64(.tsMs) ?? 0
         deliveredMs = c.int64(.deliveredMs)
@@ -121,7 +118,6 @@ public struct StaffItem: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(projectId, forKey: .projectId)
         try c.encode(kind, forKey: .kind)
         try c.encodeIfPresent(agentId, forKey: .agentId)
-        try c.encodeIfPresent(runId, forKey: .runId)
         try c.encode(text, forKey: .text)
         try c.encode(createdMs, forKey: .createdMs)
         try c.encodeIfPresent(deliveredMs, forKey: .deliveredMs)
@@ -236,7 +232,6 @@ public struct ToolCall: Codable, Equatable, Sendable {
         "agent_send": "Messaged an agent",
         "agent_read": "Checked on an agent",
         "agent_stop": "Stopped an agent",
-        "run_start": "Started a run",
         "brief_update": "Updated its brief",
     ]
 }

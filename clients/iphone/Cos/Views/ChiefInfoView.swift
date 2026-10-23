@@ -3,7 +3,7 @@ import SwiftUI
 
 /// What a chief's info page shows below its header.
 enum ChiefInfoTab: String, Hashable, CaseIterable, Identifiable, Sendable {
-    case workspaces, sessions, runs
+    case workspaces, sessions
 
     var id: String { rawValue }
 
@@ -11,19 +11,17 @@ enum ChiefInfoTab: String, Hashable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .workspaces: "Workspaces"
         case .sessions: "Sessions"
-        case .runs: "Runs"
         }
     }
 }
 
 /// A chief's info page, as a chat app shows a contact's: its project, quick
-/// actions, and everything under it: each workspace with its sessions, all
-/// sessions, and its runs. Reached from the chat's ⋯ menu or its title.
+/// actions, and everything under it: each workspace with its sessions, and
+/// all sessions. Reached from the chat's ⋯ menu or its title.
 struct ChiefInfoView: View {
     var session: HostSession
     var projectId: Int
     @State private var tab: ChiefInfoTab
-    @State private var newRun = false
     @Environment(Navigator.self) private var navigator
     @Environment(\.dismiss) private var dismiss
 
@@ -65,7 +63,6 @@ struct ChiefInfoView: View {
                         if let id = staff?.agentId { navigator.open(.terminal(agentId: id)) }
                     }
                     .disabled(staff?.agentId == nil)
-                    QuickAction(title: "New run", symbol: "plus") { newRun = true }
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
@@ -82,7 +79,6 @@ struct ChiefInfoView: View {
             switch tab {
             case .workspaces: workspaces(project)
             case .sessions: sessions()
-            case .runs: runs()
             }
         }
         .pageBackground()
@@ -90,7 +86,6 @@ struct ChiefInfoView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .refreshable { await session.refresh() }
-        .sheet(isPresented: $newRun) { NewRunSheet(session: session, workspaceId: nil) }
     }
 
     // MARK: Tabs
@@ -108,7 +103,6 @@ struct ChiefInfoView: View {
         }
         ForEach(workspaces) { workspace in
             let agents = session.agents(inWorkspace: workspace.id)
-            let activeRun = session.runs(inWorkspace: workspace.id).first { !$0.state.isFinished }
             Section {
                 NavigationLink(value: Route.workspace(id: workspace.id)) {
                     WorkspaceHeaderRow(workspace: workspace, waiting: agents.filter { needsYou($0) }.count)
@@ -120,16 +114,6 @@ struct ChiefInfoView: View {
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
-                    }
-                }
-                if let activeRun {
-                    NavigationLink(value: Route.run(id: activeRun.id)) {
-                        Label(activeRun.goal, systemImage: "list.bullet.clipboard")
-                            .labelStyle(.tight)
-                            .font(.subheadline)
-                            .foregroundStyle(Palette.ink2)
-                            .lineLimit(1)
-                            .padding(.leading, 28)
                     }
                 }
             }
@@ -178,24 +162,6 @@ struct ChiefInfoView: View {
         }
     }
 
-    @ViewBuilder
-    private func runs() -> some View {
-        let runs = session.runs(inProject: projectId)
-        Section {
-            if runs.isEmpty {
-                Text("No runs yet. A run is a goal a chief plans as tasks for workers.")
-                    .font(.subheadline)
-                    .foregroundStyle(Palette.ink3)
-            }
-            ForEach(runs) { run in
-                NavigationLink(value: Route.run(id: run.id)) {
-                    RunRow(run: run, place: session.workspaceName(run.workspaceId))
-                }
-            }
-            Button("New run", systemImage: "plus") { newRun = true }
-        }
-    }
-
     // MARK: Helpers
 
     private func needsYou(_ agent: Agent) -> Bool {
@@ -221,7 +187,7 @@ struct ChiefInfoView: View {
     }
 }
 
-/// A rounded button under the header: Chat, Screen, New run.
+/// A rounded button under the header: Chat, Screen.
 struct QuickAction: View {
     var title: String
     var symbol: String

@@ -35,7 +35,7 @@ extension CosClient {
         try await send("POST", "/v1/projects/\(projectId)/staff/message", body: ["text": text])
     }
 
-    /// The latest news its agents and runs reported, newest first. Your own
+    /// The latest news its agents reported, newest first. Your own
     /// messages are left out.
     public func staffInbox(projectId: Int) async throws -> [StaffItem] {
         let inbox: StaffInbox = try await getJSON("/v1/projects/\(projectId)/staff/inbox")

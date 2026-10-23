@@ -13,7 +13,7 @@ struct WaitingView: View {
                 ContentUnavailableView {
                     Label("Nothing waits on you", systemImage: "checkmark.circle")
                 } description: {
-                    Text("Approvals, questions from chiefs, plans to review and agents that need a login show up here.")
+                    Text("Approvals, trust dialogs and agents that need a login show up here.")
                 }
                 .background(Palette.page)
             } else {
@@ -51,8 +51,6 @@ struct WaitingCard: View {
         VStack(alignment: .leading, spacing: 10) {
             switch item {
             case .approval(let approval): approvalCard(approval)
-            case .question(let question): QuestionCard(session: session, question: question, error: $error)
-            case .plan(let run): planCard(run)
             case .trust(let agent): trustCard(agent)
             case .login(let agent): loginCard(agent)
             }
@@ -110,24 +108,6 @@ struct WaitingCard: View {
     }
 
     @ViewBuilder
-    private func planCard(_ run: Run) -> some View {
-        header("checklist", "Plan to review", run.goal, [session.project(ofWorkspace: run.workspaceId)?.name, session.workspaceName(run.workspaceId)].compactMap { $0 }.joined(separator: " · "))
-        if let counts = run.counts, counts.total > 0 {
-            Text("\(counts.total) tasks proposed")
-                .font(.subheadline)
-                .foregroundStyle(Palette.ink2)
-        }
-        HStack(spacing: 10) {
-            Button("Review") { navigator.open(.run(id: run.id)) }
-                .buttonStyle(QuietButtonStyle())
-            Button("Approve plan") {
-                act { try await session.approvePlan(runId: run.id) }
-            }
-            .buttonStyle(ClaudeButtonStyle())
-        }
-    }
-
-    @ViewBuilder
     private func trustCard(_ agent: Agent) -> some View {
         header("lock", "Trust dialog", agent.title, place(of: agent))
         Text("Claude asks whether to trust this workspace's folder before it starts.")
@@ -165,73 +145,6 @@ struct WaitingCard: View {
         Task {
             defer { busy = false }
             do { try await work() } catch { self.error = error.localizedDescription }
-        }
-    }
-}
-
-/// A chief's question: its choices as buttons, or an answer in your words.
-struct QuestionCard: View {
-    var session: HostSession
-    var question: Question
-    @Binding var error: String?
-    @State private var answer = ""
-    @State private var busy = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label("The chief asks", systemImage: "questionmark.bubble")
-                    .labelStyle(.tight)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Palette.claude)
-                if let runId = question.runId, let run = session.run(id: runId) {
-                    Text(run.goal)
-                        .font(.footnote)
-                        .foregroundStyle(Palette.ink3)
-                }
-            }
-            Text(question.question)
-                .font(.body)
-                .foregroundStyle(Palette.ink)
-            if !question.choices.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(question.choices, id: \.self) { choice in
-                        Button(choice) { send(choice) }
-                            .buttonStyle(QuietButtonStyle())
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                TextField("Or answer in your words", text: $answer, axis: .vertical)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Palette.subtle, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .onSubmit { send(answer) }
-                Button {
-                    send(answer)
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(answer.trimmingCharacters(in: .whitespaces).isEmpty ? Palette.ink3 : Palette.claude)
-                }
-                .disabled(answer.trimmingCharacters(in: .whitespaces).isEmpty)
-                .accessibilityLabel("Send answer")
-            }
-        }
-        .disabled(busy)
-    }
-
-    private func send(_ text: String) {
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                try await session.answer(question, text)
-                answer = ""
-            } catch {
-                self.error = error.localizedDescription
-            }
         }
     }
 }

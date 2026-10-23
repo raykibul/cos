@@ -1,11 +1,11 @@
 import Foundation
 
 /// Something that should reach you even when the app isn't on screen: an
-/// approval, a question, a plan to review. Today nothing is sent, because
+/// approval, a trust dialog, a Claude login. Today nothing is sent, because
 /// push needs an Apple Developer account; see "Push, later" in docs/iphone.md.
 struct CosNotification: Equatable, Sendable {
     enum Kind: String, Sendable {
-        case approval, question, plan, login, trust
+        case approval, login, trust
     }
 
     var kind: Kind

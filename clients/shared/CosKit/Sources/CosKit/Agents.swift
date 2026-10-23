@@ -11,10 +11,6 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     /// `nil` only from a daemon that leaves it out. A Chief of Staff's is
     /// its hidden worktree, which no workspace list shows.
     public var workspaceId: Int?
-    /// The run that started it; `nil` for agents you started yourself.
-    public var runId: String?
-    /// The task a worker or reviewer works on.
-    public var taskId: Int?
     public var role: AgentRole
     public var title: String
     public var sessionId: String?
@@ -35,7 +31,7 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     /// The last thing Claude said at the end of a turn, cut to 2,000 characters.
     public var lastMessage: String?
     public var pendingApprovalId: Int?
-    /// Only when it runs outside the workspace folder (a task's worktree).
+    /// Only when it runs outside the workspace folder.
     public var cwd: String?
     /// The Chief of Staff agent that started it, if one did.
     public var spawnedBy: Int?
@@ -45,7 +41,7 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public var envNames: [String]
 
     public init(
-        id: Int, workspaceId: Int?, runId: String? = nil, taskId: Int? = nil, role: AgentRole = .user, title: String,
+        id: Int, workspaceId: Int?, role: AgentRole = .user, title: String,
         sessionId: String? = nil, pid: Int? = nil, state: AgentState, model: String? = nil,
         permissionMode: String? = nil, userSettings: Bool = true, rows: Int = 40, cols: Int = 120, startedMs: Int64,
         lastActivityMs: Int64? = nil, exitedMs: Int64? = nil, exitCode: Int? = nil,
@@ -54,8 +50,6 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     ) {
         self.id = id
         self.workspaceId = workspaceId
-        self.runId = runId
-        self.taskId = taskId
         self.role = role
         self.title = title
         self.sessionId = sessionId
@@ -79,7 +73,7 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, workspaceId, runId, taskId, role, title, sessionId, pid, state, model, permissionMode, userSettings
+        case id, workspaceId, role, title, sessionId, pid, state, model, permissionMode, userSettings
         case rows, cols, startedMs, lastActivityMs, exitedMs, exitCode, lastMessage, pendingApprovalId
         case cwd, spawnedBy, transcriptPath, envNames
     }
@@ -88,9 +82,6 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.id(.id)
         workspaceId = c.int(.workspaceId)
-        // A number from the daemon; a string is taken too.
-        runId = c.string(.runId)
-        taskId = c.int(.taskId)
         role = c.optional(AgentRole.self, .role) ?? .user
         title = c.string(.title).nilIfBlank ?? "Agent \(id)"
         sessionId = c.string(.sessionId)
@@ -161,9 +152,6 @@ public struct AgentRole: RawRepresentable, Codable, Hashable, Sendable {
 
     /// Started by you from an app or the CLI.
     public static let user = AgentRole(rawValue: "user")
-    public static let chief = AgentRole(rawValue: "chief")
-    public static let worker = AgentRole(rawValue: "worker")
-    public static let reviewer = AgentRole(rawValue: "reviewer")
     /// A project's Chief of Staff.
     public static let staff = AgentRole(rawValue: "staff")
 }
@@ -209,10 +197,8 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
     public var message: String?
     public var createdMs: Int64
     public var decidedMs: Int64?
-    /// The policy's tier (docs/orchestration.md). `nil` from a daemon without it.
+    /// The policy's tier (docs/approvals.md). `nil` from a daemon without it.
     public var tier: ApprovalTier?
-    /// Who answers it: you, the run's chief, or a rule (`auto`).
-    public var route: ApprovalRoute?
     /// The policy's one-line reason.
     public var reason: String?
 
@@ -220,7 +206,7 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
         id: Int, agentId: Int, workspaceId: Int? = nil, toolName: String, toolInput: JSONValue = .null,
         toolUseId: String? = nil, summary: String, state: ApprovalState = .pending, decidedBy: String? = nil,
         message: String? = nil, createdMs: Int64, decidedMs: Int64? = nil,
-        tier: ApprovalTier? = nil, route: ApprovalRoute? = nil, reason: String? = nil
+        tier: ApprovalTier? = nil, reason: String? = nil
     ) {
         self.id = id
         self.agentId = agentId
@@ -235,7 +221,6 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
         self.createdMs = createdMs
         self.decidedMs = decidedMs
         self.tier = tier
-        self.route = route
         self.reason = reason
     }
 
@@ -254,7 +239,6 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
         createdMs = c.int64(.createdMs) ?? 0
         decidedMs = c.int64(.decidedMs)
         tier = c.optional(ApprovalTier.self, .tier)
-        route = c.optional(ApprovalRoute.self, .route)
         reason = c.string(.reason)
     }
 
@@ -268,6 +252,22 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
         }
         return summary
     }
+
+    /// Whether it waits for you. Every pending approval does: cos never
+    /// answers one by itself.
+    public var isForYou: Bool { state == .pending }
+}
+
+/// Which tier `cos-policy` put a request in (docs/approvals.md). It says
+/// why cos asks you; you answer every request whatever its tier.
+public struct ApprovalTier: RawRepresentable, Codable, Hashable, Sendable {
+    public var rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+
+    public static let allowed = ApprovalTier(rawValue: "allowed")
+    public static let chief = ApprovalTier(rawValue: "chief")
+    public static let askUser = ApprovalTier(rawValue: "ask_user")
+    public static let neverDelegated = ApprovalTier(rawValue: "never_delegated")
 }
 
 public struct ApprovalState: RawRepresentable, Codable, Hashable, Sendable {

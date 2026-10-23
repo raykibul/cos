@@ -89,7 +89,7 @@ import Testing
                 .json(403, #"{"error":"this device (phone) is waiting for approval. On my-mac, run `cos devices approve 2`","code":"device_pending"}"#)
             case "/v1/projects":
                 .json(503, #"{"error":"tailscale whois failed; try again","code":"tailscale_unavailable"}"#)
-            case "/v1/runs":
+            case "/v1/agents":
                 .json(403, #"{"error":"something new","code":"brand_new_code"}"#)
             default:
                 .json(404, #"{"error":"unknown agent 9"}"#)
@@ -111,7 +111,7 @@ import Testing
         }
         // A code this client doesn't know is still a refusal.
         await #expect(throws: CosError.refused(Refusal(status: 403, code: RefusalCode(rawValue: "brand_new_code"), message: "something new"))) {
-            try await client.runs()
+            try await client.agents()
         }
         // Without a code it's an ordinary answer.
         await #expect(throws: CosError.notFound("unknown agent 9")) { try await client.agent(id: 9) }

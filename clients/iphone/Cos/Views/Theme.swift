@@ -51,38 +51,6 @@ extension AgentState {
     }
 }
 
-extension RunState {
-    var style: StateStyle {
-        switch self {
-        case .planning: StateStyle(label: "Planning", symbol: "pencil.and.list.clipboard", color: Palette.purple)
-        case .awaitingPlanApproval: StateStyle(label: "Plan to review", symbol: "checklist", color: Palette.claude)
-        case .running: StateStyle(label: "Running", symbol: "play.circle.fill", color: Palette.blue)
-        case .reporting: StateStyle(label: "Reporting", symbol: "doc.text", color: Palette.teal)
-        case .done: StateStyle(label: "Done", symbol: "checkmark.circle.fill", color: Palette.green)
-        case .failed: StateStyle(label: "Failed", symbol: "xmark.octagon.fill", color: Palette.red)
-        case .cancelled: StateStyle(label: "Cancelled", symbol: "slash.circle", color: Palette.ink3)
-        default: StateStyle(label: rawValue.replacingOccurrences(of: "_", with: " ").capitalized, symbol: "circle.dashed", color: Palette.ink3)
-        }
-    }
-}
-
-extension TaskState {
-    var style: StateStyle {
-        switch self {
-        case .proposed: StateStyle(label: "Proposed", symbol: "circle.dashed", color: Palette.ink3)
-        case .ready: StateStyle(label: "Ready", symbol: "circle", color: Palette.ink2)
-        case .running: StateStyle(label: "Running", symbol: "circle.fill", color: Palette.blue)
-        case .checking: StateStyle(label: "Checking", symbol: "checklist.unchecked", color: Palette.teal)
-        case .review: StateStyle(label: "In review", symbol: "eye.circle", color: Palette.purple)
-        case .merged: StateStyle(label: "Merged", symbol: "checkmark.circle.fill", color: Palette.green)
-        case .blocked: StateStyle(label: "Blocked", symbol: "exclamationmark.triangle.fill", color: Palette.amber)
-        case .failed: StateStyle(label: "Failed", symbol: "xmark.circle.fill", color: Palette.red)
-        case .cancelled: StateStyle(label: "Cancelled", symbol: "slash.circle", color: Palette.ink3)
-        default: StateStyle(label: rawValue.replacingOccurrences(of: "_", with: " ").capitalized, symbol: "circle.dashed", color: Palette.ink3)
-        }
-    }
-}
-
 /// A small capsule with a state's symbol and words.
 struct StateBadge: View {
     var style: StateStyle

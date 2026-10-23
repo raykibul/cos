@@ -52,10 +52,6 @@ struct AgentView: View {
                         }
                         .padding(.vertical, 4)
                     }
-                } else if let approval = detail.approval, approval.isWithChief {
-                    Section("With the run's chief") {
-                        Text(approval.detail).font(.footnote.monospaced()).foregroundStyle(Palette.ink2)
-                    }
                 }
 
                 if agent.state == .needsTrust {

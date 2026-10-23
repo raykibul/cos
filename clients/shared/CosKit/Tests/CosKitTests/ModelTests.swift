@@ -30,19 +30,19 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(page.events.map(\.seq) == [1, 2])
         #expect(page.events[0].kind == EventKind.daemonStarted)
         #expect(page.events[0].data["pid"] == .number(76227))
-        #expect(page.events[0].runId == nil)
         #expect(page.events[1].data == .object(["reason": .string("SIGTERM")]))
         #expect(abs(page.events[1].ts.timeIntervalSince1970 - 1_792_607_791.006) < 1e-5)
     }
 
-    @Test func decodesDocsSampleAndRunId() throws {
+    @Test func decodesDocsSampleAndANullData() throws {
         let event = try decode(LoggedEvent.self, Samples.docsEvent)
         #expect(event.seq == 3)
         #expect(event.data["version"] == .string("0.1.0"))
 
-        let withRun = try decode(LoggedEvent.self, #"{"seq":9,"ts":"2026-10-21T18:06:01Z","kind":"run.started","run_id":"r1","data":null}"#)
-        #expect(withRun.runId == "r1")
-        #expect(withRun.data == .null)
+        // The log still sends a `run_id` column; it's ignored.
+        let bare = try decode(LoggedEvent.self, #"{"seq":9,"ts":"2026-10-21T18:06:01Z","kind":"staff.started","run_id":null,"data":null}"#)
+        #expect(bare.kind == "staff.started")
+        #expect(bare.data == .null)
     }
 
     @Test(arguments: [

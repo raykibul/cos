@@ -197,19 +197,16 @@ struct WaitingRow: View {
         .contentShape(Rectangle())
     }
 
-    /// "1 approval · 1 question · 2 logins".
+    /// "1 approval · 1 trust dialog · 2 logins".
     private var summary: String {
         var counts: [(String, String, Int)] = [
-            ("approval", "approvals", 0), ("question", "questions", 0), ("plan", "plans", 0), ("trust dialog", "trust dialogs", 0),
-            ("login", "logins", 0),
+            ("approval", "approvals", 0), ("trust dialog", "trust dialogs", 0), ("login", "logins", 0),
         ]
         for item in items {
             switch item {
             case .approval: counts[0].2 += 1
-            case .question: counts[1].2 += 1
-            case .plan: counts[2].2 += 1
-            case .trust: counts[3].2 += 1
-            case .login: counts[4].2 += 1
+            case .trust: counts[1].2 += 1
+            case .login: counts[2].2 += 1
             }
         }
         return counts.filter { $0.2 > 0 }.map { "\($0.2) \($0.2 == 1 ? $0.0 : $0.1)" }.joined(separator: " · ")
