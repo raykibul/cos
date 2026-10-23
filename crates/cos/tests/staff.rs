@@ -1,8 +1,7 @@
-//! The chiefs' CLI against a real `cos daemon`, with `cos-fake-claude` as
-//! Claude: a run starts its chief, and `cos questions`, `cos say` and
-//! `cos report` reach it; `cos staff` shows and talks to a project's Chief of
-//! Staff. Also makes Cargo build the `cos` binary, which the daemon's unit
-//! tests run as the chief's MCP server.
+//! The Chief of Staff's CLI against a real `cos daemon`, with
+//! `cos-fake-claude` as Claude: `cos staff` shows and talks to a project's
+//! Chief of Staff. Also makes Cargo build the `cos` binary, which the
+//! daemon's unit tests run as the chief's MCP server.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -28,7 +27,6 @@ impl Daemon {
             .env("COS_HOME", home.path())
             .env("COS_CLAUDE_BIN", fake_claude())
             .env("COS_FAKE_CLAUDE_TRANSCRIPTS", home.path().join("transcripts"))
-            .env_remove("COS_CHIEF_MODEL")
             .env_remove("COS_STAFF_MODEL")
             .env_remove("COS_HOST")
             .stdin(Stdio::null())
@@ -117,43 +115,6 @@ fn git_repo(dir: &Path) -> PathBuf {
     git(&["add", "README"]);
     git(&["commit", "-q", "-m", "first"]);
     repo
-}
-
-#[test]
-fn a_run_gets_a_chief_you_can_talk_to() {
-    assert!(
-        fake_claude().is_file(),
-        "{} is missing; run the tests with `cargo test --workspace` (make test)",
-        fake_claude().display()
-    );
-    let daemon = Daemon::start();
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = git_repo(scratch.path());
-    daemon.ok(&["project", "add", repo.to_str().unwrap()]);
-    daemon.ok(&["workspace", "new", "repo", "--from", "head"]);
-
-    let started = daemon.ok(&["run", "-w", "1", "add a one-line comment to README"]);
-    assert!(started.contains("chief"), "{started}");
-    let board = daemon.home.path().join("runs/1/board.md");
-    wait_for("board.md", || board.is_file());
-    let agents = daemon.ok(&["agents"]);
-    assert!(agents.contains("Chief of run 1"), "{agents}");
-
-    assert!(
-        daemon
-            .ok(&["questions"])
-            .contains("No questions waiting for you.")
-    );
-    let said = daemon.ok(&["say", "1", "keep it short"]);
-    assert!(said.contains("Sent to the chief of run 1"), "{said}");
-    let report = daemon.cos(&["report", "1"]);
-    assert!(!report.status.success());
-    assert!(
-        String::from_utf8_lossy(&report.stderr).contains("no report yet"),
-        "{}",
-        String::from_utf8_lossy(&report.stderr)
-    );
-    daemon.ok(&["cancel", "1"]);
 }
 
 #[test]

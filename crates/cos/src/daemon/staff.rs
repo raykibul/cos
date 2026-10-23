@@ -12,10 +12,9 @@
 //!   `POST /v1/agents/{id}/tools/{name}`, which sends the staff's calls here
 //!   ([`Staff::call_tool`]). Every id is checked against its project.
 //! - **Inbox:** the agents it started (a turn ended, they exited, they wait
-//!   for you) and the runs it started (state changes) add items; so do the
-//!   messages you type. When it's idle, the delivery loop types your oldest
-//!   message on its own, else one `[cos · N updates]` wakeup under the run
-//!   chief's caps. While coordination is paused, news waits and only your
+//!   for you) add items; so do the messages you type. When it's idle, the
+//!   delivery loop types your oldest message on its own, else one
+//!   `[cos · N updates]` wakeup under the caps in [`cos_core::staff`]. While coordination is paused, news waits and only your
 //!   messages go in.
 //! - **Restarts:** when the daemon starts, every chief that was running
 //!   (now `interrupted`) is resumed, one a second, unless you stopped it
@@ -32,11 +31,11 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
-use cos_core::chief::{MAX_WAKEUPS_PER_HOUR, next_batch_by};
 use cos_core::events::kind;
+use cos_core::staff::{MAX_WAKEUPS_PER_HOUR, next_batch};
 use cos_core::{
-    Agent, AgentState, EventLog, Launch, LoggedEvent, Projects, Role, Runs, StaffBooks, StaffItem,
-    StaffItemKind, Store, Subscription,
+    Agent, AgentState, EventLog, Launch, LoggedEvent, Projects, Role, StaffBooks, StaffItem, StaffItemKind,
+    Store, Subscription,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -47,7 +46,6 @@ pub(crate) use prompt::configure;
 
 use super::agents::{AgentManager, AgentSignal, StartAgent};
 use super::api::ApiError;
-use super::chief::Chief;
 
 /// The model Chiefs of Staff run unless a project sets one; else Claude's
 /// default.
@@ -164,9 +162,7 @@ pub(crate) struct Staff {
 struct Inner {
     log: EventLog,
     projects: Arc<Projects>,
-    runs: Arc<Runs>,
     agents: AgentManager,
-    chief: Chief,
     books: StaffBooks,
     config: StaffConfig,
     /// Wakes the delivery loop.
@@ -184,9 +180,7 @@ impl Staff {
         store: Arc<Store>,
         log: EventLog,
         projects: Arc<Projects>,
-        runs: Arc<Runs>,
         agents: AgentManager,
-        chief: Chief,
         config: StaffConfig,
     ) -> anyhow::Result<Self> {
         let (_, last_seq) = log.stats()?;
@@ -197,9 +191,7 @@ impl Staff {
             books: StaffBooks::new(store, log.clone()),
             log,
             projects,
-            runs,
             agents,
-            chief,
             config,
             wake: wake.clone(),
             woken: Mutex::default(),
@@ -356,12 +348,12 @@ impl Staff {
         inner.ensure_running(project.id).await?;
         inner
             .books
-            .add(project.id, StaffItemKind::Message, None, None, text)?;
+            .add(project.id, StaffItemKind::Message, None, text)?;
         inner.wake.notify_one();
         Ok(())
     }
 
-    /// News from agents and runs, newest first.
+    /// News from agents, newest first.
     pub(crate) async fn inbox(&self, project_id: i64) -> Result<Vec<StaffItem>, ApiError> {
         let project = self.inner.projects.get(project_id).await?;
         Ok(self.inner.books.recent(project.id, INBOX_PAGE)?)
@@ -426,7 +418,7 @@ impl Inner {
                 };
                 let agent =
                     self.agents
-                        .start_agent_with(worktree.id, Role::Staff, None, &request, &launch)?;
+                        .start_agent_with(worktree.id, Role::Staff, &request, &launch)?;
                 self.books.set_agent(project.id, agent.id)?;
                 agent
             }
@@ -471,8 +463,8 @@ impl Inner {
         Some((project, spawner))
     }
 
-    fn add(&self, project_id: i64, kind: StaffItemKind, agent: Option<i64>, run: Option<i64>, text: &str) {
-        match self.books.add(project_id, kind, agent, run, text) {
+    fn add(&self, project_id: i64, kind: StaffItemKind, agent: Option<i64>, text: &str) {
+        match self.books.add(project_id, kind, agent, text) {
             Ok(_) => self.wake.notify_one(),
             Err(failure) => {
                 tracing::error!(error = %failure, project = project_id, "the staff inbox missed news")
@@ -539,7 +531,7 @@ impl Inner {
         };
         let (what, body) = news;
         let text = format!("{} {what}\n{body}", describe(&agent));
-        self.add(project, StaffItemKind::Agent, Some(agent.id), None, &text);
+        self.add(project, StaffItemKind::Agent, Some(agent.id), &text);
     }
 
     fn on_event(&self, event: &LoggedEvent) {
@@ -562,7 +554,6 @@ impl Inner {
                 }
             }
             kind::APPROVAL_REQUESTED => self.on_approval(data),
-            kind::RUN_STATE_CHANGED => self.on_run(data),
             _ => {}
         }
     }
@@ -576,7 +567,7 @@ impl Inner {
                 "{} waits for the user to trust its folder\nThe user answers this in the app.",
                 describe(&agent)
             );
-            self.add(project, StaffItemKind::Agent, Some(agent.id), None, &text);
+            self.add(project, StaffItemKind::Agent, Some(agent.id), &text);
         }
     }
 
@@ -591,33 +582,8 @@ impl Inner {
                 data["summary"].as_str().unwrap_or("a tool call"),
                 data["approval_id"].as_i64().unwrap_or_default(),
             );
-            self.add(project, StaffItemKind::Agent, Some(agent.id), None, &text);
+            self.add(project, StaffItemKind::Agent, Some(agent.id), &text);
         }
-    }
-
-    fn on_run(&self, data: &Value) {
-        let Some(run_id) = data["run_id"].as_i64() else {
-            return;
-        };
-        let Some(spawner) = self.runs.spawned_by(run_id).ok().flatten() else {
-            return;
-        };
-        let Some(project) = self.books.project_of(spawner).ok().flatten() else {
-            return;
-        };
-        let to = data["to"].as_str().unwrap_or("?");
-        let mut text = format!(
-            "Run {run_id} is now {to} (was {})",
-            data["from"].as_str().unwrap_or("?")
-        );
-        if let Some(reason) = data["reason"].as_str() {
-            text.push('\n');
-            text.push_str(reason);
-        }
-        if let Some(report) = data["report"].as_str() {
-            let _ = std::fmt::Write::write_fmt(&mut text, format_args!("\nReport: {report}"));
-        }
-        self.add(project, StaffItemKind::Run, None, Some(run_id), &text);
     }
 
     /// Delivers to every idle chief with items waiting.
@@ -669,7 +635,7 @@ impl Inner {
         if self.books.wakeups_since(project_id, hour_ago)? >= MAX_WAKEUPS_PER_HOUR {
             return Ok(false);
         }
-        let batch = next_batch_by(&waiting, |item| item.text.len());
+        let batch = next_batch(&waiting);
         if batch.is_empty() {
             return Ok(false);
         }

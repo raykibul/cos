@@ -53,11 +53,6 @@ impl CosHome {
         self.root.join("worktrees")
     }
 
-    /// Where task worktrees go: one per task a worker is on.
-    pub(crate) fn tasks(&self) -> PathBuf {
-        self.root.join("tasks")
-    }
-
     pub(crate) fn daemon_log(&self) -> PathBuf {
         self.root.join("logs").join("daemon.log")
     }

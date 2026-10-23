@@ -26,16 +26,6 @@ pub mod kind {
     pub const DEVICE_DENIED: &str = "device.denied";
     pub const DEVICE_REMOVED: &str = "device.removed";
     pub const TAILNET_CHANGED: &str = "tailnet.changed";
-    pub const RUN_CREATED: &str = "run.created";
-    pub const RUN_STATE_CHANGED: &str = "run.state_changed";
-    pub const PLAN_PROPOSED: &str = "plan.proposed";
-    pub const PLAN_APPROVED: &str = "plan.approved";
-    pub const TASK_STATE_CHANGED: &str = "task.state_changed";
-    pub const TASK_WORKTREE_ASSIGNED: &str = "task.worktree_assigned";
-    // The pipeline; see `docs/orchestration.md`.
-    pub const TASK_CHECKED: &str = "task.checked";
-    pub const TASK_REVIEWED: &str = "task.reviewed";
-    pub const TASK_MERGED: &str = "task.merged";
     // Agents and approvals; see `docs/agents-api.md`.
     pub const AGENT_STARTED: &str = "agent.started";
     pub const AGENT_STATE_CHANGED: &str = "agent.state_changed";
@@ -43,13 +33,6 @@ pub mod kind {
     pub const AGENT_REMOVED: &str = "agent.removed";
     pub const APPROVAL_REQUESTED: &str = "approval.requested";
     pub const APPROVAL_DECIDED: &str = "approval.decided";
-    // The approvals policy; see `docs/approvals.md`.
-    pub const APPROVAL_ROUTED: &str = "approval.routed";
-    pub const RUN_LIMITS_CHANGED: &str = "run.limits_changed";
-    // The chief; see `docs/orchestration.md`.
-    pub const QUESTION_ASKED: &str = "question.asked";
-    pub const QUESTION_ANSWERED: &str = "question.answered";
-    pub const RUN_REPORT_WRITTEN: &str = "run.report_written";
     // The Chief of Staff; see `docs/chief-of-staff.md`.
     pub const STAFF_STARTED: &str = "staff.started";
     pub const STAFF_INBOX: &str = "staff.inbox";

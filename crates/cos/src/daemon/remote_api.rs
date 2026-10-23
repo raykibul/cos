@@ -132,7 +132,7 @@ fn is_host_only(path: &str) -> bool {
     let shared = SHARED
         .iter()
         .any(|route| path.strip_suffix('/').unwrap_or(path) == *route);
-    (HOST_ONLY.iter().any(under) && !shared) || super::chief_api::is_tool_route(path)
+    (HOST_ONLY.iter().any(under) && !shared) || super::staff_api::is_tool_route(path)
 }
 
 impl IntoResponse for Refusal {

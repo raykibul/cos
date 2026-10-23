@@ -24,13 +24,10 @@ pub const MAX_LAST_MESSAGE_CHARS: usize = 2_000;
 pub struct Agent {
     pub id: i64,
     pub workspace_id: i64,
-    pub run_id: Option<i64>,
-    /// The task a worker or reviewer works on.
-    #[serde(default)]
-    pub task_id: Option<i64>,
     pub role: Role,
     pub title: String,
-    /// Where it runs, if not the workspace's folder (a task worktree).
+    /// Where it runs, if not the workspace's folder (the Chief of Staff's
+    /// worktree).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
     pub session_id: String,
@@ -48,7 +45,7 @@ pub struct Agent {
     pub exited_ms: Option<i64>,
     /// `None` if the process was killed, or hasn't exited.
     pub exit_code: Option<i32>,
-    /// The last turn's final message, cut to [`MAX_LAST_MESSAGE_CHARS`].
+    /// Claude's last reply (at its last `Stop`), cut to [`MAX_LAST_MESSAGE_CHARS`].
     pub last_message: Option<String>,
     /// The newest approval of this agent that is still pending.
     pub pending_approval_id: Option<i64>,
@@ -70,11 +67,10 @@ pub struct Agent {
     pub mcp_config: Option<String>,
 }
 
-/// How a run agent is started beyond [`NewAgent`]: recorded with
+/// How an agent is started beyond [`NewAgent`]: recorded with
 /// [`Agents::set_launch`] and used again on every resume.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Launch {
-    pub task_id: Option<i64>,
     /// `None`: the workspace's folder.
     pub cwd: Option<PathBuf>,
     pub system_prompt: Option<String>,
@@ -90,19 +86,8 @@ pub enum Role {
     /// Someone started it from an app or the CLI, or a Chief of Staff did
     /// for them.
     User,
-    Chief,
-    Worker,
-    Reviewer,
     /// A project's Chief of Staff.
     Staff,
-}
-
-impl Role {
-    /// Whether you answer its permission requests yourself, whenever you
-    /// like: your own agents and your Chief of Staff, not a run's.
-    pub fn asks_you(self) -> bool {
-        matches!(self, Self::User | Self::Staff)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -119,7 +104,7 @@ pub enum AgentState {
     Working,
     /// A permission request is open.
     WaitingApproval,
-    /// The turn ended; waiting for input.
+    /// Claude finished replying; waiting for input.
     Idle,
     /// The process ended.
     Exited,
@@ -147,7 +132,7 @@ pub struct Approval {
     pub summary: String,
     pub state: ApprovalState,
     pub decided_by: Option<DecidedBy>,
-    /// The message sent with a denial, or the chief's reason.
+    /// The message sent with a denial.
     pub message: Option<String>,
     pub created_ms: i64,
     pub decided_ms: Option<i64>,
@@ -155,23 +140,20 @@ pub struct Approval {
     /// recorded before the policy was wired in.
     #[serde(default)]
     pub tier: Option<ApprovalTier>,
-    /// Who was asked to answer it.
-    #[serde(default)]
-    pub route: Option<ApprovalRoute>,
-    /// The policy's one-line reason, plus why it didn't go to the chief when
-    /// the tier would have let it.
+    /// The policy's one-line reason.
     #[serde(default)]
     pub reason: Option<String>,
 }
 
 /// The approvals policy's tier for a request: `cos_policy::Tier` without
-/// what a chief-tier request needs.
+/// what a delegable request needs. You answer every request whatever its
+/// tier; the tier is shown with it, and jev gets it in shadow mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalTier {
-    /// Rust rules allow it.
+    /// Rust rules would allow it.
     Allowed,
-    /// The chief may approve it, within the run's limits.
+    /// Bounded and in scope: something other than you could approve it.
     Chief,
     /// Only you, because cos can't tell confidently what it does.
     AskUser,
@@ -188,18 +170,6 @@ impl From<cos_policy::Tier> for ApprovalTier {
             cos_policy::Tier::NeverDelegated => Self::NeverDelegated,
         }
     }
-}
-
-/// Who answers an approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ApprovalRoute {
-    /// Rust rules answered it straight away; nobody was asked.
-    Auto,
-    /// The run's chief, through `approval_decide`.
-    Chief,
-    /// You.
-    User,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,15 +191,12 @@ pub enum ApprovalState {
 pub enum DecidedBy {
     User,
     Terminal,
-    Rule,
-    Chief,
 }
 
 /// What [`Agents::create`] needs.
 #[derive(Debug, Clone)]
 pub struct NewAgent {
     pub workspace_id: i64,
-    pub run_id: Option<i64>,
     pub role: Role,
     /// `None` becomes "Agent N".
     pub title: Option<String>,
@@ -251,7 +218,6 @@ pub struct NewApproval {
     pub tool_use_id: Option<String>,
     pub summary: String,
     pub tier: Option<ApprovalTier>,
-    pub route: Option<ApprovalRoute>,
     pub reason: Option<String>,
 }
 
@@ -274,12 +240,11 @@ impl Agents {
             let conn = self.store.lock();
             let now = now_ms();
             conn.execute(
-                "INSERT INTO agents (workspace_id, run_id, role, title, session_id, state, model,
+                "INSERT INTO agents (workspace_id, role, title, session_id, state, model,
                      permission_mode, user_settings, term_rows, term_cols, started_ms, last_activity_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'starting', ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, 'starting', ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
                 params![
                     new.workspace_id,
-                    new.run_id,
                     as_text(&new.role),
                     new.title.clone().unwrap_or_default(),
                     new.session_id,
@@ -307,11 +272,10 @@ impl Agents {
     /// between [`Self::create`] and the launch. Logs nothing.
     pub fn set_launch(&self, id: i64, launch: &Launch) -> Result<Agent, StoreError> {
         self.store.lock().execute(
-            "UPDATE agents SET task_id = ?2, cwd = ?3, system_prompt = ?4, mcp_config = ?5, spawned_by = ?6
+            "UPDATE agents SET cwd = ?2, system_prompt = ?3, mcp_config = ?4, spawned_by = ?5
              WHERE id = ?1",
             params![
                 id,
-                launch.task_id,
                 launch.cwd.as_ref().map(|cwd| cwd.to_string_lossy()),
                 launch.system_prompt,
                 launch.mcp_config,
@@ -366,24 +330,6 @@ impl Agents {
             .collect::<Result<_, _>>()?)
     }
 
-    /// The agents of a task, oldest first.
-    pub fn of_task(&self, task_id: i64) -> Result<Vec<Agent>, StoreError> {
-        let conn = self.store.lock();
-        Ok(conn
-            .prepare_cached(&format!("{AGENT_SELECT} WHERE a.task_id = ?1 ORDER BY a.id"))?
-            .query_map([task_id], read_agent)?
-            .collect::<Result<_, _>>()?)
-    }
-
-    /// The agents of a run, oldest first.
-    pub fn of_run(&self, run_id: i64) -> Result<Vec<Agent>, StoreError> {
-        let conn = self.store.lock();
-        Ok(conn
-            .prepare_cached(&format!("{AGENT_SELECT} WHERE a.run_id = ?1 ORDER BY a.id"))?
-            .query_map([run_id], read_agent)?
-            .collect::<Result<_, _>>()?)
-    }
-
     /// Forgets an agent whose process never started. Logs nothing.
     pub fn discard(&self, id: i64) -> Result<(), StoreError> {
         self.store
@@ -407,7 +353,6 @@ impl Agents {
             json!({
                 "agent_id": id,
                 "workspace_id": agent.workspace_id,
-                "run_id": agent.run_id,
                 "role": agent.role,
                 "session_id": agent.session_id,
             }),
@@ -573,10 +518,9 @@ impl Agents {
 
     // ---- Approvals ----
 
-    /// Records a pending approval. Logs `approval.requested`, and
-    /// `approval.routed` when it goes to the chief.
+    /// Records a pending approval. Logs `approval.requested`.
     pub fn add_approval(&self, new: NewApproval) -> Result<Approval, StoreError> {
-        let id = self.insert_approval(&new, None)?;
+        let id = self.insert_approval(&new)?;
         let approval = self.require_approval(id)?;
         self.log.append(
             kind::APPROVAL_REQUESTED,
@@ -586,83 +530,18 @@ impl Agents {
                 "agent_id": new.agent_id,
                 "summary": approval.summary,
                 "tier": approval.tier,
-                "route": approval.route,
             }),
         )?;
-        if approval.route == Some(ApprovalRoute::Chief) {
-            self.log_routed(&approval)?;
-        }
         Ok(approval)
     }
 
-    /// Records an approval that Rust rules allowed straight away: `allowed`
-    /// by `rule`, route `auto`. Nobody is asked, so it logs only
-    /// `approval.decided`, never `approval.requested`.
-    pub fn add_ruled_approval(&self, new: NewApproval) -> Result<Approval, StoreError> {
-        let new = NewApproval {
-            route: Some(ApprovalRoute::Auto),
-            ..new
-        };
-        let id = self.insert_approval(&new, Some(DecidedBy::Rule))?;
-        self.log.append(
-            kind::APPROVAL_DECIDED,
-            None,
-            json!({
-                "approval_id": id,
-                "state": ApprovalState::Allowed,
-                "decided_by": DecidedBy::Rule,
-                "route": ApprovalRoute::Auto,
-            }),
-        )?;
-        self.require_approval(id)
-    }
-
-    /// Sends a pending approval to someone else, such as to you once the
-    /// limits refused the chief's answer. `reason` replaces the stored one
-    /// if given. `None` if it was no longer pending. Logs `approval.routed`.
-    pub fn route_approval(
-        &self,
-        id: i64,
-        route: ApprovalRoute,
-        reason: Option<&str>,
-    ) -> Result<Option<Approval>, StoreError> {
-        let changed = self.store.lock().execute(
-            "UPDATE approvals SET route = ?2, reason = COALESCE(?3, reason)
-             WHERE id = ?1 AND state = 'pending'",
-            params![id, as_text(&route), reason],
-        )?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        let approval = self.require_approval(id)?;
-        self.log_routed(&approval)?;
-        Ok(Some(approval))
-    }
-
-    /// The run an agent belongs to, if any.
-    pub fn run_of(&self, agent_id: i64) -> Result<Option<i64>, StoreError> {
-        Ok(self
-            .store
-            .lock()
-            .query_row("SELECT run_id FROM agents WHERE id = ?1", [agent_id], |row| {
-                row.get(0)
-            })
-            .optional()?
-            .flatten())
-    }
-
-    /// Inserts an approval: pending, or already allowed by `decided_by`.
-    fn insert_approval(&self, new: &NewApproval, decided_by: Option<DecidedBy>) -> Result<i64, StoreError> {
+    /// Inserts a pending approval.
+    fn insert_approval(&self, new: &NewApproval) -> Result<i64, StoreError> {
         let conn = self.store.lock();
-        let now = now_ms();
-        let (state, decided_ms) = match decided_by {
-            Some(_) => (ApprovalState::Allowed, Some(now)),
-            None => (ApprovalState::Pending, None),
-        };
         conn.execute(
             "INSERT INTO approvals (agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary,
-                 state, decided_by, created_ms, decided_ms, tier, route, reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 state, created_ms, tier, reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?8, ?9)",
             params![
                 new.agent_id,
                 new.workspace_id,
@@ -670,36 +549,12 @@ impl Agents {
                 new.tool_input.to_string(),
                 new.tool_use_id,
                 new.summary,
-                as_text(&state),
-                decided_by.map(|by| as_text(&by)),
-                now,
-                decided_ms,
+                now_ms(),
                 new.tier.map(|tier| as_text(&tier)),
-                new.route.map(|route| as_text(&route)),
                 new.reason,
             ],
         )?;
         Ok(conn.last_insert_rowid())
-    }
-
-    /// Logs `approval.routed`, under the agent's run so the chief's inbox
-    /// can pick it up.
-    fn log_routed(&self, approval: &Approval) -> Result<(), StoreError> {
-        let run_id = self.run_of(approval.agent_id)?;
-        self.log.append(
-            kind::APPROVAL_ROUTED,
-            run_id.map(|id| id.to_string()).as_deref(),
-            json!({
-                "approval_id": approval.id,
-                "route": approval.route,
-                "tier": approval.tier,
-                "run_id": run_id,
-                "agent_id": approval.agent_id,
-                "summary": approval.summary,
-                "reason": approval.reason,
-            }),
-        )?;
-        Ok(())
     }
 
     /// Answers a pending approval. Returns `None` if it was no longer
@@ -785,16 +640,16 @@ impl Agents {
 // ---- Storage ----
 
 const AGENT_SELECT: &str =
-    "SELECT a.id, a.workspace_id, a.run_id, a.role, a.title, a.session_id, a.pid, a.state,
+    "SELECT a.id, a.workspace_id, a.role, a.title, a.session_id, a.pid, a.state,
         a.model, a.permission_mode, a.user_settings, a.term_rows, a.term_cols, a.started_ms, a.last_activity_ms, a.exited_ms,
         a.exit_code, a.last_message,
         (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending'),
-        a.task_id, a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path, a.env_names
+        a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path, a.env_names
     FROM agents a";
 
 const APPROVAL_COLUMNS: &str =
     "id, agent_id, workspace_id, tool_name, tool_input, tool_use_id, summary, state,
-    decided_by, message, created_ms, decided_ms, tier, route, reason";
+    decided_by, message, created_ms, decided_ms, tier, reason";
 
 fn current_state(conn: &Connection, id: i64) -> rusqlite::Result<Option<AgentState>> {
     conn.query_row("SELECT state FROM agents WHERE id = ?1", [id], |row| {
@@ -807,32 +662,30 @@ fn read_agent(row: &Row<'_>) -> rusqlite::Result<Agent> {
     Ok(Agent {
         id: row.get(0)?,
         workspace_id: row.get(1)?,
-        run_id: row.get(2)?,
-        role: from_text(row, 3)?,
-        title: row.get(4)?,
-        session_id: row.get(5)?,
-        pid: row.get(6)?,
-        state: from_text(row, 7)?,
-        model: row.get(8)?,
-        permission_mode: row.get(9)?,
-        user_settings: row.get(10)?,
-        rows: row.get(11)?,
-        cols: row.get(12)?,
-        started_ms: row.get(13)?,
-        last_activity_ms: row.get(14)?,
-        exited_ms: row.get(15)?,
-        exit_code: row.get(16)?,
-        last_message: row.get(17)?,
-        pending_approval_id: row.get(18)?,
-        task_id: row.get(19)?,
-        cwd: row.get::<_, Option<String>>(20)?.map(PathBuf::from),
-        system_prompt: row.get(21)?,
-        mcp_config: row.get(22)?,
-        spawned_by: row.get(23)?,
-        transcript_path: row.get::<_, Option<String>>(24)?.map(PathBuf::from),
+        role: from_text(row, 2)?,
+        title: row.get(3)?,
+        session_id: row.get(4)?,
+        pid: row.get(5)?,
+        state: from_text(row, 6)?,
+        model: row.get(7)?,
+        permission_mode: row.get(8)?,
+        user_settings: row.get(9)?,
+        rows: row.get(10)?,
+        cols: row.get(11)?,
+        started_ms: row.get(12)?,
+        last_activity_ms: row.get(13)?,
+        exited_ms: row.get(14)?,
+        exit_code: row.get(15)?,
+        last_message: row.get(16)?,
+        pending_approval_id: row.get(17)?,
+        cwd: row.get::<_, Option<String>>(18)?.map(PathBuf::from),
+        system_prompt: row.get(19)?,
+        mcp_config: row.get(20)?,
+        spawned_by: row.get(21)?,
+        transcript_path: row.get::<_, Option<String>>(22)?.map(PathBuf::from),
         // Written by us; NULL before an agent's first launch with the column.
         env_names: row
-            .get::<_, Option<String>>(25)?
+            .get::<_, Option<String>>(23)?
             .and_then(|names| serde_json::from_str(&names).ok())
             .unwrap_or_default(),
     })
@@ -858,8 +711,7 @@ fn read_approval(row: &Row<'_>) -> rusqlite::Result<Approval> {
         created_ms: row.get(10)?,
         decided_ms: row.get(11)?,
         tier: optional_text(row, 12)?,
-        route: optional_text(row, 13)?,
-        reason: row.get(14)?,
+        reason: row.get(13)?,
     })
 }
 

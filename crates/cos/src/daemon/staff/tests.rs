@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 use cos_core::events::kind;
 use cos_core::{
-    Agent, AgentState, Agents, Base, EventLog, Projects, Role, RunState, Runs, StaffBooks, StaffItemKind,
-    Store,
+    Agent, AgentState, Agents, Base, EventLog, Projects, Role, StaffBooks, StaffItemKind, Store,
 };
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -18,7 +17,6 @@ use super::{Staff, StaffConfig, StaffSettings};
 use crate::client::Client;
 use crate::daemon::agents::tests::{cos_binary, fake_claude, git_repo, status, until};
 use crate::daemon::agents::{AgentConfig, AgentManager};
-use crate::daemon::chief::{Chief, ChiefConfig};
 use crate::daemon::transcript::MessageKind;
 use crate::daemon::{api, serve, tailnet::Tailnet};
 
@@ -26,7 +24,6 @@ struct Fixture {
     dir: tempfile::TempDir,
     store: Arc<Store>,
     log: EventLog,
-    runs: Arc<Runs>,
     projects: Arc<Projects>,
     books: StaffBooks,
     /// The records, with what the API leaves out (the system prompt).
@@ -58,9 +55,8 @@ impl Fixture {
             .create_workspace(project.id, Base::Head, None)
             .await
             .unwrap();
-        let runs = Arc::new(Runs::new(store.clone(), log.clone()));
-        let manager = start_manager(&store, &log, &projects, &runs, dir.path());
-        let (staff, stop) = serve_daemon(&store, &log, &projects, &runs, &manager, dir.path());
+        let manager = start_manager(&store, &log, &projects, dir.path());
+        let (staff, stop) = serve_daemon(&store, &log, &projects, &manager, dir.path());
         Self {
             client: Client::new(dir.path().join("cos.sock")),
             books: StaffBooks::new(store.clone(), log.clone()),
@@ -68,7 +64,6 @@ impl Fixture {
             store,
             dir,
             log,
-            runs,
             projects,
             project_id: project.id,
             workspace_id: workspace.id,
@@ -86,18 +81,11 @@ impl Fixture {
         self.manager.shutdown().await;
         let _ = self._stop.send(true);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        self.manager = start_manager(
-            &self.store,
-            &self.log,
-            &self.projects,
-            &self.runs,
-            self.dir.path(),
-        );
+        self.manager = start_manager(&self.store, &self.log, &self.projects, self.dir.path());
         (self.staff, self._stop) = serve_daemon(
             &self.store,
             &self.log,
             &self.projects,
-            &self.runs,
             &self.manager,
             self.dir.path(),
         );
@@ -155,7 +143,7 @@ impl Fixture {
 
     /// Calls a staff tool the way `cos mcp` does.
     async fn tool(&self, agent: i64, name: &str, arguments: Value) -> anyhow::Result<String> {
-        self.client.chief_tool(agent, name, &arguments).await
+        self.client.staff_tool(agent, name, &arguments).await
     }
 
     async fn tool_json(&self, agent: i64, name: &str, arguments: Value) -> Value {
@@ -200,13 +188,11 @@ fn start_manager(
     store: &Arc<Store>,
     log: &EventLog,
     projects: &Arc<Projects>,
-    runs: &Arc<Runs>,
     dir: &std::path::Path,
 ) -> AgentManager {
     AgentManager::start(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
-        runs.clone(),
         cos_core::Environment::new(store.clone(), log.clone()),
         AgentConfig::for_tests(dir),
     )
@@ -219,42 +205,28 @@ fn serve_daemon(
     store: &Arc<Store>,
     log: &EventLog,
     projects: &Arc<Projects>,
-    runs: &Arc<Runs>,
     manager: &AgentManager,
     dir: &std::path::Path,
 ) -> (Staff, watch::Sender<bool>) {
-    let chief = Chief::start(
-        store.clone(),
-        log.clone(),
-        runs.clone(),
-        manager.clone(),
-        dir.to_path_buf(),
-        ChiefConfig::for_tests(),
-    )
-    .unwrap();
     let staff = Staff::start(
         store.clone(),
         log.clone(),
         projects.clone(),
-        runs.clone(),
         manager.clone(),
-        chief.clone(),
         StaffConfig::for_tests(),
     )
     .unwrap();
     let socket = dir.join("cos.sock");
     let _ = std::fs::remove_file(&socket);
     let (stop, stopping) = watch::channel(false);
-    let judge = crate::daemon::judge::Judge::off_for_tests(store, log, projects, runs, manager, dir);
+    let judge = crate::daemon::judge::Judge::off_for_tests(store, log, projects, manager, dir);
     let state = api::AppState {
         log: log.clone(),
         projects: projects.clone(),
         devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),
         tailnet: Tailnet::load(store.clone(), log.clone()),
         peers: crate::daemon::peers::Peers::without_tailscale(),
-        runs: runs.clone(),
         agents: manager.clone(),
-        chief,
         staff: staff.clone(),
         judge,
         started_at: Timestamp::now(),
@@ -524,17 +496,16 @@ async fn every_tool_works_on_its_own_project_only() {
     assert_eq!(resumed, format!("Resumed agent {agent_id} and sent the message."));
     fixture.until_says(agent_id, "echo: once more").await;
 
-    // run_start: a run with a chief, marked as the staff's.
-    let run = fixture
-        .tool_json(
+    // There is no run_start any more.
+    let gone = fixture
+        .tool(
             staff.id,
             "run_start",
-            json!({ "workspace_id": fixture.workspace_id, "goal": "Tidy up", "preset": "strict" }),
+            json!({ "workspace_id": fixture.workspace_id, "goal": "Tidy up" }),
         )
-        .await;
-    let run_id = run["id"].as_i64().unwrap();
-    assert!(run["chief_agent_id"].is_i64(), "{run}");
-    assert_eq!(fixture.runs.spawned_by(run_id).unwrap(), Some(staff.id));
+        .await
+        .unwrap_err();
+    assert_eq!(status(gone), 404);
 
     // Ids from another project, or the chief's own worktree, are refused.
     for (tool, arguments) in [
@@ -549,10 +520,6 @@ async fn every_tool_works_on_its_own_project_only() {
         (
             "agent_spawn",
             json!({ "prompt": "x", "workspace_id": staff.workspace_id }),
-        ),
-        (
-            "run_start",
-            json!({ "workspace_id": other_workspace, "goal": "x" }),
         ),
     ] {
         let refused = fixture.tool(staff.id, tool, arguments.clone()).await.unwrap_err();
@@ -602,7 +569,7 @@ async fn a_spawned_agents_news_wakes_the_chief_through_its_inbox() {
     let tools = fixture.say(staff.id, "mcp tools").await;
     assert_eq!(
         tools,
-        "workspaces_list,workspace_create,agent_spawn,agent_send,agent_read,agent_stop,run_start,brief_update"
+        "workspaces_list,workspace_create,agent_spawn,agent_send,agent_read,agent_stop,brief_update"
     );
     let spawn = json!({ "prompt": "say hi", "workspace_id": fixture.workspace_id });
     let spawned = fixture.say(staff.id, &format!("mcp agent_spawn {spawn}")).await;
@@ -679,7 +646,6 @@ async fn your_messages_go_in_alone_and_before_news() {
                 fixture.project_id,
                 StaffItemKind::Agent,
                 None,
-                None,
                 &format!("News {n}\nbody {n}"),
             )
             .unwrap();
@@ -718,12 +684,12 @@ async fn your_messages_go_in_alone_and_before_news() {
     assert_eq!(rows[2].0, MessageKind::Update);
 
     // Past the hourly cap news waits, but your messages still go in.
-    for _ in 0..cos_core::chief::MAX_WAKEUPS_PER_HOUR {
+    for _ in 0..cos_core::staff::MAX_WAKEUPS_PER_HOUR {
         fixture.books.deliver(fixture.project_id, staff_id, &[]).unwrap();
     }
     fixture
         .books
-        .add(fixture.project_id, StaffItemKind::Run, None, None, "Held back")
+        .add(fixture.project_id, StaffItemKind::Agent, None, "Held back")
         .unwrap();
     assert_eq!(fixture.say(staff_id, "still here?").await, "echo: still here?");
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
@@ -752,29 +718,6 @@ async fn your_messages_go_in_alone_and_before_news() {
         404
     );
     assert_eq!(status(fixture.client.staff(99).await.unwrap_err()), 404);
-}
-
-#[tokio::test]
-async fn a_run_it_started_reports_its_state_changes() {
-    let fixture = Fixture::start().await;
-    let staff = fixture.idle_staff().await;
-    let run = fixture
-        .tool_json(
-            staff.id,
-            "run_start",
-            json!({ "workspace_id": fixture.workspace_id, "goal": "Tidy up" }),
-        )
-        .await;
-    let run_id = run["id"].as_i64().unwrap();
-    fixture.runs.cancel(run_id, None).unwrap();
-    assert_eq!(fixture.runs.run(run_id).unwrap().state, RunState::Cancelled);
-    let woken = fixture
-        .until_says(
-            staff.id,
-            &format!("### Run {run_id} is now cancelled (was planning)"),
-        )
-        .await;
-    assert!(woken.last_message.unwrap().contains("[cos · 1 updates]"));
 }
 
 #[tokio::test]
@@ -894,7 +837,6 @@ async fn paused_coordination_holds_news_but_not_your_messages() {
         .add(
             fixture.project_id,
             StaffItemKind::Agent,
-            None,
             None,
             "News 1\nbody",
         )

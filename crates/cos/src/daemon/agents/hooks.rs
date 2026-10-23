@@ -3,8 +3,8 @@
 //!
 //! - `SessionStart` → `idle` (from `starting`, `needs_trust` or `needs_login`)
 //! - `UserPromptSubmit`, `PreToolUse`, `PostToolUse` → `working`
-//! - `PermissionRequest` → an approval and `waiting_approval`, unless Rust
-//!   rules answer it at once (see [`super::approvals`])
+//! - `PermissionRequest` → an approval, classified by the policy (see
+//!   [`super::approvals`]), and `waiting_approval`
 //! - `Stop` → `idle`, with `last_message`
 //!
 //! A permission request can also be answered in the terminal. Claude doesn't
@@ -13,19 +13,14 @@
 //! moved on: `PostToolUse` of the same tool, the next `PreToolUse`, or `Stop`.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use cos_core::{AgentState, Approval, ApprovalRoute, ApprovalState, DecidedBy, NewApproval, StoreError};
+use cos_core::{AgentState, Approval, ApprovalState, DecidedBy, NewApproval, StoreError};
 use cos_harness::Decision;
 use cos_harness::claude::hooks::{Hook, HookEvent};
-use cos_policy::{Decider, Outcome};
 use serde_json::Value;
 
-use super::approvals::Judgement;
 use super::{AgentError, Inner, Live};
 
-/// Sent to Claude when nobody answered an approval in time.
-pub(crate) const EXPIRED_MESSAGE: &str = cos_policy::timeout::UNANSWERED_MESSAGE;
 /// Sent to Claude with a denial that came without a message.
 const DEFAULT_DENIAL: &str = "The user denied this.";
 /// Tools remembered per agent for pairing permission requests.
@@ -36,8 +31,6 @@ pub(super) struct Waiting {
     pub hook: Hook,
     pub agent_id: i64,
     pub tool_use_id: Option<String>,
-    /// How the approvals policy judged it, for the chief's answer and the audit.
-    pub judgement: Judgement,
 }
 
 /// A tool that started and hasn't finished.
@@ -160,7 +153,7 @@ impl Inner {
         let Some(running) = live.terminals.get(&id) else {
             return Ok(());
         };
-        let (role, workspace_id) = (running.role, running.workspace_id);
+        let workspace_id = running.workspace_id;
         let tool_name = hook.tool_name().unwrap_or("?").to_owned();
         let tool_input = hook.tool_input().cloned().unwrap_or(Value::Null);
         let tool_use_id = pair(&running.open_tools, &tool_name, &tool_input);
@@ -181,30 +174,19 @@ impl Inner {
             tool_use_id: tool_use_id.clone(),
             summary: summary.trim_end().to_owned(),
             tier: Some(judgement.verdict.tier.into()),
-            route: Some(judgement.route),
-            reason: Some(judgement.reason.clone()),
+            reason: Some(judgement.verdict.reason.clone()),
         };
 
-        if judgement.route == ApprovalRoute::Auto {
-            let approval = self.agents.add_ruled_approval(new)?;
-            hook.answer(&Decision::Allow);
-            self.audit(&judgement, &approval, Decider::Rules, Outcome::Allowed, "");
-            self.agents.touch(id)?;
-            return Ok(());
-        }
-
         let approval = self.agents.add_approval(new)?;
-        if judgement.route == ApprovalRoute::User {
-            // Nobody may be listening: jev is off, or the daemon has none.
-            let _ = self.asked.send(super::PermissionAsked {
-                approval_id: approval.id,
-                agent_id: id,
-                workspace_id,
-                summary: approval.summary.clone(),
-                request: judgement.request.clone(),
-                verdict: judgement.verdict.clone(),
-            });
-        }
+        // Nobody may be listening: jev is off, or the daemon has none.
+        let _ = self.asked.send(super::PermissionAsked {
+            approval_id: approval.id,
+            agent_id: id,
+            workspace_id,
+            summary: approval.summary.clone(),
+            request: judgement.request,
+            verdict: judgement.verdict,
+        });
         live.hook_approvals.insert(hook.id, approval.id);
         live.waiting.insert(
             approval.id,
@@ -212,19 +194,9 @@ impl Inner {
                 hook,
                 agent_id: id,
                 tool_use_id,
-                judgement,
             },
         );
         self.agents.set_state(id, AgentState::WaitingApproval)?;
-        // A person can always answer in their own terminal; the agents runs
-        // start can't wait forever.
-        if !role.asks_you() {
-            tokio::spawn(expire(
-                Arc::downgrade(self),
-                approval.id,
-                self.config.approval_timeout,
-            ));
-        }
         Ok(())
     }
 
@@ -258,42 +230,8 @@ impl Inner {
             .agents
             .decide_approval(approval_id, state, Some(DecidedBy::User), message.as_deref())?
             .ok_or_else(|| AgentError::Conflict(format!("approval {approval_id} is no longer pending")))?;
-        let outcome = if allow { Outcome::Allowed } else { Outcome::Denied };
-        self.audit(
-            &waiting.judgement,
-            &approval,
-            Decider::User,
-            outcome,
-            message.as_deref().unwrap_or_default(),
-        );
         self.refresh_state(&live, agent_id, AgentState::Working)?;
         Ok(approval)
-    }
-
-    /// Nobody answered in time: deny, so the agent carries on without it.
-    fn expire_approval(&self, approval_id: i64) -> Result<(), StoreError> {
-        let mut live = self.live();
-        let Some(waiting) = live.waiting.remove(&approval_id) else {
-            return Ok(());
-        };
-        live.hook_approvals.remove(&waiting.hook.id);
-        let agent_id = waiting.agent_id;
-        waiting.hook.answer(&Decision::Deny {
-            message: EXPIRED_MESSAGE.into(),
-        });
-        let expired =
-            self.agents
-                .decide_approval(approval_id, ApprovalState::Expired, None, Some(EXPIRED_MESSAGE))?;
-        if let Some(approval) = expired {
-            self.audit(
-                &waiting.judgement,
-                &approval,
-                Decider::Timeout,
-                Outcome::Denied,
-                "",
-            );
-        }
-        self.refresh_state(&live, agent_id, AgentState::Working)
     }
 
     /// Marks every pending approval of an agent as settled.
@@ -369,15 +307,6 @@ pub(super) fn state_name(state: ApprovalState) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default()
-}
-
-async fn expire(inner: std::sync::Weak<Inner>, approval_id: i64, after: Duration) {
-    tokio::time::sleep(after).await;
-    if let Some(inner) = inner.upgrade()
-        && let Err(error) = inner.expire_approval(approval_id)
-    {
-        tracing::error!(%error, approval = approval_id, "could not expire an approval");
-    }
 }
 
 #[cfg(test)]

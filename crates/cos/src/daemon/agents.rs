@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use cos_core::{
     Agent, AgentState, Agents, Approval, ApprovalState, Environment, Launch, NewAgent, ProjectError,
-    Projects, Role, Runs, StoreError, Variables,
+    Projects, Role, StoreError, Variables,
 };
 use cos_harness::claude::hooks::{HookEvent, HookServer};
 use cos_harness::{
@@ -52,9 +52,6 @@ const MAX_TITLE_CHARS: usize = 200;
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the daemon gives its agents to exit when it stops itself.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
-/// How long an unanswered approval waits for agents not started by a person.
-const APPROVAL_TIMEOUT: Duration =
-    Duration::from_secs(cos_policy::timeout::UNANSWERED_AFTER.as_secs() as u64);
 /// Between pressing Esc to end a turn and typing `/exit`.
 const INTERRUPT_PAUSE: Duration = Duration::from_millis(300);
 /// How often a stopping agent is checked for having exited.
@@ -100,11 +97,9 @@ pub(crate) struct AgentConfig {
     /// Extra environment for every agent's process, over the project's and
     /// global variables (tests point the fake's files here).
     pub env: Vec<(String, String)>,
-    /// How long approvals of non-`user` agents wait before they are denied.
-    pub approval_timeout: Duration,
     pub stop_timeout: Duration,
     pub shutdown_timeout: Duration,
-    /// The `cos` binary a chief runs as its MCP server (`cos mcp`).
+    /// The `cos` binary a Chief of Staff runs as its MCP server (`cos mcp`).
     pub cos_exe: PathBuf,
     /// The cos home that server talks to.
     pub cos_home: PathBuf,
@@ -134,7 +129,6 @@ impl AgentConfig {
             hook_command: format!("{} hook", crate::try_pty::shell_quote(&exe)),
             hook_socket: home.hook_socket(),
             env: Vec::new(),
-            approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: STOP_TIMEOUT,
             shutdown_timeout: SHUTDOWN_TIMEOUT,
             cos_exe: exe,
@@ -163,7 +157,6 @@ impl AgentConfig {
                     dir.join("env").display().to_string(),
                 ),
             ],
-            approval_timeout: APPROVAL_TIMEOUT,
             stop_timeout: Duration::from_secs(2),
             shutdown_timeout: Duration::from_secs(2),
             cos_exe: tests::cos_binary(),
@@ -181,9 +174,6 @@ pub(crate) enum AgentError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
-    /// Not allowed for who asked, such as a chief answer the limits refuse.
-    #[error("{0}")]
-    Forbidden(String),
     /// Claude couldn't be started or driven.
     #[error("{0}")]
     Failed(String),
@@ -219,8 +209,7 @@ pub(crate) struct StartAgent {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
-    /// Load the user's own settings. Defaults to true for agents a person
-    /// starts, false for agents runs start.
+    /// Load the user's own settings. Defaults to true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_settings: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -262,8 +251,6 @@ struct Inner {
     projects: Arc<Projects>,
     /// The variables set for agents, global and per project.
     env: Environment,
-    /// Runs and tasks, for the approvals policy: limits, scopes, the audit.
-    runs: Arc<Runs>,
     config: AgentConfig,
     live: Mutex<Live>,
     signals: broadcast::Sender<AgentSignal>,
@@ -295,9 +282,8 @@ struct Live {
 
 struct Running {
     terminal: Arc<ClaudeTerminal>,
-    role: Role,
-    /// The daemon answers its trust dialog: an agent a run or a Chief of
-    /// Staff started, in a worktree cos made for a registered project.
+    /// The daemon answers its trust dialog: a Chief of Staff, or an agent
+    /// one started, in a worktree cos made for a registered project.
     auto_trust: bool,
     workspace_id: i64,
     /// A hook has arrived, so Claude is past any trust dialog.
@@ -319,7 +305,6 @@ impl AgentManager {
     pub(crate) fn start(
         agents: Agents,
         projects: Arc<Projects>,
-        runs: Arc<Runs>,
         env: Environment,
         config: AgentConfig,
     ) -> anyhow::Result<Self> {
@@ -335,7 +320,6 @@ impl AgentManager {
             agents,
             projects,
             env,
-            runs,
             config,
             live: Mutex::default(),
             signals: broadcast::channel(SIGNAL_BUFFER).0,
@@ -364,16 +348,6 @@ impl AgentManager {
         self.inner.agent(id)
     }
 
-    /// The agents that worked on a task (workers and reviewers), oldest first.
-    pub(crate) fn of_task(&self, task_id: i64) -> Result<Vec<Agent>, AgentError> {
-        Ok(self.inner.agents.of_task(task_id)?)
-    }
-
-    /// Every agent a run started, oldest first.
-    pub(crate) fn of_run(&self, run_id: i64) -> Result<Vec<Agent>, AgentError> {
-        Ok(self.inner.agents.of_run(run_id)?)
-    }
-
     /// Every [`AgentSignal`] from now on.
     pub(crate) fn signals(&self) -> broadcast::Receiver<AgentSignal> {
         self.inner.signals.subscribe()
@@ -390,20 +364,18 @@ impl AgentManager {
         &self,
         workspace_id: i64,
         role: Role,
-        run_id: Option<i64>,
         request: &StartAgent,
     ) -> Result<Agent, AgentError> {
-        self.start_agent_with(workspace_id, role, run_id, request, &Launch::default())
+        self.start_agent_with(workspace_id, role, request, &Launch::default())
     }
 
-    /// [`Self::start_agent`] for a run's agent: `launch` can give it a task,
-    /// another folder (a task worktree), `--append-system-prompt` and
-    /// `--mcp-config`. They're recorded, so a resume uses them again.
+    /// [`Self::start_agent`] with more: `launch` can give it another folder,
+    /// `--append-system-prompt`, `--mcp-config` and who started it. They're
+    /// recorded, so a resume uses them again.
     pub(crate) fn start_agent_with(
         &self,
         workspace_id: i64,
         role: Role,
-        run_id: Option<i64>,
         request: &StartAgent,
         launch: &Launch,
     ) -> Result<Agent, AgentError> {
@@ -421,13 +393,12 @@ impl AgentManager {
 
         let agent = inner.agents.create(NewAgent {
             workspace_id,
-            run_id,
             role,
             title,
             session_id,
             model: clean(request.model.as_deref(), MAX_TITLE_CHARS),
             permission_mode: mode.to_owned(),
-            user_settings: request.user_settings.unwrap_or(role == Role::User),
+            user_settings: request.user_settings.unwrap_or(true),
             rows,
             cols,
         })?;
@@ -484,17 +455,6 @@ impl AgentManager {
     pub(crate) async fn input(&self, id: i64, text: &str) -> Result<(), AgentError> {
         let terminal = self.inner.running_terminal(id)?.0;
         Ok(terminal.submit(text).await?)
-    }
-
-    /// Sends a message as one prompt: typed if it's one line, pasted if it
-    /// has several, then Return.
-    pub(crate) async fn send_message(&self, id: i64, text: &str) -> Result<(), AgentError> {
-        let terminal = self.inner.running_terminal(id)?.0;
-        if text.contains('\n') {
-            Ok(terminal.submit_pasted(text).await?)
-        } else {
-            Ok(terminal.submit(text).await?)
-        }
     }
 
     /// Sends a message as one bracketed paste, then Return, whatever its length.
@@ -635,13 +595,6 @@ impl AgentManager {
             .agents
             .approval(id)?
             .ok_or_else(|| AgentError::NotFound(format!("there is no approval {id}")))
-    }
-
-    /// Answers a pending approval for the run's chief (`approval_decide`),
-    /// within the run's limits. A refused allow goes to the user and comes
-    /// back as [`AgentError::Forbidden`].
-    pub(crate) fn chief_decide(&self, id: i64, allow: bool, reason: &str) -> Result<Approval, AgentError> {
-        self.inner.chief_answer(id, allow, reason)
     }
 
     /// Answers a pending approval for the user.
@@ -795,20 +748,13 @@ impl Inner {
         claude.env = extra.into_iter().chain(self.config.env.clone()).collect();
         // The chief's MCP server names the agent, so it's added here, where
         // the id is known, on every launch and resume.
-        match agent.role {
-            Role::Chief => {
-                super::chief::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
-            }
-            Role::Staff => {
-                super::staff::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
-            }
-            Role::User | Role::Worker | Role::Reviewer => {}
+        if agent.role == Role::Staff {
+            super::staff::configure(&mut claude, &self.config.cos_exe, &self.config.cos_home, agent.id);
         }
         let mut options = TerminalOptions::new(claude);
         options.prompt = prompt;
         // An agent you start is your own session, so by default your
-        // settings apply: allow rules, MCP servers, theme. Agents runs start
-        // get only the repo's settings, so nothing personal approves for them.
+        // settings apply: allow rules, MCP servers, theme.
         options.user_settings = agent.user_settings;
         options.rows = agent.rows;
         options.cols = agent.cols;
@@ -830,7 +776,6 @@ impl Inner {
             agent.id,
             Running {
                 terminal: terminal.clone(),
-                role: agent.role,
                 auto_trust: agent.role != Role::User || agent.spawned_by.is_some(),
                 workspace_id: agent.workspace_id,
                 heard: false,
@@ -869,7 +814,7 @@ impl Inner {
 
     /// Output arrived. Before the first hook, check for the login screen
     /// (the agent's Claude config dir isn't logged in) and the trust dialog.
-    /// An agent a run or a Chief of Staff started works in a registered
+    /// A Chief of Staff, or an agent one started, works in a registered
     /// project, which counts as trusted, so the daemon answers the dialog for
     /// it (the one exception to "cos never answers the trust dialog by
     /// itself").
@@ -897,7 +842,7 @@ impl Inner {
         if running.auto_trust {
             let terminal = running.terminal.clone();
             let agents = self.agents.clone();
-            tracing::info!(agent = id, "answering the trust dialog for a run agent");
+            tracing::info!(agent = id, "answering the trust dialog for an agent cos started");
             tokio::spawn(async move {
                 if let Err(error) = terminal.trust_folder().await {
                     // Leave it to the user rather than stuck where nobody looks.

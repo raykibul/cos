@@ -122,10 +122,9 @@ async fn wake_answers_decode_into_the_enum() {
     });
     let (endpoint, _fake) = serve(StatusCode::OK, reply, Duration::ZERO).await;
     let input = WakeInput::new(
-        ChiefKind::RunChief,
-        "task",
-        "Task 2 \"Add subtract\" merged.",
-        Some("calc"),
+        ChiefKind::StaffChief,
+        "agent",
+        "Agent 7 \"Add subtract\" finished a turn",
     );
 
     let judged = client(&endpoint).wake(&input).await.unwrap();

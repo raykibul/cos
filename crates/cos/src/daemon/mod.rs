@@ -6,16 +6,11 @@
 pub(crate) mod agents;
 pub(crate) mod agents_api;
 pub(crate) mod api;
-pub(crate) mod approvals_api;
-pub(crate) mod chief;
-pub(crate) mod chief_api;
 pub(crate) mod env_api;
 pub(crate) mod judge;
 pub(crate) mod judge_api;
 pub(crate) mod peers;
-pub(crate) mod pipeline;
 pub(crate) mod remote_api;
-pub(crate) mod runs_api;
 pub(crate) mod staff;
 pub(crate) mod staff_api;
 pub(crate) mod tailnet;
@@ -32,7 +27,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use cos_core::events::kind;
-use cos_core::{Agents, Devices, Environment, EventLog, Projects, Runs, Store};
+use cos_core::{Agents, Devices, Environment, EventLog, Projects, Store};
 use jiff::Timestamp;
 use serde_json::json;
 use tokio::net::UnixListener;
@@ -77,28 +72,17 @@ pub(crate) async fn run_with(
     let log = EventLog::new(store.clone());
     let projects = Arc::new(Projects::new(store.clone(), log.clone(), home.worktrees()));
     let devices = Arc::new(Devices::new(store.clone(), log.clone()));
-    let runs = Arc::new(Runs::new(store.clone(), log.clone()));
     let agents = AgentManager::start(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
-        runs.clone(),
         Environment::new(store.clone(), log.clone()),
         AgentConfig::for_home(home)?,
     )?;
     let tailnet = tailnet::Tailnet::load(store.clone(), log.clone());
-    let chief = chief::Chief::start(
-        store.clone(),
-        log.clone(),
-        runs.clone(),
-        agents.clone(),
-        home.root().to_path_buf(),
-        chief::ChiefConfig::from_env(),
-    )?;
     let judge = judge::Judge::start(
         store.clone(),
         log.clone(),
         projects.clone(),
-        runs.clone(),
         agents.clone(),
         judge::JudgeConfig::for_home(home),
     )?;
@@ -106,17 +90,8 @@ pub(crate) async fn run_with(
         store,
         log.clone(),
         projects.clone(),
-        runs.clone(),
         agents.clone(),
-        chief.clone(),
         staff::StaffConfig::from_env(),
-    )?;
-    let pipeline = pipeline::Pipeline::start(
-        runs.clone(),
-        agents.clone(),
-        projects.clone(),
-        log.clone(),
-        pipeline::PipelineConfig::for_home(home),
     )?;
 
     let socket = home.socket();
@@ -135,9 +110,7 @@ pub(crate) async fn run_with(
         devices,
         tailnet,
         peers: peers::Peers::new(tailscale.clone()),
-        runs,
         agents: agents.clone(),
-        chief,
         staff,
         judge,
         started_at: Timestamp::now(),
@@ -159,8 +132,6 @@ pub(crate) async fn run_with(
     let reason = stop.await;
     tracing::info!(%reason, "cos daemon stopping");
     let _ = stopping_tx.send(true);
-    // Before the agents go, so their exits aren't taken for crashes.
-    pipeline.shutdown();
     // Bounded: agents that don't exit in time are killed. They end up
     // `interrupted`, ready to resume.
     agents.shutdown().await;

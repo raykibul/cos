@@ -1,5 +1,5 @@
-//! Decision point 2: when to wake a chief. For an item added to a run
-//! chief's or a Chief of Staff's inbox, jev answers `wake` (now, batch or
+//! Decision point 2: when to wake a chief. For an item added to a Chief of
+//! Staff's inbox, jev answers `wake` (now, batch or
 //! none) and `is_question_for_chief` in one call.
 
 use serde::{Deserialize, Serialize};
@@ -20,14 +20,11 @@ choice_options! {
 
 /// Most characters of an item's text sent.
 const MAX_TEXT: usize = 2_000;
-const MAX_GOAL: usize = 300;
 
 /// Which chief an item is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChiefKind {
-    /// The chief of one run.
-    RunChief,
     /// A project's Chief of Staff.
     StaffChief,
 }
@@ -41,22 +38,18 @@ pub struct WakeInput {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Update {
-    /// The inbox item's kind: `task`, `approval`, `reporting`, `agent`, `run`.
+    /// The inbox item's kind, such as `agent`.
     pub kind: String,
     pub text: String,
-    /// The run's goal, for a run chief's item.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_goal: Option<String>,
 }
 
 impl WakeInput {
-    pub fn new(source: ChiefKind, kind: &str, text: &str, run_goal: Option<&str>) -> Self {
+    pub fn new(source: ChiefKind, kind: &str, text: &str) -> Self {
         Self {
             source,
             update: Update {
                 kind: kind.to_owned(),
                 text: cut(text, MAX_TEXT),
-                run_goal: run_goal.map(|goal| cut(goal, MAX_GOAL)),
             },
         }
     }
@@ -155,9 +148,9 @@ mod tests {
 
     #[test]
     fn the_text_is_cut() {
-        let input = WakeInput::new(ChiefKind::RunChief, "task", &"y".repeat(10_000), Some("goal"));
+        let input = WakeInput::new(ChiefKind::StaffChief, "agent", &"y".repeat(10_000));
 
         assert!(input.update.text.chars().count() <= MAX_TEXT + 1);
-        assert_eq!(input.update.run_goal.as_deref(), Some("goal"));
+        assert_eq!(input.update.kind, "agent");
     }
 }
