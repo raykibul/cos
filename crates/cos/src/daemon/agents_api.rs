@@ -147,7 +147,7 @@ async fn start_agent(
     let Json(body) = body?;
     // The Chief of Staff's worktree is its own.
     state.projects.listed_workspace(workspace_id)?;
-    let agent = state.agents.start_agent(workspace_id, Role::User, None, &body)?;
+    let agent = state.agents.start_agent(workspace_id, Role::User, &body)?;
     Ok((StatusCode::CREATED, Json(agent)))
 }
 
@@ -353,7 +353,6 @@ impl From<AgentError> for ApiError {
             AgentError::Invalid(_) => StatusCode::BAD_REQUEST,
             AgentError::NotFound(_) => StatusCode::NOT_FOUND,
             AgentError::Conflict(_) => StatusCode::CONFLICT,
-            AgentError::Forbidden(_) => StatusCode::FORBIDDEN,
             AgentError::Failed(_) | AgentError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {

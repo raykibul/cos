@@ -13,8 +13,7 @@ use axum::routing::post;
 use cos_core::events::kind;
 use cos_core::judge::Decision;
 use cos_core::{
-    AgentState, Agents, ApprovalPreset, Base, EventLog, Inbox, InboxKind, Judgments, NewRun, Projects, Role,
-    Runs, StaffBooks, StaffItemKind, Store,
+    AgentState, Agents, Base, EventLog, Judgments, Projects, Role, StaffBooks, StaffItemKind, Store,
 };
 use cos_judge::KEY_ENV;
 use cos_judge::key::KeySource;
@@ -73,7 +72,6 @@ struct Fixture {
     store: Arc<Store>,
     log: EventLog,
     projects: Arc<Projects>,
-    runs: Arc<Runs>,
     manager: AgentManager,
     project_id: i64,
     workspace_id: i64,
@@ -92,11 +90,9 @@ impl Fixture {
             .create_workspace(project.id, Base::Head, None)
             .await
             .unwrap();
-        let runs = Arc::new(Runs::new(store.clone(), log.clone()));
         let manager = AgentManager::start(
             Agents::new(store.clone(), log.clone()),
             projects.clone(),
-            runs.clone(),
             cos_core::Environment::new(store.clone(), log.clone()),
             AgentConfig::for_tests(dir.path()),
         )
@@ -107,7 +103,6 @@ impl Fixture {
             store,
             log,
             projects,
-            runs,
             manager,
             project_id: project.id,
             workspace_id: workspace.id,
@@ -125,7 +120,6 @@ impl Fixture {
             self.store.clone(),
             self.log.clone(),
             self.projects.clone(),
-            self.runs.clone(),
             self.manager.clone(),
             config,
         )
@@ -156,7 +150,7 @@ impl Fixture {
         };
         let agent = self
             .manager
-            .start_agent(self.workspace_id, Role::User, None, &request)
+            .start_agent(self.workspace_id, Role::User, &request)
             .unwrap();
         until("a pending approval", || async {
             let agent = self.manager.get(agent.id).ok()?;
@@ -248,39 +242,20 @@ async fn inbox_items_are_judged_except_your_own_words() {
     let fixture = Fixture::start().await;
     fixture.write_env_file(&format!("{KEY_ENV}=sk-file\n"), 0o600);
     let judge = fixture.judge(fixture.config());
-    let run = fixture
-        .runs
-        .create(NewRun {
-            workspace_id: fixture.workspace_id,
-            goal: "add limits".into(),
-            preset: ApprovalPreset::Normal,
-            approval_cap: None,
-        })
-        .unwrap();
-    let inbox = Inbox::new(fixture.store.clone());
     let staff = StaffBooks::new(fixture.store.clone(), fixture.log.clone());
 
     // Off: nothing judged, and the items are passed by.
-    inbox.add(run.id, InboxKind::Task, "Task 1 merged.").unwrap();
+    staff
+        .add(fixture.project_id, StaffItemKind::Agent, Some(2), "Agent 2 exited.")
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(fixture.decisions().is_empty());
 
     judge.set_enabled(fixture.project_id, true).unwrap();
-    inbox
-        .add(
-            run.id,
-            InboxKind::Task,
-            "Task 2 \"limits\" is blocked: tests fail.",
-        )
-        .unwrap();
-    inbox
-        .add(run.id, InboxKind::Message, "The user says: hurry")
-        .unwrap();
     staff
         .add(
             fixture.project_id,
             StaffItemKind::Message,
-            None,
             None,
             "make a workspace",
         )
@@ -290,35 +265,27 @@ async fn inbox_items_are_judged_except_your_own_words() {
             fixture.project_id,
             StaffItemKind::Agent,
             Some(3),
-            None,
             "Agent 3 finished its turn.",
         )
         .unwrap();
 
-    let decisions = until("two wake decisions", || async {
+    let decisions = until("a wake decision", || async {
         let decisions = fixture.decisions();
-        (decisions.len() == 2).then_some(decisions)
+        (decisions.len() == 1).then_some(decisions)
     })
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(fixture.decisions().len(), 2, "your own messages aren't judged");
-    let mut subjects: Vec<&str> = decisions.iter().map(|d| d.subject.as_str()).collect();
-    subjects.sort_unstable();
-    assert!(subjects[0].starts_with("inbox:") && subjects[1].starts_with("staff_inbox:"));
-    for decision in &decisions {
-        assert_eq!(decision.would, "now");
-        assert_eq!(decision.point, cos_core::DecisionPoint::Wake);
-    }
-    let run_chief = decisions
-        .iter()
-        .find(|d| d.subject.starts_with("inbox:"))
-        .unwrap();
-    assert_eq!(run_chief.input["source"], "run_chief");
-    assert_eq!(run_chief.input["update"]["run_goal"], "add limits");
+    assert_eq!(fixture.decisions().len(), 1, "your own messages aren't judged");
+    let decision = &decisions[0];
+    assert!(decision.subject.starts_with("staff_inbox:"), "{decision:?}");
+    assert_eq!(decision.would, "now");
+    assert_eq!(decision.point, cos_core::DecisionPoint::Wake);
+    assert_eq!(decision.input["source"], "staff_chief");
+    assert!(decision.input["update"].get("run_goal").is_none());
     let wake = &judge.overview().unwrap().points[1];
-    assert_eq!(wake.would["now"], 2);
+    assert_eq!(wake.would["now"], 1);
     // The inbox is untouched: the items still wait for the chief.
-    assert_eq!(inbox.waiting(run.id).unwrap().len(), 3);
+    assert_eq!(staff.waiting(fixture.project_id).unwrap().len(), 3);
 }
 
 #[tokio::test]

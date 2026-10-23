@@ -1,8 +1,7 @@
 //! `cos`: chief of staff for coding agents.
 //!
 //! `cos daemon` runs the long-lived process; `cos status`, `cos events`,
-//! `cos project`, `cos workspace` and the run commands (`cos run`, `cos runs`,
-//! `cos board`, `cos approve-plan`, `cos cancel`, `cos limits`) talk to it over `~/.cos/cos.sock`, or to
+//! `cos project` and `cos workspace` talk to it over `~/.cos/cos.sock`, or to
 //! another machine's daemon over the tailnet with `--host`. `cos remote` and
 //! `cos devices` manage that remote access. `cos agent`, `cos agents`,
 //! `cos approvals`, `cos allow` and `cos deny` drive the agents the daemon
@@ -16,7 +15,6 @@
 
 mod agents_cmd;
 mod attach;
-mod chief_cmd;
 mod client;
 mod commands;
 mod daemon;
@@ -25,10 +23,8 @@ mod devices_cmd;
 mod env_cmd;
 mod home;
 mod judge_cmd;
-mod limits_cmd;
 mod mcp;
 mod projects_cmd;
-mod runs_cmd;
 mod service;
 mod sessions_cmd;
 mod staff_cmd;
@@ -73,18 +69,6 @@ enum Command {
     /// Create and manage workspaces: worktrees of a project where agents run.
     #[command(subcommand)]
     Workspace(projects_cmd::WorkspaceCommand),
-    /// Start a run: one goal in a workspace, planned by the chief.
-    Run(runs_cmd::RunArgs),
-    /// List runs, newest first.
-    Runs,
-    /// Show a run's board: its tasks and where each one is.
-    Board(runs_cmd::BoardArgs),
-    /// Approve the chief's plan so workers can start.
-    ApprovePlan(runs_cmd::RunRef),
-    /// Cancel a run and its unfinished tasks.
-    Cancel(runs_cmd::CancelArgs),
-    /// Show or change how much the chief may approve for you in a run.
-    Limits(limits_cmd::LimitsArgs),
     /// Run one prompt through Claude Code and answer its permission requests here (no daemon).
     Try(try_cmd::TryArgs),
     /// List the Claude sessions running on this machine, including ones cos didn't start.
@@ -113,14 +97,6 @@ enum Command {
     Allow { id: i64 },
     /// Deny a pending permission request. The message is shown to Claude.
     Deny { id: i64, message: Option<String> },
-    /// List the questions run chiefs are waiting for you to answer.
-    Questions(chief_cmd::QuestionsArgs),
-    /// Answer a chief's question.
-    Answer(chief_cmd::AnswerArgs),
-    /// Send a message to a run's chief: `cos say [run] "text"`.
-    Say(chief_cmd::SayArgs),
-    /// Print a run's report.
-    Report(chief_cmd::ReportArgs),
     /// A project's Chief of Staff: show it, `say` something to it, or `attach` to its terminal.
     Staff(staff_cmd::StaffArgs),
     /// The environment variables agents get, globally or per project: list, `set` or `unset` them.
@@ -136,7 +112,7 @@ enum Command {
     /// the daemon's service runs this binary, it is restarted on the new version; with
     /// agents at work, cos asks first.
     Upgrade(upgrade::UpgradeArgs),
-    /// Run by a chief's or Chief of Staff's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
+    /// Run by a Chief of Staff's Claude session: the `cos` MCP server, forwarding its tools to the daemon.
     #[command(hide = true)]
     Mcp(mcp::McpArgs),
 }
@@ -198,12 +174,6 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Events(args) => commands::events(&home, args).await,
         Command::Project(command) => projects_cmd::project(&home, command).await,
         Command::Workspace(command) => projects_cmd::workspace(&home, command).await,
-        Command::Run(args) => runs_cmd::start(&home, args).await,
-        Command::Runs => runs_cmd::list(&home).await,
-        Command::Board(args) => runs_cmd::board(&home, args).await,
-        Command::ApprovePlan(args) => runs_cmd::approve_plan(&home, args).await,
-        Command::Cancel(args) => runs_cmd::cancel(&home, args).await,
-        Command::Limits(args) => limits_cmd::limits(&home, args).await,
         Command::Try(args) => try_cmd::run(args).await,
         Command::Sessions(args) => sessions_cmd::run(&home, args).await,
         Command::Hook => unreachable!("handled above"),
@@ -214,10 +184,6 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Approvals(args) => agents_cmd::approvals(&home, args).await,
         Command::Allow { id } => agents_cmd::answer(&home, id, true, None).await,
         Command::Deny { id, message } => agents_cmd::answer(&home, id, false, message).await,
-        Command::Questions(args) => chief_cmd::questions(&home, args).await,
-        Command::Answer(args) => chief_cmd::answer(&home, args).await,
-        Command::Say(args) => chief_cmd::say(&home, args).await,
-        Command::Report(args) => chief_cmd::report(&home, args).await,
         Command::Staff(args) => staff_cmd::staff(&home, args).await,
         Command::Env(args) => env_cmd::env(&home, args).await,
         Command::Judge(args) => judge_cmd::judge(&home, args).await,

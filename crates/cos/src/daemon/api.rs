@@ -11,9 +11,6 @@
 //!   contract in `docs/agents-api.md`.
 //! - Devices and remote access: [`super::remote_api`], "Remote access" in
 //!   `docs/daemon.md`. The same routes are served on the tailnet listener.
-//! - Runs, plans and tasks: see [`super::runs_api`].
-//! - Chief answers to approvals and per-run limits: [`super::approvals_api`],
-//!   "Approvals policy" in `docs/daemon.md`.
 //! - The Chief of Staff: [`super::staff_api`], contract in
 //!   `docs/chief-of-staff.md`.
 //! - Environment variables for agents: [`super::env_api`], "Environment" in
@@ -34,7 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch};
 use axum::{Json, Router};
 use cos_core::{
-    Base, EventLog, LoggedEvent, Project, ProjectError, Projects, RunError, Runs, StoreError, Workspace,
+    Base, EventLog, LoggedEvent, Project, ProjectError, Projects, StaffError, StoreError, Workspace,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -96,9 +93,7 @@ pub(crate) struct AppState {
     pub devices: Arc<cos_core::Devices>,
     pub tailnet: super::tailnet::Tailnet,
     pub peers: super::peers::Peers,
-    pub runs: Arc<Runs>,
     pub agents: super::agents::AgentManager,
-    pub chief: super::chief::Chief,
     pub staff: super::staff::Staff,
     /// jev, in shadow mode.
     pub judge: super::judge::Judge,
@@ -124,10 +119,7 @@ pub(crate) fn router(state: AppState) -> Router {
             patch(rename_workspace).delete(remove_workspace),
         )
         .merge(super::remote_api::routes())
-        .merge(super::runs_api::routes())
         .merge(super::agents_api::routes())
-        .merge(super::approvals_api::routes())
-        .merge(super::chief_api::routes())
         .merge(super::staff_api::routes())
         .merge(super::env_api::routes())
         .merge(super::judge_api::routes())
@@ -311,13 +303,11 @@ impl From<ProjectError> for ApiError {
     }
 }
 
-impl From<RunError> for ApiError {
-    fn from(error: RunError) -> Self {
+impl From<StaffError> for ApiError {
+    fn from(error: StaffError) -> Self {
         let status = match &error {
-            RunError::Invalid(_) => StatusCode::BAD_REQUEST,
-            RunError::NotFound(_) => StatusCode::NOT_FOUND,
-            RunError::Conflict(_) => StatusCode::CONFLICT,
-            RunError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            StaffError::Invalid(_) => StatusCode::BAD_REQUEST,
+            StaffError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,

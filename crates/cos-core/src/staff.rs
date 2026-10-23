@@ -1,8 +1,7 @@
 //! The Chief of Staff's books: one row per project (its agent, model and
 //! brief) and its inbox. The daemon decides when to wake the chief and types
-//! the wakeup; this module keeps what waits and what was delivered. Batching
-//! and the caps are the run chief's ([`crate::chief`]). The contract is
-//! `docs/chief-of-staff.md`.
+//! the wakeup; this module keeps what waits and what was delivered, and sets
+//! the caps on batching. The contract is `docs/chief-of-staff.md`.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,12 +12,28 @@ use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::chief::{MAX_ITEM_BYTES, cut};
 use crate::events::kind;
-use crate::{EventLog, RunError, Store, StoreError};
+use crate::{EventLog, Store, StoreError};
 
 /// The most bytes a brief holds.
 pub const MAX_BRIEF_BYTES: usize = 4 * 1024;
+/// The most inbox items one wakeup holds.
+pub const MAX_WAKEUP_ITEMS: usize = 20;
+/// The most bytes of inbox text one wakeup holds.
+pub const MAX_WAKEUP_BYTES: usize = 24 * 1024;
+/// The most wakeups a chief gets in an hour; past that, items wait.
+pub const MAX_WAKEUPS_PER_HOUR: usize = 30;
+/// One item's text is cut to this many bytes, so any item fits in a wakeup.
+pub const MAX_ITEM_BYTES: usize = 4 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StaffError {
+    /// Bad input. The message is written for the user.
+    #[error("{0}")]
+    Invalid(String),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
 
 /// A project's Chief of Staff as stored. A project without a row has the
 /// defaults: no agent yet, no model, an empty brief.
@@ -45,11 +60,9 @@ pub struct StaffRecord {
 pub enum StaffItemKind {
     /// Something you typed. Delivered on its own, never batched.
     Message,
-    /// News from an agent it started: a turn ended, it exited, or it waits
+    /// News from an agent it started: it finished, it exited, or it waits
     /// for you.
     Agent,
-    /// A run it started changed state.
-    Run,
 }
 
 impl StaffItemKind {
@@ -57,7 +70,6 @@ impl StaffItemKind {
         match self {
             Self::Message => "message",
             Self::Agent => "agent",
-            Self::Run => "run",
         }
     }
 }
@@ -66,7 +78,7 @@ impl FromStr for StaffItemKind {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        [Self::Message, Self::Agent, Self::Run]
+        [Self::Message, Self::Agent]
             .into_iter()
             .find(|kind| kind.as_str() == text)
             .ok_or_else(|| format!("unknown staff inbox kind `{text}`"))
@@ -80,8 +92,6 @@ pub struct StaffItem {
     pub kind: StaffItemKind,
     /// The agent it is about, if any.
     pub agent_id: Option<i64>,
-    /// The run it is about, if any.
-    pub run_id: Option<i64>,
     /// What the chief reads.
     pub text: String,
     pub created_ms: i64,
@@ -150,10 +160,10 @@ impl StaffBooks {
     }
 
     /// Saves the brief, trimmed. At most [`MAX_BRIEF_BYTES`].
-    pub fn set_brief(&self, project_id: i64, brief: &str) -> Result<String, RunError> {
+    pub fn set_brief(&self, project_id: i64, brief: &str) -> Result<String, StaffError> {
         let brief = brief.trim();
         if brief.len() > MAX_BRIEF_BYTES {
-            return Err(RunError::Invalid(format!(
+            return Err(StaffError::Invalid(format!(
                 "the brief is {} bytes; keep it under {MAX_BRIEF_BYTES} and move detail elsewhere",
                 brief.len()
             )));
@@ -197,7 +207,6 @@ impl StaffBooks {
         project_id: i64,
         kind: StaffItemKind,
         agent_id: Option<i64>,
-        run_id: Option<i64>,
         text: &str,
     ) -> Result<StaffItem, StoreError> {
         let text = match kind {
@@ -207,9 +216,9 @@ impl StaffBooks {
         let item = {
             let conn = self.store.lock();
             conn.execute(
-                "INSERT INTO staff_inbox (project_id, kind, agent_id, run_id, text, created_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![project_id, kind.as_str(), agent_id, run_id, text, now_ms()],
+                "INSERT INTO staff_inbox (project_id, kind, agent_id, text, created_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![project_id, kind.as_str(), agent_id, text, now_ms()],
             )?;
             let id = conn.last_insert_rowid();
             conn.prepare_cached(&format!("SELECT {ITEM_COLUMNS} FROM staff_inbox WHERE id = ?1"))?
@@ -231,7 +240,7 @@ impl StaffBooks {
             .collect::<Result<_, _>>()?)
     }
 
-    /// News from agents and runs, newest first, delivered or not: what the
+    /// News from agents, newest first, delivered or not: what the
     /// apps show. Your own messages are left out.
     pub fn recent(&self, project_id: i64, limit: usize) -> Result<Vec<StaffItem>, StoreError> {
         let conn = self.store.lock();
@@ -347,7 +356,7 @@ fn read_record(row: &Row<'_>) -> rusqlite::Result<StaffRecord> {
     })
 }
 
-const ITEM_COLUMNS: &str = "id, project_id, kind, agent_id, run_id, text, created_ms, delivered_ms";
+const ITEM_COLUMNS: &str = "id, project_id, kind, agent_id, text, created_ms, delivered_ms";
 
 fn read_item(row: &Row<'_>) -> rusqlite::Result<StaffItem> {
     Ok(StaffItem {
@@ -357,11 +366,39 @@ fn read_item(row: &Row<'_>) -> rusqlite::Result<StaffItem> {
             rusqlite::Error::FromSqlConversionFailure(2, Type::Text, error.into())
         })?,
         agent_id: row.get(3)?,
-        run_id: row.get(4)?,
-        text: row.get(5)?,
-        created_ms: row.get(6)?,
-        delivered_ms: row.get(7)?,
+        text: row.get(4)?,
+        created_ms: row.get(5)?,
+        delivered_ms: row.get(6)?,
     })
+}
+
+/// The items the next wakeup holds: oldest first, at most
+/// [`MAX_WAKEUP_ITEMS`] and [`MAX_WAKEUP_BYTES`] of text, and always at least
+/// one if any wait.
+pub fn next_batch(waiting: &[StaffItem]) -> &[StaffItem] {
+    let mut total = 0;
+    let mut count = 0;
+    for item in waiting.iter().take(MAX_WAKEUP_ITEMS) {
+        total += item.text.len();
+        if count > 0 && total > MAX_WAKEUP_BYTES {
+            break;
+        }
+        count += 1;
+    }
+    &waiting[..count]
+}
+
+/// `text` cut to at most `max` bytes on a character boundary, with `…` added
+/// if it was cut.
+pub fn cut(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let mut end = max.saturating_sub('…'.len_utf8());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 fn now_ms() -> i64 {
@@ -371,7 +408,6 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chief::next_batch_by;
 
     fn books() -> (StaffBooks, EventLog, i64) {
         let store = Arc::new(Store::open_in_memory().unwrap());
@@ -423,10 +459,10 @@ mod tests {
         let (books, _, project) = books();
         assert!(books.records().unwrap().is_empty(), "no chief yet");
         books
-            .add(project, StaffItemKind::Message, None, None, "hi")
+            .add(project, StaffItemKind::Message, None, "hi")
             .unwrap();
         books
-            .add(project, StaffItemKind::Agent, Some(3), None, "done")
+            .add(project, StaffItemKind::Agent, Some(3), "done")
             .unwrap();
         assert_eq!(books.news_waiting(project).unwrap(), 1);
         assert_eq!(books.waiting_count(project).unwrap(), 2);
@@ -440,7 +476,7 @@ mod tests {
             .set_brief(project, &"x".repeat(MAX_BRIEF_BYTES + 1))
             .unwrap_err();
 
-        assert!(matches!(error, RunError::Invalid(_)), "{error}");
+        assert!(matches!(error, StaffError::Invalid(_)), "{error}");
         assert!(books.set_brief(project, &"x".repeat(MAX_BRIEF_BYTES)).is_ok());
     }
 
@@ -449,19 +485,18 @@ mod tests {
         let (books, log, project) = books();
 
         let message = books
-            .add(project, StaffItemKind::Message, None, None, &"long ".repeat(2000))
+            .add(project, StaffItemKind::Message, None, &"long ".repeat(2000))
             .unwrap();
         let news = books
             .add(
                 project,
                 StaffItemKind::Agent,
                 Some(3),
-                None,
                 &"é".repeat(MAX_ITEM_BYTES),
             )
             .unwrap();
         books
-            .add(project, StaffItemKind::Run, None, Some(2), "run 2 is done")
+            .add(project, StaffItemKind::Agent, Some(4), "agent 4 exited")
             .unwrap();
 
         assert_eq!(
@@ -483,7 +518,7 @@ mod tests {
         let recent = books.recent(project, 10).unwrap();
         assert_eq!(
             recent.iter().map(|item| item.kind).collect::<Vec<_>>(),
-            [StaffItemKind::Run, StaffItemKind::Agent],
+            [StaffItemKind::Agent, StaffItemKind::Agent],
             "newest first, without your messages"
         );
         assert!(recent[1].delivered_ms.is_some());
@@ -499,9 +534,20 @@ mod tests {
     }
 
     #[test]
-    fn batches_follow_the_run_chiefs_caps() {
-        let sizes = [10, 10, 30 * 1024];
-        assert_eq!(next_batch_by(&sizes, |size| *size).len(), 2);
-        assert_eq!(next_batch_by(&sizes[2..], |size| *size).len(), 1);
+    fn batches_keep_to_the_caps() {
+        let item = |id: i64, bytes: usize| StaffItem {
+            id,
+            project_id: 1,
+            kind: StaffItemKind::Agent,
+            agent_id: None,
+            text: "x".repeat(bytes),
+            created_ms: 0,
+            delivered_ms: None,
+        };
+        let waiting = [item(1, 10), item(2, 10), item(3, 30 * 1024)];
+        assert_eq!(next_batch(&waiting).len(), 2);
+        assert_eq!(next_batch(&waiting[2..]).len(), 1, "always at least one");
+        let many: Vec<_> = (0..30).map(|id| item(id, 1)).collect();
+        assert_eq!(next_batch(&many).len(), MAX_WAKEUP_ITEMS);
     }
 }

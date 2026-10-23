@@ -6,9 +6,9 @@
 //! - **Permission sorting:** every permission request the approvals policy
 //!   sends to you ([`AgentManager::permission_requests`]). When you answer
 //!   (`approval.decided`), your answer is stored next to jev's would-have.
-//! - **Waking a chief:** every item added to a run chief's or a Chief of
-//!   Staff's inbox, except your own messages and answers. The inbox tables
-//!   are followed by id, so the chiefs' code doesn't know jev exists.
+//! - **Waking a chief:** every item added to a Chief of Staff's inbox,
+//!   except your own messages. The inbox table is followed by id, so the
+//!   chiefs' code doesn't know jev exists.
 //!
 //! Only projects switched on are judged (off by default: inputs go to
 //! TypeSafe). Without an API key jev is off. The key is looked up in the
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use cos_core::events::kind;
 use cos_core::judge::{DecisionPoint, NewDecision, PointStats, ProjectSwitch};
-use cos_core::{ApprovalState, EventLog, Judgments, LoggedEvent, Projects, Runs, Store, Subscription};
+use cos_core::{ApprovalState, EventLog, Judgments, LoggedEvent, Projects, Store, Subscription};
 use cos_judge::key::{
     EnvFileError, KEY_ENV, KeySource, PROBE_TIMEOUT, Probe, probe_shell, resolve_without_shell,
 };
@@ -40,8 +40,6 @@ use crate::home::CosHome;
 const MAX_CALLS: usize = 4;
 /// Inbox items read per poll.
 const INBOX_PAGE: usize = 100;
-/// Run chief inbox kinds that are your own words, never judged.
-const YOURS: &[&str] = &["message", "answer"];
 
 #[derive(Debug, Clone)]
 pub(crate) struct JudgeConfig {
@@ -135,15 +133,14 @@ struct Inner {
     books: Judgments,
     log: EventLog,
     projects: Arc<Projects>,
-    runs: Arc<Runs>,
     agents: AgentManager,
     config: JudgeConfig,
     key: Mutex<KeyState>,
     /// One lookup at a time.
     resolving: tokio::sync::Mutex<()>,
     calls: Semaphore,
-    /// The last inbox ids seen: the run chiefs', the Chiefs of Staff's.
-    cursors: Mutex<(i64, i64)>,
+    /// The last id seen in the Chiefs of Staff's inbox.
+    cursor: Mutex<i64>,
 }
 
 struct KeyState {
@@ -159,18 +156,16 @@ impl Judge {
         store: Arc<Store>,
         log: EventLog,
         projects: Arc<Projects>,
-        runs: Arc<Runs>,
         agents: AgentManager,
         config: JudgeConfig,
     ) -> anyhow::Result<Self> {
         let books = Judgments::new(store, log.clone());
-        let cursors = books.inbox_cursors()?;
+        let cursor = books.inbox_cursor()?;
         let (_, last_seq) = log.stats()?;
         let inner = Arc::new(Inner {
             books,
             log: log.clone(),
             projects,
-            runs,
             agents: agents.clone(),
             config,
             key: Mutex::new(KeyState {
@@ -183,7 +178,7 @@ impl Judge {
             }),
             resolving: tokio::sync::Mutex::new(()),
             calls: Semaphore::new(MAX_CALLS),
-            cursors: Mutex::new(cursors),
+            cursor: Mutex::new(cursor),
         });
         inner.resolve_static();
         if inner.client().is_none() && inner.config.shell.is_some() {
@@ -346,18 +341,9 @@ impl Inner {
         let Some(client) = self.judging(workspace.project_id) else {
             return;
         };
+        // The agent's title (from its first prompt) says what it's for.
         let agent = self.agents.get(asked.agent_id).ok();
-        let task = agent.as_ref().and_then(|agent| {
-            let task = self.runs.task(agent.task_id?).ok()?;
-            (Some(task.run_id) == agent.run_id).then_some(task)
-        });
-        // Without a task, the agent's title (from its first prompt) says
-        // what it's for.
-        let (title, instructions) = match (&task, &agent) {
-            (Some(task), _) => (Some(task.title.as_str()), Some(task.instructions.as_str())),
-            (None, Some(agent)) => (Some(agent.title.as_str()), None),
-            (None, None) => (None, None),
-        };
+        let title = agent.as_ref().map(|agent| agent.title.as_str());
         let request = &asked.request;
         let role = serde_json::to_value(request.role)
             .ok()
@@ -372,7 +358,7 @@ impl Inner {
             home: request.home.as_deref(),
             agent_role: &role,
             task_title: title,
-            task_instructions: instructions,
+            task_instructions: None,
             policy_tier: &tier,
             policy_reason: &asked.verdict.reason,
         });
@@ -451,40 +437,24 @@ impl Inner {
 
     // ---- Waking a chief ----
 
-    /// Judges what was added to the inboxes since the last look.
+    /// Judges what was added to the inbox since the last look.
     fn check_inboxes(self: &Arc<Self>) {
-        let (run_after, staff_after) = *self.cursors.lock().unwrap_or_else(PoisonError::into_inner);
-        let runs = self.books.run_inbox_after(run_after, INBOX_PAGE);
-        let staff = self.books.staff_inbox_after(staff_after, INBOX_PAGE);
-        let (runs, staff) = match (runs, staff) {
-            (Ok(runs), Ok(staff)) => (runs, staff),
-            (Err(error), _) | (_, Err(error)) => {
-                tracing::error!(%error, "jev could not read the inboxes");
+        let after = *self.cursor.lock().unwrap_or_else(PoisonError::into_inner);
+        let staff = match self.books.staff_inbox_after(after, INBOX_PAGE) {
+            Ok(staff) => staff,
+            Err(error) => {
+                tracing::error!(%error, "jev could not read the inbox");
                 return;
             }
         };
-        {
-            let mut cursors = self.cursors.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some(last) = runs.last() {
-                cursors.0 = last.id;
-            }
-            if let Some(last) = staff.last() {
-                cursors.1 = last.id;
-            }
-        }
-        for item in runs {
-            if YOURS.contains(&item.kind.as_str()) {
-                continue;
-            }
-            let input = WakeInput::new(ChiefKind::RunChief, &item.kind, &item.text, Some(&item.goal));
-            let subject = format!("inbox:{}", item.id);
-            tokio::spawn(self.clone().on_inbox(item.project_id, subject, input));
+        if let Some(last) = staff.last() {
+            *self.cursor.lock().unwrap_or_else(PoisonError::into_inner) = last.id;
         }
         for item in staff {
             if item.kind == "message" {
                 continue;
             }
-            let input = WakeInput::new(ChiefKind::StaffChief, &item.kind, &item.text, None);
+            let input = WakeInput::new(ChiefKind::StaffChief, &item.kind, &item.text);
             let subject = format!("staff_inbox:{}", item.id);
             tokio::spawn(self.clone().on_inbox(item.project_id, subject, input));
         }
@@ -506,11 +476,7 @@ impl Inner {
             point: DecisionPoint::Wake,
             project_id: Some(project_id),
             summary: format!(
-                "{} {}: {}",
-                match input.source {
-                    ChiefKind::RunChief => "run chief",
-                    ChiefKind::StaffChief => "Chief of Staff",
-                },
+                "Chief of Staff {}: {}",
                 input.update.kind,
                 cos_judge::cut(&input.update.text, 120)
             ),
@@ -548,13 +514,11 @@ fn split<T: Serialize>(
 
 /// What you did, from an approval's state and who decided it: `allowed` or
 /// `denied` when you answered through cos, `terminal` when it was answered
-/// in the terminal (allow or deny unknown), `expired`, or the chief's.
+/// in the terminal (allow or deny unknown), or `expired`.
 fn actual(state: Option<&str>, decided_by: Option<&str>) -> Option<&'static str> {
     Some(match (state?, decided_by) {
         ("allowed", Some("user")) => "allowed",
         ("denied", Some("user")) => "denied",
-        ("allowed", Some("chief")) => "chief_allowed",
-        ("denied", Some("chief")) => "chief_denied",
         ("settled", _) => "terminal",
         ("expired", _) => "expired",
         _ => return None,
@@ -609,7 +573,6 @@ impl Judge {
         store: &Arc<Store>,
         log: &EventLog,
         projects: &Arc<Projects>,
-        runs: &Arc<Runs>,
         agents: &AgentManager,
         dir: &std::path::Path,
     ) -> Self {
@@ -618,7 +581,6 @@ impl Judge {
             store.clone(),
             log.clone(),
             projects.clone(),
-            runs.clone(),
             agents.clone(),
             config,
         )
@@ -639,7 +601,6 @@ mod unit {
         assert_eq!(actual(Some("denied"), Some("user")), Some("denied"));
         assert_eq!(actual(Some("settled"), Some("terminal")), Some("terminal"));
         assert_eq!(actual(Some("expired"), None), Some("expired"));
-        assert_eq!(actual(Some("denied"), Some("chief")), Some("chief_denied"));
         assert_eq!(actual(Some("pending"), None), None);
     }
 }

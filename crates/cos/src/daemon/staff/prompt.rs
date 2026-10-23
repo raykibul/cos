@@ -7,10 +7,12 @@ use std::path::Path;
 
 use cos_core::StaffItem;
 use cos_harness::ClaudeOptions;
+use serde_json::json;
 
-use crate::daemon::chief::mcp_config;
 use crate::daemon::transcript::UPDATE_PREFIX;
 
+/// The name of its MCP server, so its tools are `mcp__cos__…`.
+pub(crate) const SERVER: &str = "cos";
 /// The allow rule for every tool of its `cos` server: cos checks each call.
 pub(crate) const ALLOW_TOOLS: &str = "mcp__cos__*";
 
@@ -46,6 +48,21 @@ pub(crate) fn spawned_line(project: &str) -> String {
         "[cos] The Chief of Staff of {project} started you. When you finish, end with a short summary of what \
          you did and anything left open."
     )
+}
+
+/// The MCP config: one server, `cos`, that runs `<cos> mcp --agent <id>`
+/// against this daemon.
+pub(crate) fn mcp_config(cos: &Path, home: &Path, agent_id: i64) -> String {
+    json!({
+        "mcpServers": {
+            SERVER: {
+                "command": cos,
+                "args": ["mcp", "--agent", agent_id.to_string()],
+                "env": { "COS_HOME": home },
+            }
+        }
+    })
+    .to_string()
 }
 
 /// Gives the agent its MCP server and the rule allowing its tools. Called

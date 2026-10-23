@@ -3,11 +3,26 @@
 
 use cos_core::StaffItem;
 use hyper::Method;
+use serde_json::Value;
 
 use super::{Client, read_json};
 use crate::daemon::staff::{StaffInbox, StaffMessage, StaffSettings, StaffView};
+use crate::daemon::staff_api::ToolResult;
 
 impl Client {
+    /// Runs one of the Chief of Staff's tools as agent `agent_id`, for
+    /// `cos mcp`.
+    pub(crate) async fn staff_tool(
+        &self,
+        agent_id: i64,
+        name: &str,
+        arguments: &Value,
+    ) -> anyhow::Result<String> {
+        let path = format!("/v1/agents/{agent_id}/tools/{name}");
+        let result: ToolResult = read_json(self.send(Method::POST, &path, Some(arguments)).await?).await?;
+        Ok(result.text)
+    }
+
     pub(crate) async fn staff(&self, project_id: i64) -> anyhow::Result<StaffView> {
         self.get_json(&format!("/v1/projects/{project_id}/staff")).await
     }

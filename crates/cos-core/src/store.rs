@@ -346,6 +346,60 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     CREATE INDEX judge_decisions_by_point ON judge_decisions (point, id);
     CREATE INDEX judge_decisions_by_approval ON judge_decisions (approval_id);
 ",
+    "
+    -- Runs are gone: the Chief of Staff coordinates agents itself. Run
+    -- agents (chiefs, workers, reviewers) and their approvals go with the
+    -- run tables, and agents loses run_id and task_id, so it is rebuilt.
+    DELETE FROM approvals WHERE agent_id IN (SELECT id FROM agents WHERE role NOT IN ('user', 'staff'));
+    DELETE FROM agents WHERE role NOT IN ('user', 'staff');
+    CREATE TABLE agents_new (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id     INTEGER NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+        role             TEXT    NOT NULL,
+        title            TEXT    NOT NULL,
+        session_id       TEXT    NOT NULL UNIQUE,
+        pid              INTEGER,
+        state            TEXT    NOT NULL,
+        model            TEXT,
+        permission_mode  TEXT    NOT NULL,
+        -- 1: Claude loads the user's own settings; 0: only the repo's.
+        user_settings    INTEGER NOT NULL,
+        term_rows        INTEGER NOT NULL,
+        term_cols        INTEGER NOT NULL,
+        started_ms       INTEGER NOT NULL,
+        last_activity_ms INTEGER NOT NULL,
+        exited_ms        INTEGER,
+        exit_code        INTEGER,
+        last_message     TEXT,
+        cwd              TEXT,    -- NULL: the workspace folder
+        system_prompt    TEXT,    -- --append-system-prompt
+        mcp_config       TEXT,    -- --mcp-config
+        spawned_by       INTEGER, -- the Chief of Staff that started it
+        transcript_path  TEXT,
+        env_names        TEXT
+    );
+    INSERT INTO agents_new (id, workspace_id, role, title, session_id, pid, state, model, permission_mode,
+            user_settings, term_rows, term_cols, started_ms, last_activity_ms, exited_ms, exit_code, last_message,
+            cwd, system_prompt, mcp_config, spawned_by, transcript_path, env_names)
+        SELECT id, workspace_id, role, title, session_id, pid, state, model, permission_mode,
+            user_settings, term_rows, term_cols, started_ms, last_activity_ms, exited_ms, exit_code, last_message,
+            cwd, system_prompt, mcp_config, spawned_by, transcript_path, env_names
+        FROM agents;
+    DROP TABLE agents;
+    ALTER TABLE agents_new RENAME TO agents;
+    CREATE INDEX agents_by_workspace ON agents (workspace_id);
+    CREATE INDEX agents_by_spawner ON agents (spawned_by);
+    -- Every approval goes to you now, so there is nobody to route it to.
+    ALTER TABLE approvals DROP COLUMN route;
+    DELETE FROM staff_inbox WHERE kind = 'run';
+    ALTER TABLE staff_inbox DROP COLUMN run_id;
+    DROP TABLE approval_audit;
+    DROP TABLE questions;
+    DROP TABLE inbox;
+    DROP TABLE wakeups;
+    DROP TABLE tasks;
+    DROP TABLE runs;
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -711,6 +765,63 @@ mod tests {
         // The cascade still points at the rebuilt table.
         conn.execute("DELETE FROM workspaces WHERE id = 1", []).unwrap();
         assert_eq!((count("agents"), count("approvals")), (0, 0));
+    }
+
+    #[test]
+    fn removing_runs_keeps_your_agents_and_drops_the_run_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cos.db");
+        {
+            // As the last release with runs left it.
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for migration in &MIGRATIONS[..12] {
+                tx.execute_batch(migration).unwrap();
+            }
+            tx.pragma_update(None, "user_version", 12).unwrap();
+            tx.execute_batch(
+                "INSERT INTO projects (root, name, base_branch, created_ms) VALUES ('/r', 'r', 'main', 0);
+                 INSERT INTO workspaces (project_id, name, title, branch, path, base, base_ref, base_commit, created_ms)
+                     VALUES (1, 'lisbon', NULL, 'r/lisbon', '/w/lisbon', 'head', 'main', 'abc', 0);
+                 INSERT INTO runs (workspace_id, goal, state, preset, approval_cap, created_ms, updated_ms)
+                     VALUES (1, 'Ship it', 'running', 'normal', 20, 0, 0);
+                 INSERT INTO agents (workspace_id, run_id, role, title, session_id, state, permission_mode,
+                     user_settings, term_rows, term_cols, started_ms, last_activity_ms, spawned_by)
+                     VALUES (1, NULL, 'user', 'mine', 's1', 'idle', 'default', 1, 40, 120, 0, 0, 3),
+                            (1, 1, 'worker', 'worker', 's2', 'exited', 'acceptEdits', 0, 40, 120, 0, 0, NULL);
+                 INSERT INTO approvals (agent_id, workspace_id, tool_name, tool_input, summary, state, created_ms, route)
+                     VALUES (1, 1, 'Bash', '{}', 'Bash ls', 'pending', 0, 'user'),
+                            (2, 1, 'Bash', '{}', 'Bash rm', 'allowed', 0, 'chief');
+                 INSERT INTO staff_inbox (project_id, kind, agent_id, run_id, text, created_ms)
+                     VALUES (1, 'agent', 1, NULL, 'done', 0), (1, 'run', NULL, 1, 'run 1 is done', 0);",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let conn = store.lock();
+        let ids = |sql: &str| -> Vec<i64> {
+            conn.prepare(sql)
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(ids("SELECT id FROM agents"), [1]);
+        assert_eq!(ids("SELECT spawned_by FROM agents"), [3]);
+        assert_eq!(ids("SELECT id FROM approvals"), [1]);
+        assert_eq!(ids("SELECT id FROM staff_inbox"), [1]);
+        let gone = ids(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
+             AND name IN ('runs', 'tasks', 'inbox', 'wakeups', 'questions', 'approval_audit')",
+        );
+        assert_eq!(gone, [0]);
+        // The cascade points at the rebuilt table.
+        conn.execute("DELETE FROM workspaces WHERE id = 1", []).unwrap();
+        assert_eq!(ids("SELECT COUNT(*) FROM approvals"), [0]);
     }
 
     #[test]

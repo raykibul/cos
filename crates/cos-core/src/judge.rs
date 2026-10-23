@@ -141,17 +141,6 @@ pub struct Example {
     pub created_ms: i64,
 }
 
-/// An item added to a run chief's inbox.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunInboxItem {
-    pub id: i64,
-    pub run_id: i64,
-    pub project_id: i64,
-    pub kind: String,
-    pub text: String,
-    pub goal: String,
-}
-
 /// An item added to a Chief of Staff's inbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaffInboxItem {
@@ -396,38 +385,15 @@ impl Judgments {
 
     // ---- Inboxes, read for the wake decision ----
 
-    /// The newest ids of the run chiefs' and the Chiefs of Staff's inboxes
-    /// (0 when empty): where following them starts.
-    pub fn inbox_cursors(&self) -> Result<(i64, i64), StoreError> {
-        let conn = self.store.lock();
-        let run: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM inbox", [], |row| row.get(0))?;
-        let staff: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM staff_inbox", [], |row| {
-            row.get(0)
-        })?;
-        Ok((run, staff))
-    }
-
-    /// Run chiefs' inbox items after `after`, oldest first, with their
-    /// run's project and goal.
-    pub fn run_inbox_after(&self, after: i64, limit: usize) -> Result<Vec<RunInboxItem>, StoreError> {
-        let conn = self.store.lock();
-        Ok(conn
-            .prepare_cached(
-                "SELECT i.id, i.run_id, w.project_id, i.kind, i.text, r.goal
-                 FROM inbox i JOIN runs r ON r.id = i.run_id JOIN workspaces w ON w.id = r.workspace_id
-                 WHERE i.id > ?1 ORDER BY i.id LIMIT ?2",
-            )?
-            .query_map(params![after, limit as i64], |row| {
-                Ok(RunInboxItem {
-                    id: row.get(0)?,
-                    run_id: row.get(1)?,
-                    project_id: row.get(2)?,
-                    kind: row.get(3)?,
-                    text: row.get(4)?,
-                    goal: row.get(5)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?)
+    /// The newest id of the Chiefs of Staff's inboxes (0 when empty): where
+    /// following them starts.
+    pub fn inbox_cursor(&self) -> Result<i64, StoreError> {
+        Ok(self
+            .store
+            .lock()
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM staff_inbox", [], |row| {
+                row.get(0)
+            })?)
     }
 
     /// Chiefs of Staff's inbox items after `after`, oldest first.
@@ -623,22 +589,14 @@ mod tests {
         store
             .lock()
             .execute_batch(
-                "INSERT INTO workspaces (project_id, name, title, branch, path, base, base_ref, base_commit, created_ms)
-                     VALUES (2, 'oslo', NULL, 'site/oslo', '/w/oslo', 'head', 'main', 'abc', 0);
-                 INSERT INTO runs (workspace_id, goal, state, preset, approval_cap, created_ms, updated_ms)
-                     VALUES (1, 'Ship it', 'running', 'normal', 20, 0, 0);
-                 INSERT INTO inbox (run_id, kind, text, created_ms) VALUES (1, 'task', 'Task 1 merged.', 0);
-                 INSERT INTO staff_inbox (project_id, kind, text, created_ms) VALUES (1, 'agent', 'Agent 3 is done.', 0);",
+                "INSERT INTO staff_inbox (project_id, kind, text, created_ms) VALUES (1, 'agent', 'Agent 3 is done.', 0);",
             )
             .unwrap();
 
-        let runs = books.run_inbox_after(0, 10).unwrap();
         let staff = books.staff_inbox_after(0, 10).unwrap();
 
-        assert_eq!(runs.len(), 1);
-        assert_eq!((runs[0].project_id, runs[0].goal.as_str()), (2, "Ship it"));
-        assert_eq!(staff[0].text, "Agent 3 is done.");
-        assert_eq!(books.inbox_cursors().unwrap(), (1, 1));
-        assert!(books.run_inbox_after(1, 10).unwrap().is_empty());
+        assert_eq!((staff[0].project_id, staff[0].text.as_str()), (1, "Agent 3 is done."));
+        assert_eq!(books.inbox_cursor().unwrap(), 1);
+        assert!(books.staff_inbox_after(1, 10).unwrap().is_empty());
     }
 }

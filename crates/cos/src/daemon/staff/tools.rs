@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use cos_core::{Agent, AgentState, ApprovalPreset, Base, NewRun, Role, Workspace};
+use cos_core::{Agent, AgentState, Base, Role, Workspace};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -68,15 +68,6 @@ struct AgentStop {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RunStart {
-    workspace_id: i64,
-    goal: String,
-    #[serde(default)]
-    preset: Option<ApprovalPreset>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct BriefUpdate {
     brief: String,
 }
@@ -115,7 +106,6 @@ impl Staff {
             "agent_send" => self.agent_send(project_id, parse(name, arguments)?).await,
             "agent_read" => self.agent_read(project_id, parse(name, arguments)?).await,
             "agent_stop" => self.agent_stop(project_id, parse(name, arguments)?),
-            "run_start" => self.run_start(project_id, agent_id, parse(name, arguments)?),
             "brief_update" => {
                 self.brief_update(project_id, agent_id, parse(name, arguments)?)
                     .await
@@ -208,7 +198,7 @@ impl Staff {
         };
         let agent = inner
             .agents
-            .start_agent_with(workspace.id, Role::User, None, &request, &launch)?;
+            .start_agent_with(workspace.id, Role::User, &request, &launch)?;
         Ok(pretty(
             &json!({ "agent_id": agent.id, "workspace_id": workspace.id }),
         ))
@@ -298,19 +288,6 @@ impl Staff {
         let agent = self.own_agent(project_id, stop.agent_id)?;
         self.inner.agents.stop(agent.id)?;
         Ok(format!("Stopping agent {}.", agent.id))
-    }
-
-    fn run_start(&self, project_id: i64, staff_id: i64, start: RunStart) -> Result<String, ApiError> {
-        let inner = &self.inner;
-        let workspace = self.own_workspace(project_id, start.workspace_id)?;
-        let run = inner.chief.create_run(NewRun {
-            workspace_id: workspace.id,
-            goal: start.goal,
-            preset: start.preset.unwrap_or_default(),
-            approval_cap: None,
-        })?;
-        inner.runs.set_spawned_by(run.id, staff_id)?;
-        Ok(pretty(&run))
     }
 
     async fn brief_update(

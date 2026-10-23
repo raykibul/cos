@@ -351,14 +351,14 @@ mod tests {
             "/usr/bin",
             &[
                 (CLAUDE_CONFIG_DIR, "/home/me/.claude-work".into()),
-                ("COS_RUN_MODEL", "haiku".into()),
+                ("COS_STAFF_MODEL", "haiku".into()),
             ],
         );
 
         assert!(unit.contains(
             "Environment=\"PATH=/usr/bin\"\n\
              Environment=\"CLAUDE_CONFIG_DIR=/home/me/.claude-work\"\n\
-             Environment=\"COS_RUN_MODEL=haiku\"\n\
+             Environment=\"COS_STAFF_MODEL=haiku\"\n\
              EnvironmentFile="
         ));
     }

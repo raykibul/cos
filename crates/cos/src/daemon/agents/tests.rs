@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use cos_core::events::kind;
 use cos_core::{
-    AgentState, Agents, ApprovalState, Base, DecidedBy, Devices, EventLog, NewAgent, Projects, Role, Runs,
-    Store,
+    AgentState, Agents, ApprovalState, Base, DecidedBy, Devices, EventLog, NewAgent, Projects, Role, Store,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -20,7 +19,6 @@ use tokio::sync::watch;
 use super::{AgentConfig, AgentManager, StartAgent};
 use crate::client::agents::TerminalStream;
 use crate::client::{Client, DaemonError, TerminalMessage};
-use crate::daemon::chief::{Chief, ChiefConfig};
 use crate::daemon::{api, serve, tailnet::Tailnet};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -97,23 +95,11 @@ impl Fixture {
         let socket = self.dir.path().join("cos.sock");
         let _ = std::fs::remove_file(&socket);
         let (stop, stopping) = watch::channel(false);
-        let runs = Arc::new(Runs::new(self.store.clone(), self.log.clone()));
-        let chief = Chief::start(
-            self.store.clone(),
-            self.log.clone(),
-            runs.clone(),
-            self.manager.clone(),
-            self.dir.path().to_path_buf(),
-            ChiefConfig::for_tests(),
-        )
-        .unwrap();
         let staff = crate::daemon::staff::Staff::start(
             self.store.clone(),
             self.log.clone(),
             self.projects.clone(),
-            runs.clone(),
             self.manager.clone(),
-            chief.clone(),
             crate::daemon::staff::StaffConfig::for_tests(),
         )
         .unwrap();
@@ -121,7 +107,6 @@ impl Fixture {
             &self.store,
             &self.log,
             &self.projects,
-            &runs,
             &self.manager,
             self.dir.path(),
         );
@@ -133,9 +118,7 @@ impl Fixture {
             devices: Arc::new(Devices::new(self.store.clone(), self.log.clone())),
             tailnet: Tailnet::load(self.store.clone(), self.log.clone()),
             peers: crate::daemon::peers::Peers::without_tailscale(),
-            runs,
             agents: self.manager.clone(),
-            chief,
             started_at: Timestamp::now(),
             home: self.dir.path().to_path_buf(),
             stopping: stopping.clone(),
@@ -220,7 +203,6 @@ fn start_manager(
     AgentManager::start(
         Agents::new(store.clone(), log.clone()),
         projects.clone(),
-        Arc::new(Runs::new(store.clone(), log.clone())),
         cos_core::Environment::new(store.clone(), log.clone()),
         config,
     )
@@ -400,7 +382,7 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
     // A multi-line message is pasted, and a tool call has its result folded in.
     fixture
         .manager
-        .send_message(agent.id, "first\nsecond")
+        .paste_message(agent.id, "first\nsecond")
         .await
         .unwrap();
     fixture.until_idle_with(agent.id, "echo: first\nsecond").await;
@@ -452,7 +434,6 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
     let quiet = agents
         .create(NewAgent {
             workspace_id: fixture.workspace_id,
-            run_id: None,
             role: Role::User,
             title: None,
             session_id: "quiet".into(),
@@ -555,41 +536,6 @@ async fn an_answer_typed_in_the_terminal_settles_the_approval() {
         status(client.answer_approval(approval.id, true, None).await.unwrap_err()),
         409
     );
-}
-
-#[tokio::test]
-async fn unanswered_approvals_expire_only_for_agents_runs_start() {
-    let fixture = Fixture::start_with(|config| config.approval_timeout = Duration::from_millis(300)).await;
-    let client = &fixture.client;
-    let request = StartAgent {
-        prompt: Some("needs permission".into()),
-        ..StartAgent::default()
-    };
-
-    let worker = fixture
-        .manager
-        .start_agent(fixture.workspace_id, Role::Worker, None, &request)
-        .unwrap();
-    let approval = fixture.pending_approval(worker.id).await;
-    let idle = fixture
-        .until_idle_with(
-            worker.id,
-            &format!("denied by hook: {}", super::hooks::EXPIRED_MESSAGE),
-        )
-        .await;
-    assert_eq!(idle.role, Role::Worker);
-    let expired = client.approvals(None).await.unwrap();
-    assert_eq!(
-        (expired[0].id, expired[0].state, expired[0].decided_by),
-        (approval.id, ApprovalState::Expired, None)
-    );
-
-    // A person's own agent waits as long as it takes.
-    let mine = fixture.start_agent("needs permission").await;
-    let pending = fixture.pending_approval(mine.id).await;
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    assert_eq!(client.approvals(Some("pending")).await.unwrap()[0].id, pending.id);
-    client.answer_approval(pending.id, true, None).await.unwrap();
 }
 
 #[tokio::test]
@@ -719,7 +665,6 @@ async fn agents_left_running_by_a_crash_come_back_interrupted() {
     let agent = agents
         .create(NewAgent {
             workspace_id: workspace.id,
-            run_id: None,
             role: Role::User,
             title: None,
             session_id: "crashed".into(),

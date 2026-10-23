@@ -1,6 +1,5 @@
-//! Requests nobody answers are refused after five minutes, and the worker is
-//! told to carry on without that step. The chief never steps in for you on a
-//! request outside its limits.
+//! Requests nobody answers are refused after five minutes, and the agent is
+//! told to carry on without that step.
 
 use jiff::{SignedDuration, Timestamp};
 

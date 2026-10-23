@@ -6,15 +6,17 @@
 //! - `POST /v1/projects/{id}/staff/start` → [`StaffView`]
 //! - `POST /v1/projects/{id}/staff/message` with [`StaffMessage`] → 202
 //! - `GET /v1/projects/{id}/staff/inbox` → [`StaffInbox`], newest first
-//!
-//! Its tool calls come through `POST /v1/agents/{id}/tools/{name}`
-//! ([`super::chief_api`]).
+//! - `POST /v1/agents/{id}/tools/{name}`: a Chief of Staff's tool call, from
+//!   `cos mcp`. The body is the tool's arguments; the answer is
+//!   [`ToolResult`]. Unix socket only ([`is_tool_route`]).
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::api::{ApiError, AppState};
 use super::staff::{StaffInbox, StaffMessage, StaffSettings, StaffView};
@@ -25,6 +27,31 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/projects/{id}/staff/start", post(start))
         .route("/v1/projects/{id}/staff/message", post(message))
         .route("/v1/projects/{id}/staff/inbox", get(inbox))
+        .route("/v1/agents/{id}/tools/{name}", post(call_tool))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ToolResult {
+    /// What the chief reads.
+    pub text: String,
+}
+
+/// Whether `path` is the tool route, which only the local socket serves.
+pub(crate) fn is_tool_route(path: &str) -> bool {
+    path.strip_prefix("/v1/agents/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(_, rest)| rest == "tools" || rest.starts_with("tools/"))
+}
+
+async fn call_tool(
+    State(state): State<AppState>,
+    path: Result<Path<(i64, String)>, PathRejection>,
+    body: Result<Option<Json<Value>>, JsonRejection>,
+) -> Result<Json<ToolResult>, ApiError> {
+    let Path((id, name)) = path.map_err(|_| ApiError::not_found("there is no such agent"))?;
+    let arguments = body?.map_or(Value::Null, |Json(value)| value);
+    let text = state.staff.call_tool(id, &name, arguments).await?;
+    Ok(Json(ToolResult { text }))
 }
 
 type Id = Result<Path<i64>, PathRejection>;
@@ -67,4 +94,18 @@ async fn inbox(State(state): State<AppState>, id: Id) -> Result<Json<StaffInbox>
     Ok(Json(StaffInbox {
         items: state.staff.inbox(project_id(id)?).await?,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_routes_are_recognized() {
+        assert!(is_tool_route("/v1/agents/3/tools/workspaces_list"));
+        assert!(is_tool_route("/v1/agents/3/tools"));
+        assert!(!is_tool_route("/v1/agents/3/input"));
+        assert!(!is_tool_route("/v1/agents"));
+        assert!(!is_tool_route("/v1/agents/3/toolsx"));
+    }
 }

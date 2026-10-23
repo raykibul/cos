@@ -182,18 +182,16 @@ fn copy_judge_key(home: &CosHome) -> anyhow::Result<Option<String>> {
 
 /// What [`passthrough_env`] passes, when set. Never a secret: those go in
 /// `daemon.env`.
-const PASSTHROUGH: [&str; 6] = [
+const PASSTHROUGH: [&str; 4] = [
     CLAUDE_CONFIG_DIR,
     crate::which::CLAUDE_BIN_ENV,
     crate::tailscale::TAILSCALE_ENV,
-    crate::daemon::chief::MODEL_ENV,
     crate::daemon::staff::MODEL_ENV,
-    crate::daemon::pipeline::RUN_MODEL_ENV,
 ];
 
 /// The environment the daemon needs that a service manager wouldn't pass on:
 /// Claude's config dir, the `claude` and `tailscale` binaries, and the
-/// chiefs' and workers' models, those that are set.
+/// Chief of Staff's model, those that are set.
 fn passthrough_env() -> Vec<(&'static str, String)> {
     PASSTHROUGH
         .into_iter()
