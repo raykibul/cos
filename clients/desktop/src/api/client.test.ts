@@ -11,8 +11,6 @@ interface Call {
 
 const agent = { id: 1, workspace_id: 3, state: "starting", title: "A" };
 const approval = { id: 4, agent_id: 1, tool_name: "Bash", state: "allowed" };
-const run = { id: 9, workspace_id: 3, goal: "G", state: "planning" };
-const board = { run, tasks: [], counts: {} };
 const workspace = { id: 3, project_id: 1, name: "lisbon", title: "lisbon", path: "/w" };
 
 /** Answers every request with `body`, or `respond`'s answer, and records it. */
@@ -235,76 +233,6 @@ describe("DaemonClient routes", () => {
       "POST",
       "/v1/approvals/4",
       { decision: "deny", message: "not now" },
-    ],
-    [
-      "chiefDecide",
-      (c) => c.chiefDecide(4, "allow", "in scope"),
-      approval,
-      "POST",
-      "/v1/approvals/4/chief",
-      { decision: "allow", reason: "in scope" },
-    ],
-    ["runs", (c) => c.runs(), { runs: [] }, "GET", "/v1/runs", undefined],
-    [
-      "createRun",
-      (c) => c.createRun({ workspaceId: 3, goal: " Go ", preset: "strict", approvalCap: 0 }),
-      run,
-      "POST",
-      "/v1/runs",
-      { workspace_id: 3, goal: "Go", preset: "strict", approval_cap: 0 },
-    ],
-    ["board", (c) => c.board(9), board, "GET", "/v1/runs/9", undefined],
-    ["approvePlan", (c) => c.approvePlan(9), board, "POST", "/v1/runs/9/approve-plan", undefined],
-    [
-      "cancelRun",
-      (c) => c.cancelRun(9, "wrong goal"),
-      board,
-      "POST",
-      "/v1/runs/9/cancel",
-      { reason: "wrong goal" },
-    ],
-    ["cancelRun bare", (c) => c.cancelRun(9, " "), board, "POST", "/v1/runs/9/cancel", undefined],
-    [
-      "updateTask",
-      (c) => c.updateTask(5, "ready", "try again"),
-      board,
-      "PATCH",
-      "/v1/tasks/5",
-      { state: "ready", reason: "try again" },
-    ],
-    [
-      "questions",
-      (c) => c.questions(),
-      { questions: [] },
-      "GET",
-      "/v1/questions?state=open",
-      undefined,
-    ],
-    [
-      "answer",
-      (c) => c.answer(5, "yes"),
-      { id: 5, question: "?", state: "answered" },
-      "POST",
-      "/v1/questions/5/answer",
-      { answer: "yes" },
-    ],
-    [
-      "messageChief",
-      (c) => c.messageChief(9, "skip docs"),
-      null,
-      "POST",
-      "/v1/runs/9/message",
-      { text: "skip docs" },
-    ],
-    ["report", (c) => c.report(9), { markdown: "# R" }, "GET", "/v1/runs/9/report", undefined],
-    ["limits", (c) => c.limits(9), { preset: "normal" }, "GET", "/v1/runs/9/limits", undefined],
-    [
-      "setLimits",
-      (c) => c.setLimits(9, { preset: "trusted", approvalCap: 50 }),
-      { preset: "trusted", approval_cap: 50 },
-      "PUT",
-      "/v1/runs/9/limits",
-      { preset: "trusted", approval_cap: 50 },
     ],
     ["devices", (c) => c.devices(), { devices: [] }, "GET", "/v1/devices", undefined],
     [

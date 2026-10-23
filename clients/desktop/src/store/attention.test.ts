@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeApproval, decodeQuestion } from "../api/models";
+import { decodeApproval } from "../api/models";
 import { fakeStore, settle } from "../test/harness";
 import { followAttention } from "./attention";
 import { waitingCount } from "./selectors";
@@ -20,7 +20,7 @@ describe("attention", () => {
     stop();
   });
 
-  it("notifies for new approvals and questions only while unfocused", async () => {
+  it("notifies for new approvals only while unfocused", async () => {
     const { cos, bridge } = fakeStore();
     let focused = false;
     followAttention(cos, { hasFocus: () => focused });
@@ -38,10 +38,7 @@ describe("attention", () => {
           agent_id: 7,
           tool_name: "Bash",
           tool_input: { command: "rm -rf build" },
-          route: "user",
         }),
-        // Routed to a chief: no notification.
-        decodeApproval({ id: 901, agent_id: 21, tool_name: "Bash", route: "chief" }),
       ],
     });
     expect(bridge.calls.notify).toHaveLength(1);
@@ -49,18 +46,12 @@ describe("attention", () => {
 
     focused = true;
     cos.state.setState({
-      questions: [...s.questions, decodeQuestion({ id: 77, run_id: 10, question: "Now?" })],
-    });
-    expect(bridge.calls.notify).toHaveLength(1);
-
-    focused = false;
-    cos.state.setState({
-      questions: [
-        ...cos.get().questions,
-        decodeQuestion({ id: 78, run_id: 10, question: "And now?" }),
+      approvals: [
+        ...cos.get().approvals,
+        decodeApproval({ id: 901, agent_id: 8, tool_name: "Bash", tool_input: { command: "ls" } }),
       ],
     });
-    expect(bridge.calls.notify.at(-1)).toEqual({ title: "The chief asks", body: "And now?" });
+    expect(bridge.calls.notify).toHaveLength(1);
   });
 
   it("reports zero while the daemon is away", async () => {

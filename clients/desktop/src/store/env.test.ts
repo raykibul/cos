@@ -20,7 +20,6 @@ import {
   configDirOf,
   loginAgents,
   pendingDevices,
-  plansAwaitingApproval,
   projectEnvNames,
   trustAgents,
   waitingCount,
@@ -217,12 +216,7 @@ describe("environment in the store", () => {
     expect(loginAgents(s).map((a) => a.id)).toEqual([11]);
     expect(agentNeedsYou(s, agent)).toBe(true);
     expect(waitingCount(s)).toBe(
-      approvalsForYou(s).length +
-        trustAgents(s).length +
-        1 +
-        s.questions.length +
-        plansAwaitingApproval(s).length +
-        pendingDevices(s).length,
+      approvalsForYou(s).length + trustAgents(s).length + 1 + pendingDevices(s).length,
     );
     expect(configDirOf(s, agent)).toBe("~/.claude-personal");
     expect(

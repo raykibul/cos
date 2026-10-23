@@ -1,16 +1,8 @@
 import type { Approval } from "../api/models";
 
-/**
- * Yours to answer: pending and not routed to the chief. Approvals without a
- * route (old rows, older daemons) are yours.
- */
+/** Yours to answer: every pending approval waits for you. */
 export function isForYou(approval: Approval): boolean {
-  return approval.state === "pending" && approval.route !== "chief";
-}
-
-/** Pending and routed to the run's chief, which is deciding. */
-export function isWithChief(approval: Approval): boolean {
-  return approval.state === "pending" && approval.route === "chief";
+  return approval.state === "pending";
 }
 
 /**
@@ -35,22 +27,13 @@ export function approvalHeadline(approval: Approval): string {
     : `Claude wants to use ${approval.toolName}`;
 }
 
-/** Why it's where it is. Null from a daemon without routes and reasons. */
+/** Why cos asks you, from the policy's tier and reason. Null from a daemon without them. */
 export function routeExplanation(approval: Approval): string | null {
   const reason = approval.reason?.trim() ? approval.reason.trim() : null;
-  switch (approval.route) {
-    case "auto":
-      return "Auto-allowed by rule" + (reason ? `: ${reason}` : "");
-    case "chief":
-      return "Routed to the chief" + (reason ? `: ${reason}` : "");
-    case "user":
-      if (approval.tier === "never_delegated") {
-        return "cos always asks you: " + (reason ?? "this is never delegated");
-      }
-      return reason ? `cos asks you because ${reason}` : "cos asks you.";
-    default:
-      return reason;
+  if (approval.tier === "never_delegated") {
+    return "cos always asks you: " + (reason ?? "this is never delegated");
   }
+  return reason ? `cos asks you because ${reason}` : null;
 }
 
 function who(decidedBy: string | null): string | null {
@@ -59,10 +42,6 @@ function who(decidedBy: string | null): string | null {
       return null;
     case "user":
       return "you";
-    case "chief":
-      return "the chief";
-    case "rule":
-      return "a rule";
     case "terminal":
       return "the terminal";
     default:
@@ -75,7 +54,7 @@ export function approvalOutcome(approval: Approval): string {
   const by = who(approval.decidedBy);
   switch (approval.state) {
     case "pending":
-      return approval.route === "chief" ? "Waiting for the chief" : "Waiting for you";
+      return "Waiting for you";
     case "expired":
       return "Expired unanswered";
     case "settled":

@@ -1,7 +1,7 @@
 // Environment variables for agents (docs/daemon.md, "Environment"): a
 // global list for every project, and each project's own, which wins. Every
 // agent launched for a project gets the merge: its Chief of Staff, the
-// agents it starts, workspace agents and runs. Decoded leniently, like
+// agents it starts and workspace agents. Decoded leniently, like
 // models.ts: a value that isn't a string is dropped, not an error.
 
 import { asObject, isObject } from "./decode";

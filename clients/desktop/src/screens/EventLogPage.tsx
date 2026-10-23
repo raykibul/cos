@@ -1,9 +1,9 @@
 import { ScrollText } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { LoggedEvent } from "../api/models";
-import { useApp, useCos, useNow } from "../app/context";
+import { useCos, useNow } from "../app/context";
 import type { Tone } from "../domain/approvals";
-import { runOf, summarize } from "../domain/events";
+import { summarize } from "../domain/events";
 import { cx } from "../ui/cx";
 import { clockTime, duration } from "../ui/format";
 import { EmptyState } from "../ui/kit";
@@ -14,7 +14,7 @@ const filters = [
   { key: "all", title: "All" },
   { key: "agent", title: "Agents" },
   { key: "approval", title: "Approvals" },
-  { key: "run", title: "Runs" },
+  { key: "staff", title: "Chief of Staff" },
   { key: "project", title: "Projects" },
 ] as const;
 
@@ -28,8 +28,8 @@ function matches(kind: string, filter: Filter): boolean {
       return kind.startsWith("agent.");
     case "approval":
       return kind.startsWith("approval.");
-    case "run":
-      return /^(run|plan|task|question)\./.test(kind);
+    case "staff":
+      return kind.startsWith("staff.");
     case "project":
       return /^(project|workspace)\./.test(kind);
   }
@@ -38,8 +38,7 @@ function matches(kind: string, filter: Filter): boolean {
 function toneOf(kind: string): Tone {
   if (kind.startsWith("approval.")) return "accent";
   if (kind.startsWith("agent.")) return "blue";
-  if (/^(run|plan|task)\./.test(kind)) return "purple";
-  if (kind.startsWith("question.")) return "amber";
+  if (kind.startsWith("staff.")) return "purple";
   if (/^(project|workspace)\./.test(kind)) return "teal";
   if (kind === "daemon.stopped") return "red";
   if (kind.startsWith("daemon.")) return "green";
@@ -116,8 +115,6 @@ export function EventLogPage() {
 }
 
 function EventRow({ event }: { event: LoggedEvent }) {
-  const { ui } = useApp();
-  const run = runOf(event);
   const tone = toneClasses[toneOf(event.kind)];
   return (
     <li className="flex items-baseline gap-3 border-b border-line px-4 py-2 text-[12.5px] last:border-b-0 animate-fade-in">
@@ -138,15 +135,6 @@ function EventRow({ event }: { event: LoggedEvent }) {
       >
         {summarize(event)}
       </span>
-      {run !== null ? (
-        <button
-          type="button"
-          onClick={() => ui.navigate({ kind: "run", id: run })}
-          className="shrink-0 rounded px-1.5 text-[11.5px] text-ink-3 hover:bg-subtle hover:text-ink"
-        >
-          run {run}
-        </button>
-      ) : null}
     </li>
   );
 }

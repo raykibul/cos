@@ -32,7 +32,7 @@ export interface Staff {
   waitingOnYou: number;
   /** Coordination paused: news collects in its inbox, but no wakeups go in. Your messages still do. */
   paused: boolean;
-  /** News from its agents and runs not yet delivered to it. */
+  /** News from its agents not yet delivered to it. */
   updatesWaiting: number;
 }
 
@@ -133,11 +133,10 @@ export function decodeTranscript(value: unknown): Transcript {
 export interface InboxItem {
   /** Stable within a listing, for React keys. */
   key: string;
-  /** `stop`, `exit`, `approval`, `run`, or something newer. */
+  /** `stop`, `exit`, `approval`, or something newer. */
   kind: string;
   agentId: number | null;
-  runId: number | null;
-  /** Who it's from: the agent's or run's title, when the daemon says. */
+  /** Who it's from: the agent's title, when the daemon says. */
   title: string | null;
   text: string;
   tsMs: number;
@@ -147,18 +146,16 @@ export function decodeInboxItem(value: unknown): InboxItem {
   const o: Json = asObject(value, "inbox item");
   const kind = str(o.kind) || str(o.type) || "update";
   const agentId = optNum(o.agent_id);
-  const runId = optNum(o.run_id);
   const tsMs = num(o.ts_ms, 0) || num(o.created_ms, 0) || time(o.created_at) || time(o.ts);
   const id = o.id;
   return {
     key:
       typeof id === "number" || typeof id === "string"
         ? String(id)
-        : `${kind}-${agentId ?? runId ?? "x"}-${tsMs}`,
+        : `${kind}-${agentId ?? "x"}-${tsMs}`,
     kind,
     agentId,
-    runId,
-    title: optStr(o.agent_title) || optStr(o.title) || optStr(o.goal) || null,
+    title: optStr(o.agent_title) || optStr(o.title) || null,
     text: str(o.text) || str(o.message) || str(o.last_message) || str(o.summary),
     tsMs,
   };

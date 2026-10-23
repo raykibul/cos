@@ -1,5 +1,5 @@
 // Which event kinds change what. Matched by prefix, so kinds added later
-// still trigger a refresh. Ported from CosKit (Agents.swift, Runs.swift,
+// still trigger a refresh. Ported from CosKit (Agents.swift,
 // Projects.swift).
 
 import type { LoggedEvent } from "../api/models";
@@ -63,48 +63,6 @@ export function changesApprovals(kind: string): boolean {
   return kind.startsWith("approval.") || kind === "agent.exited" || kind === "agent.removed";
 }
 
-export function changesRuns(kind: string): boolean {
-  return (
-    kind.startsWith("run.") ||
-    kind.startsWith("plan.") ||
-    kind.startsWith("task.") ||
-    kind === "workspace.removed"
-  );
-}
-
-export function changesQuestions(kind: string): boolean {
-  return kind.startsWith("question.") || kind === "run.state_changed";
-}
-
-/** The run an event belongs to: the log's `run_id`, else `data.run_id`. */
-export function runOf(event: LoggedEvent): number | null {
-  if (event.runId !== null) {
-    const id = optNum(event.runId);
-    if (id !== null) return id;
-  }
-  return optNum(event.data.run_id);
-}
-
-/** What a page watching run `watched` must refetch after `event`. */
-export interface RunRefresh {
-  board: boolean;
-  limits: boolean;
-  report: boolean;
-}
-
-export function runRefreshFor(event: LoggedEvent, watched: number): RunRefresh {
-  const run = runOf(event);
-  const mine = run === null || run === watched;
-  const approval = event.kind.startsWith("approval.");
-  // A run's agents starting fill in `chief_agent_id` and tasks' `agent_id`.
-  const agentStarted = event.kind === "agent.started";
-  return {
-    board: (changesRuns(event.kind) && mine) || agentStarted,
-    limits: approval || (event.kind.startsWith("run.") && mine),
-    report: mine && (event.kind === "run.report_written" || event.kind === "run.state_changed"),
-  };
-}
-
 function scalar(value: unknown): string {
   if (value === null || value === undefined) return "–";
   if (typeof value === "string") return value.length > 80 ? `${value.slice(0, 77)}…` : value;
@@ -113,10 +71,9 @@ function scalar(value: unknown): string {
   return "{…}";
 }
 
-/** `agent_id=7 state=working`, skipping what the row shows anyway. */
+/** `agent_id=7 state=working`. */
 export function summarize(event: LoggedEvent): string {
   return Object.entries(event.data)
-    .filter(([key]) => key !== "run_id")
     .map(([key, value]) => `${key}=${scalar(value)}`)
     .join("  ");
 }

@@ -1,5 +1,4 @@
-// The daemon's JSON as typed values: docs/daemon.md, docs/agents-api.md and
-// docs/orchestration.md. Decoded leniently (see decode.ts). States, roles
+// The daemon's JSON as typed values: docs/daemon.md and docs/agents-api.md. Decoded leniently (see decode.ts). States, roles
 // and kinds are open strings: a value a newer daemon adds still decodes.
 
 import {
@@ -47,19 +46,15 @@ export interface LoggedEvent {
   seq: number;
   ts: number;
   kind: string;
-  /** The run it belongs to, as a string (the log keeps it that way). */
-  runId: string | null;
   data: Json;
 }
 
 export function decodeEvent(value: unknown): LoggedEvent {
   const o = asObject(value, "event");
-  const runId = o.run_id;
   return {
     seq: reqNum(o, "seq", "event"),
     ts: time(o.ts),
     kind: str(o.kind, "unknown"),
-    runId: typeof runId === "string" ? runId : typeof runId === "number" ? String(runId) : null,
     data: isObject(o.data) ? o.data : {},
   };
 }
@@ -160,15 +155,12 @@ export type AgentState =
   | "interrupted"
   | (string & {});
 
-export type AgentRole = "user" | "chief" | "worker" | "reviewer" | "staff" | (string & {});
+export type AgentRole = "user" | "staff" | (string & {});
 
 export interface Agent {
   id: number;
   /** Null for an agent outside any workspace, such as a Chief of Staff in its own worktree. */
   workspaceId: number | null;
-  /** The run that started it; null for your own. */
-  runId: number | null;
-  taskId: number | null;
   role: AgentRole;
   title: string;
   sessionId: string | null;
@@ -185,7 +177,7 @@ export interface Agent {
   exitCode: number | null;
   lastMessage: string | null;
   pendingApprovalId: number | null;
-  /** Only when it runs outside the workspace folder (a task's worktree). */
+  /** Only when it runs outside the workspace folder. */
   cwd: string | null;
   /** The Chief of Staff agent that started it, if one did. */
   spawnedBy: number | null;
@@ -204,8 +196,6 @@ export function decodeAgent(value: unknown): Agent {
   return {
     id,
     workspaceId: optNum(o.workspace_id),
-    runId: optNum(o.run_id),
-    taskId: optNum(o.task_id),
     role: str(o.role, "user"),
     title: str(o.title) || `Agent ${id}`,
     sessionId: optStr(o.session_id),
@@ -232,7 +222,6 @@ export function decodeAgent(value: unknown): Agent {
 export type ApprovalState =
   "pending" | "allowed" | "denied" | "settled" | "expired" | (string & {});
 export type ApprovalTier = "allowed" | "chief" | "ask_user" | "never_delegated" | (string & {});
-export type ApprovalRoute = "auto" | "chief" | "user" | (string & {});
 
 export interface Approval {
   id: number;
@@ -249,7 +238,6 @@ export interface Approval {
   decidedMs: number | null;
   /** Null from a daemon without the approvals policy. */
   tier: ApprovalTier | null;
-  route: ApprovalRoute | null;
   reason: string | null;
 }
 
@@ -270,7 +258,6 @@ export function decodeApproval(value: unknown): Approval {
     createdMs: num(o.created_ms, 0),
     decidedMs: optNum(o.decided_ms),
     tier: optStr(o.tier),
-    route: optStr(o.route),
     reason: optStr(o.reason),
   };
 }
@@ -290,324 +277,6 @@ export function decodeScreen(value: unknown): AgentScreen {
     cols: num(o.cols, 0),
     text: str(o.text),
     cursor: [cursor[0] ?? 0, cursor[1] ?? 0],
-  };
-}
-
-// MARK: Runs
-
-export type RunState =
-  | "planning"
-  | "awaiting_plan_approval"
-  | "running"
-  | "reporting"
-  | "done"
-  | "failed"
-  | "cancelled"
-  | (string & {});
-
-export type TaskState =
-  | "proposed"
-  | "ready"
-  | "running"
-  | "checking"
-  | "review"
-  | "merged"
-  | "blocked"
-  | "failed"
-  | "cancelled"
-  | (string & {});
-
-export type Preset = "strict" | "normal" | "trusted" | (string & {});
-
-export interface TaskCounts {
-  proposed: number;
-  ready: number;
-  running: number;
-  checking: number;
-  review: number;
-  merged: number;
-  blocked: number;
-  failed: number;
-  cancelled: number;
-  total: number;
-}
-
-const countKeys = [
-  "proposed",
-  "ready",
-  "running",
-  "checking",
-  "review",
-  "merged",
-  "blocked",
-  "failed",
-  "cancelled",
-] as const;
-
-export function emptyCounts(): TaskCounts {
-  return {
-    proposed: 0,
-    ready: 0,
-    running: 0,
-    checking: 0,
-    review: 0,
-    merged: 0,
-    blocked: 0,
-    failed: 0,
-    cancelled: 0,
-    total: 0,
-  };
-}
-
-export function decodeCounts(value: unknown): TaskCounts {
-  const o = asObject(value, "counts");
-  const counts = emptyCounts();
-  let sum = 0;
-  for (const key of countKeys) {
-    counts[key] = num(o[key], 0);
-    sum += counts[key];
-  }
-  counts.total = num(o.total, sum);
-  return counts;
-}
-
-export function countTasks(tasks: RunTask[]): TaskCounts {
-  const counts = emptyCounts();
-  for (const task of tasks) {
-    if ((countKeys as readonly string[]).includes(task.state)) {
-      counts[task.state as (typeof countKeys)[number]] += 1;
-    }
-  }
-  counts.total = tasks.length;
-  return counts;
-}
-
-export interface Run {
-  id: number;
-  workspaceId: number;
-  goal: string;
-  state: RunState;
-  preset: Preset;
-  approvalCap: number;
-  reportPath: string | null;
-  reason: string | null;
-  chiefAgentId: number | null;
-  createdAt: number;
-  updatedAt: number;
-  /** A run summary's `tasks` counts; a lone run (a board's) has none. */
-  counts: TaskCounts | null;
-}
-
-export function decodeRun(value: unknown): Run {
-  const o = asObject(value, "run");
-  const createdAt = time(o.created_at);
-  let counts: TaskCounts | null = null;
-  if (isObject(o.tasks)) counts = decodeCounts(o.tasks);
-  return {
-    id: reqNum(o, "id", "run"),
-    workspaceId: reqNum(o, "workspace_id", "run"),
-    goal: str(o.goal),
-    state: reqStr(o, "state", "run"),
-    preset: str(o.preset, "normal"),
-    approvalCap: num(o.approval_cap, 20),
-    reportPath: optStr(o.report_path),
-    reason: optStr(o.reason),
-    chiefAgentId: optNum(o.chief_agent_id),
-    createdAt,
-    updatedAt: time(o.updated_at) || createdAt,
-    counts,
-  };
-}
-
-export interface ScopeCheck {
-  ok: boolean;
-  outOfScope: string[];
-  protected: string[];
-  uncommitted: string[];
-  wrongBranch: boolean;
-}
-
-export interface TestCheck {
-  /** `passed`, `failed`, `timed_out`, `skipped`, or something newer. */
-  status: string;
-  exitCode: number | null;
-  outputTail: string | null;
-}
-
-export interface TaskChecks {
-  scope: ScopeCheck | null;
-  tests: TestCheck | null;
-  commitsAhead: number | null;
-}
-
-export interface TaskReview {
-  /** `approve` or `changes`. */
-  verdict: string;
-  notes: string | null;
-  agentId: number | null;
-}
-
-export interface RunTask {
-  id: number;
-  runId: number;
-  position: number;
-  title: string;
-  instructions: string;
-  files: string[];
-  testCommand: string | null;
-  dependsOn: number[];
-  state: TaskState;
-  retries: number;
-  branch: string | null;
-  worktree: string | null;
-  lastFailure: string | null;
-  agentId: number | null;
-  checks: TaskChecks | null;
-  review: TaskReview | null;
-}
-
-/** A list of paths; a bare `true` (a daemon might just flag it) becomes "(yes)". */
-function paths(value: unknown): string[] {
-  if (value === true) return ["(yes)"];
-  return strings(value);
-}
-
-function decodeScope(value: unknown): ScopeCheck | null {
-  if (!isObject(value)) return null;
-  const outOfScope = paths(value.out_of_scope);
-  const prot = paths(value.protected);
-  const uncommitted = paths(value.uncommitted);
-  const wrongBranch = bool(value.wrong_branch, false);
-  return {
-    ok: bool(
-      value.ok,
-      outOfScope.length === 0 && prot.length === 0 && uncommitted.length === 0 && !wrongBranch,
-    ),
-    outOfScope,
-    protected: prot,
-    uncommitted,
-    wrongBranch,
-  };
-}
-
-function decodeTests(value: unknown): TestCheck | null {
-  if (!isObject(value)) return null;
-  return {
-    status: str(value.status, "unknown"),
-    exitCode: optNum(value.exit_code),
-    outputTail: optStr(value.output_tail),
-  };
-}
-
-function decodeChecks(value: unknown): TaskChecks | null {
-  if (!isObject(value)) return null;
-  return {
-    scope: decodeScope(value.scope),
-    tests: decodeTests(value.tests),
-    commitsAhead: optNum(value.commits_ahead),
-  };
-}
-
-function decodeReview(value: unknown): TaskReview | null {
-  if (!isObject(value)) return null;
-  return {
-    verdict: str(value.verdict, "unknown"),
-    notes: optStr(value.notes),
-    agentId: optNum(value.agent_id),
-  };
-}
-
-export function decodeTask(value: unknown): RunTask {
-  const o = asObject(value, "task");
-  return {
-    id: reqNum(o, "id", "task"),
-    runId: num(o.run_id, 0),
-    position: num(o.position, 0),
-    title: reqStr(o, "title", "task"),
-    instructions: str(o.instructions) || str(o.description),
-    files: strings(o.files),
-    testCommand: optStr(o.test_command),
-    dependsOn: numbers(o.depends_on),
-    state: reqStr(o, "state", "task"),
-    retries: num(o.retries, 0),
-    branch: optStr(o.branch),
-    worktree: optStr(o.worktree),
-    lastFailure: optStr(o.last_failure),
-    agentId: optNum(o.agent_id),
-    checks: decodeChecks(o.checks),
-    review: decodeReview(o.review),
-  };
-}
-
-export interface Board {
-  run: Run;
-  /** Null once the workspace is removed. */
-  workspace: Workspace | null;
-  /** In plan order. */
-  tasks: RunTask[];
-  counts: TaskCounts;
-}
-
-/** A nested object that may be missing or malformed; null then. */
-function optional<T>(value: unknown, decode: (value: unknown) => T): T | null {
-  if (!isObject(value)) return null;
-  try {
-    return decode(value);
-  } catch {
-    return null;
-  }
-}
-
-export function decodeBoard(value: unknown): Board {
-  const o = asObject(value, "board");
-  const tasks = list(o.tasks, decodeTask).sort((a, b) => a.position - b.position);
-  return {
-    run: decodeRun(o.run),
-    workspace: optional(o.workspace, decodeWorkspace),
-    tasks,
-    counts: isObject(o.counts) ? decodeCounts(o.counts) : countTasks(tasks),
-  };
-}
-
-export interface Question {
-  id: number;
-  runId: number | null;
-  agentId: number | null;
-  question: string;
-  choices: string[];
-  state: "open" | "answered" | (string & {});
-  answer: string | null;
-  createdMs: number;
-  answeredMs: number | null;
-}
-
-export function decodeQuestion(value: unknown): Question {
-  const o = asObject(value, "question");
-  return {
-    id: reqNum(o, "id", "question"),
-    runId: optNum(o.run_id),
-    agentId: optNum(o.agent_id),
-    question: reqStr(o, "question", "question"),
-    choices: strings(o.choices),
-    state: str(o.state, "open"),
-    answer: optStr(o.answer),
-    createdMs: num(o.created_ms, 0),
-    answeredMs: optNum(o.answered_ms),
-  };
-}
-
-export interface RunLimits {
-  preset: Preset;
-  approvalCap: number;
-  chiefApprovals: number;
-}
-
-export function decodeLimits(value: unknown): RunLimits {
-  const o = asObject(value, "limits");
-  return {
-    preset: str(o.preset, "normal"),
-    approvalCap: num(o.approval_cap, 20),
-    chiefApprovals: num(o.chief_approvals, 0),
   };
 }
 

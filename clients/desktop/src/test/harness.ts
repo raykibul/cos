@@ -11,7 +11,7 @@ export async function settle(rounds = 8, ms = 0): Promise<void> {
 
 export function fakeStore(fake: FakeOptions = {}, store: StoreOptions = {}) {
   const bridge = new FakeBridge({ latencyMs: 0, simulate: false, ...fake });
-  const cos = new CosStore(bridge, { runsDebounceMs: 0, ...store });
+  const cos = new CosStore(bridge, store);
   return { bridge, daemon: bridge.daemon, cos };
 }
 

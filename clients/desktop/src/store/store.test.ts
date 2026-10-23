@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { CosError } from "../api/errors";
 import { fakeStore, rawEvent, requestLines, settle } from "../test/harness";
 import { CoalescedRefresh } from "./coalesce";
 import { approvalsForYou } from "./selectors";
@@ -16,26 +15,17 @@ describe("refresh rules", () => {
   const projects = "GET /v1/projects";
   const agents = "GET /v1/agents";
   const approvals = "GET /v1/approvals?state=pending";
-  const runs = "GET /v1/runs";
-  const questions = "GET /v1/questions?state=open";
 
   const cases: [string, string[]][] = [
     ["project.added", [projects]],
     ["workspace.created", [projects]],
-    ["workspace.removed", [projects, agents, runs]],
+    ["workspace.removed", [projects, agents]],
     ["agent.started", [agents]],
     ["agent.state_changed", [agents]],
     ["agent.exited", [agents, approvals]],
     ["agent.removed", [agents, approvals]],
     ["approval.requested", [agents, approvals]],
     ["approval.decided", [agents, approvals]],
-    ["approval.routed", [agents, approvals]],
-    ["run.created", [runs]],
-    ["run.state_changed", [runs, questions]],
-    ["plan.proposed", [runs]],
-    ["task.state_changed", [runs]],
-    ["question.asked", [questions]],
-    ["question.answered", [questions]],
     // Once a second while Claude talks: only a page showing that agent reads it.
     ["agent.transcript", []],
     // Without a project id, every chief.
@@ -50,57 +40,6 @@ describe("refresh rules", () => {
     cos.handle({ type: "event", event: rawEvent(1000, kind, {}) });
     await settle();
     expect(new Set(requestLines(daemon))).toEqual(new Set(expected));
-  });
-
-  it("refetches a watched run's board only for its own events", async () => {
-    const { cos, daemon } = await startedStore();
-    const unwatch = cos.watchRun(10);
-    await settle();
-    daemon.requests.length = 0;
-
-    cos.handle({ type: "event", event: rawEvent(1000, "task.state_changed", { run_id: 11 }) });
-    await settle();
-    expect(requestLines(daemon)).not.toContain("GET /v1/runs/10");
-
-    cos.handle({ type: "event", event: rawEvent(1001, "task.state_changed", { run_id: 10 }) });
-    await settle();
-    expect(requestLines(daemon)).toContain("GET /v1/runs/10");
-
-    // Limits follow every approval, whichever run: the chief's count may move.
-    daemon.requests.length = 0;
-    cos.handle({ type: "event", event: rawEvent(1002, "approval.decided", { approval_id: 1 }) });
-    await settle();
-    expect(requestLines(daemon)).toContain("GET /v1/runs/10/limits");
-    expect(requestLines(daemon)).toContain("GET /v1/approvals");
-
-    unwatch();
-    daemon.requests.length = 0;
-    cos.handle({ type: "event", event: rawEvent(1003, "task.state_changed", { run_id: 10 }) });
-    await settle();
-    expect(requestLines(daemon)).not.toContain("GET /v1/runs/10");
-  });
-
-  it("asks for a report once a watched run is done, and keeps 404 as not written", async () => {
-    const { cos } = await startedStore();
-    cos.watchRun(7);
-    await settle();
-    expect(cos.get().reports[7]?.kind).toBe("markdown");
-
-    cos.watchRun(13); // reporting, no report yet
-    await settle();
-    expect(cos.get().reports[13]).toEqual({ kind: "not_written" });
-  });
-
-  it("folds a burst of run events into one request after the debounce", async () => {
-    const { cos, daemon } = await startedStore({ runsDebounceMs: 20 });
-    for (let i = 0; i < 12; i++) {
-      cos.handle({
-        type: "event",
-        event: rawEvent(1000 + i, "task.state_changed", { run_id: 10 }),
-      });
-    }
-    await settle(4, 30);
-    expect(requestLines(daemon).filter((l) => l === "GET /v1/runs")).toHaveLength(1);
   });
 
   it("appends events in order and keeps the status counts current", async () => {
@@ -166,25 +105,10 @@ describe("optimistic actions", () => {
     expect(cos.get().approvals.some((a) => a.id === approval.id)).toBe(false);
   });
 
-  it("drops a question answered elsewhere (409) and rethrows", async () => {
-    const { cos, daemon } = await startedStore();
-    const question = cos.get().questions[0]!;
-    daemon.questions.find((q) => q.id === question.id)!.state = "answered";
-    await expect(cos.answer(question, "yes")).rejects.toBeInstanceOf(CosError);
-    expect(cos.get().questions.some((q) => q.id === question.id)).toBe(false);
-  });
-
   it("adds a created agent before the refetch", async () => {
     const { cos } = await startedStore();
     const agent = await cos.createAgent(3, { prompt: "Write the docs" });
     expect(cos.get().agents[0]?.id).toBe(agent.id);
-  });
-
-  it("stores the board an approved plan returns", async () => {
-    const { cos } = await startedStore();
-    await cos.approvePlan(11);
-    expect(cos.get().boards[11]?.run.state).toBe("running");
-    expect(cos.get().runs.find((r) => r.id === 11)?.state).toBe("running");
   });
 
   it("keeps the project list when removing fails", async () => {

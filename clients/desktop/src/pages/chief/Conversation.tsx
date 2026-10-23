@@ -321,7 +321,6 @@ const inboxKinds: Record<string, string> = {
   stop: "Finished a turn",
   exit: "Exited",
   approval: "Waiting for you",
-  run: "Run changed",
 };
 
 /** A wakeup: the reports from agents that the chief was handed. */

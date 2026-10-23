@@ -7,7 +7,6 @@ import {
   GitBranch,
   Inbox,
   LayoutGrid,
-  Play,
   ScrollText,
   Settings,
   SquareTerminal,
@@ -30,7 +29,6 @@ const icons: Record<Exclude<Page["kind"], "chief">, LucideIcon> = {
   projectEnv: Variable,
   workspace: GitBranch,
   agent: SquareTerminal,
-  run: Play,
 };
 
 export function TabBar() {

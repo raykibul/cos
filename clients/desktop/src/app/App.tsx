@@ -11,7 +11,6 @@ import { ProjectEnvPage } from "../screens/ProjectEnvPage";
 import { ProjectPage } from "../screens/ProjectPage";
 import { QuickSwitch } from "../screens/QuickSwitch";
 import { Rail } from "../screens/Rail";
-import { RunPage } from "../screens/RunPage";
 import { SettingsPage } from "../screens/SettingsPage";
 import { Sidebar } from "../screens/Sidebar";
 import { StatusBar } from "../screens/StatusBar";
@@ -133,8 +132,6 @@ function Content() {
       return <WorkspacePage key={page.id} workspaceId={page.id} />;
     case "agent":
       return <AgentPage key={page.id} agentId={page.id} />;
-    case "run":
-      return <RunPage key={page.id} runId={page.id} />;
   }
 }
 

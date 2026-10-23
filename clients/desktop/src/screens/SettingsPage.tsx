@@ -382,7 +382,7 @@ function EventLogSection() {
         <div className="flex items-center gap-3 px-4 py-3">
           <ScrollText className="size-4 shrink-0 text-ink-3" strokeWidth={1.8} aria-hidden />
           <p className="min-w-0 flex-1 text-[13px] text-ink-2">
-            Everything the daemon logged: agents, approvals, runs and the chiefs, live.
+            Everything the daemon logged: agents, approvals and the chiefs, live.
           </p>
           <Button size="sm" onClick={() => ui.navigate({ kind: "events" })}>
             Open the event log

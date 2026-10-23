@@ -15,8 +15,8 @@ import { CosStore } from "./store/store";
 // parameters set it up for development and screenshots:
 //   ?daemon=off      start with the daemon stopped
 //   ?static          no simulated activity
-//   ?page=run:10     open a page (waiting, events, settings, project:1, chief:1, projectEnv:1, workspace:3, agent:7, run:10)
-//   ?dialog=newRun:3 open a sheet over it (envVar:1 adds a variable to project 1, envVar:all to all
+//   ?page=agent:7    open a page (waiting, events, settings, project:1, chief:1, projectEnv:1, workspace:3, agent:7)
+//   ?dialog=newAgent:3  open a sheet over it (envVar:1 adds a variable to project 1, envVar:all to all
 //                    projects; envVar:1:NAME edits one)
 //   ?terminal        open the chief's terminal split
 //   ?host=h1         start on another machine (h1 Studio waits for approval, h2 can't be reached)
@@ -38,8 +38,7 @@ function parsePage(value: string | null): Page | undefined {
     kind === "chief" ||
     kind === "projectEnv" ||
     kind === "workspace" ||
-    kind === "agent" ||
-    kind === "run"
+    kind === "agent"
   ) {
     return { kind, id: n };
   }
@@ -61,15 +60,11 @@ function parseDialog(value: string | null): DialogState | null {
     case "removeProject":
       return { kind, projectId: n };
     case "newAgent":
-    case "newRun":
     case "renameWorkspace":
     case "removeWorkspace":
       return { kind, workspaceId: n };
     case "removeAgent":
       return { kind, agentId: n };
-    case "cancelRun":
-    case "limits":
-      return { kind, runId: n };
     case "envVar": {
       const name = value.split(":")[2];
       return {

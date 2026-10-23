@@ -1,11 +1,11 @@
 import { FolderGit2, GitBranch, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import { type Workspace, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
-import { agentLabel, pluralize, runLabel } from "../domain/labels";
-import { agentNeedsYou, currentRun, project as projectOf, userAgents } from "../store/selectors";
+import { agentLabel, pluralize } from "../domain/labels";
+import { agentNeedsYou, project as projectOf, userAgents } from "../store/selectors";
 import { cx } from "../ui/cx";
 import { relativeTime } from "../ui/format";
-import { Button, EmptyState, PathText, SectionTitle, StateBadge, StateDot } from "../ui/kit";
+import { Button, EmptyState, PathText, SectionTitle, StateBadge } from "../ui/kit";
 import { Menu } from "../ui/Menu";
 import { Crumb, PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { folderItems } from "./common";
@@ -104,7 +104,7 @@ export function ProjectPage({ projectId }: { projectId: number }) {
                 </Button>
               }
             >
-              A workspace is a git worktree on its own branch. Agents and runs work inside one.
+              A workspace is a git worktree on its own branch. Agents work inside one.
             </EmptyState>
           </div>
         ) : (
@@ -127,7 +127,6 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
   const waiting = useCos(
     (s) => userAgents(s, workspace.id).filter((a) => agentNeedsYou(s, a)).length,
   );
-  const run = useCos((s) => currentRun(s, workspace.id));
   const working = agents.filter((a) => agentLabel(a.state).busy).length;
 
   return (
@@ -188,19 +187,13 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
         <span className="shrink-0">from {workspace.base}</span>
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-ink-2">
-        {run ? (
-          <span className="flex min-w-0 items-center gap-1.5">
-            <StateDot label={runLabel(run.state)} />
-            <span className="truncate">{run.goal}</span>
-          </span>
-        ) : null}
         <span>
           {pluralize(agents.length, "agent")}
           {working > 0 ? ` · ${working} working` : ""}
         </span>
         <span className="ml-auto text-ink-3">created {relativeTime(workspace.createdAt, now)}</span>
       </div>
-      {run ? null : agents[0] ? (
+      {agents[0] ? (
         <div className="flex min-w-0 items-center gap-2">
           <StateBadge label={agentLabel(agents[0].state)} />
           <span className="truncate text-[12.5px] text-ink-3">{agents[0].title}</span>

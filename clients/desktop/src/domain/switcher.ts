@@ -10,11 +10,9 @@ import {
   approvalsForYou,
   loginAgents,
   pendingDevices,
-  plansAwaitingApproval,
   project,
   projectOfAgent,
   projectWaitingCount,
-  run,
   staffState,
   trustAgents,
   workspace,
@@ -109,24 +107,6 @@ export function switchItems(s: DaemonState): SwitchItem[] {
       { kind: "agent", id: a.id },
     );
   }
-  for (const r of plansAwaitingApproval(s)) {
-    const ws = workspace(s, r.workspaceId);
-    waiting(
-      `plan:${r.id}`,
-      `Plan ready: ${r.goal}`,
-      joined(ws ? workspaceName(ws) : null, ws ? projectName(s, ws.projectId) : null),
-      { kind: "run", id: r.id },
-    );
-  }
-  for (const q of s.questions) {
-    const r = q.runId !== null ? run(s, q.runId) : undefined;
-    waiting(
-      `question:${q.id}`,
-      q.question,
-      r ? `Asked in the run "${r.goal}"` : "An open question",
-      r ? { kind: "run", id: r.id } : { kind: "waiting" },
-    );
-  }
   const devices = pendingDevices(s);
   if (devices.length > 0) {
     waiting(
@@ -138,7 +118,7 @@ export function switchItems(s: DaemonState): SwitchItem[] {
   }
 
   for (const a of s.agents) {
-    if (a.runId !== null || a.workspaceId === null || !isAlive(a.state)) continue;
+    if (a.workspaceId === null || !isAlive(a.state)) continue;
     const ws = workspace(s, a.workspaceId);
     items.push({
       key: `agent:${a.id}`,

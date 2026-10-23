@@ -67,7 +67,7 @@ describe("a project's environment", () => {
     expect(main().getByRole("heading", { name: "Environment", level: 1 })).toBeInTheDocument();
     expect(
       main().getByText(
-        "Used by every agent in cos: its Chief of Staff, workspace agents and runs. Running agents keep their current values until they restart.",
+        "Used by every agent in cos: its Chief of Staff and workspace agents. Running agents keep their current values until they restart.",
       ),
     ).toBeInTheDocument();
     const names = variables()

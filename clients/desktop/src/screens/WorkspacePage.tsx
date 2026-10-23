@@ -1,20 +1,10 @@
-import { Bot, GitBranch, ListChecks, MoreHorizontal, Pencil, Play, Trash2 } from "lucide-react";
-import { type Run, workspaceName } from "../api/models";
-import { useApp, useCanChange, useCos, useNow } from "../app/context";
-import { runLabel } from "../domain/labels";
-import { countsSummary, isRunFinished, progress } from "../domain/tasks";
-import {
-  currentRun,
-  project as projectOf,
-  runsIn,
-  userAgents,
-  workspace as workspaceOf,
-} from "../store/selectors";
-import { relativeTime } from "../ui/format";
-import { Button, EmptyState, PathText, Pill, SectionTitle, StateBadge } from "../ui/kit";
+import { Bot, GitBranch, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { workspaceName } from "../api/models";
+import { useApp, useCanChange, useCos } from "../app/context";
+import { project as projectOf, userAgents, workspace as workspaceOf } from "../store/selectors";
+import { EmptyState, PathText, Pill, SectionTitle } from "../ui/kit";
 import { Menu } from "../ui/Menu";
 import { Crumb, CrumbSep, PageBody, PageHeader, PageTitle } from "../ui/Page";
-import { toneClasses } from "../ui/tones";
 import { folderItems } from "./common";
 import { Composer } from "./Composer";
 import { toNewAgent } from "./composerValue";
@@ -30,9 +20,6 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
   const approvals = useCos((s) => s.approvals);
   const agentsSupported = useCos((s) => s.agentsSupported);
   const agentsError = useCos((s) => s.agentsError);
-  const runsSupported = useCos((s) => s.runsSupported);
-  const active = useCos((s) => currentRun(s, workspaceId));
-  const past = useCos((s) => runsIn(s, workspaceId).filter((r) => isRunFinished(r.state)));
 
   if (!workspace) {
     return (
@@ -47,54 +34,40 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
     );
   }
 
-  const newRun = (
-    <Button
-      icon={ListChecks}
-      disabled={!canChange || !runsSupported || active !== undefined}
-      title={active ? "This workspace already has a run" : undefined}
-      onClick={() => ui.open({ kind: "newRun", workspaceId })}
-    >
-      New run
-    </Button>
-  );
-
   return (
     <>
       <PageHeader
         actions={
-          <>
-            {newRun}
-            <Menu
-              align="end"
-              items={[
-                {
-                  label: "Rename…",
-                  icon: Pencil,
-                  disabled: !canChange,
-                  onSelect: () => ui.open({ kind: "renameWorkspace", workspaceId }),
-                },
-                ...folderItems(cos, workspace.path),
-                "separator",
-                {
-                  label: "Remove workspace…",
-                  icon: Trash2,
-                  danger: true,
-                  disabled: !canChange,
-                  onSelect: () => ui.open({ kind: "removeWorkspace", workspaceId }),
-                },
-              ]}
-              trigger={(props) => (
-                <button
-                  type="button"
-                  aria-label="Workspace actions"
-                  {...props}
-                  className="flex size-8 items-center justify-center rounded-lg text-ink-2 hover:bg-subtle hover:text-ink"
-                >
-                  <MoreHorizontal className="size-4" strokeWidth={1.8} />
-                </button>
-              )}
-            />
-          </>
+          <Menu
+            align="end"
+            items={[
+              {
+                label: "Rename…",
+                icon: Pencil,
+                disabled: !canChange,
+                onSelect: () => ui.open({ kind: "renameWorkspace", workspaceId }),
+              },
+              ...folderItems(cos, workspace.path),
+              "separator",
+              {
+                label: "Remove workspace…",
+                icon: Trash2,
+                danger: true,
+                disabled: !canChange,
+                onSelect: () => ui.open({ kind: "removeWorkspace", workspaceId }),
+              },
+            ]}
+            trigger={(props) => (
+              <button
+                type="button"
+                aria-label="Workspace actions"
+                {...props}
+                className="flex size-8 items-center justify-center rounded-lg text-ink-2 hover:bg-subtle hover:text-ink"
+              >
+                <MoreHorizontal className="size-4" strokeWidth={1.8} />
+              </button>
+            )}
+          />
         }
       >
         {project ? (
@@ -130,7 +103,7 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
           {agents.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-line-strong">
               <EmptyState icon={Bot} title="No agents here yet">
-                Type below to start one. Agents a run starts are on its page.
+                Type below to start one.
               </EmptyState>
             </div>
           ) : (
@@ -159,80 +132,7 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
             Starts Claude Code in this worktree. Return sends, Shift-Return adds a line.
           </p>
         </section>
-
-        {active ? (
-          <section className="mb-9">
-            <SectionTitle>Current run</SectionTitle>
-            <RunCard run={active} />
-          </section>
-        ) : null}
-
-        {runsSupported ? (
-          <section>
-            <SectionTitle
-              actions={
-                active ? null : (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    icon={Play}
-                    disabled={!canChange}
-                    onClick={() => ui.open({ kind: "newRun", workspaceId })}
-                  >
-                    Start a run
-                  </Button>
-                )
-              }
-            >
-              Past runs
-            </SectionTitle>
-            {past.length === 0 ? (
-              <p className="px-1 text-[13px] text-ink-3">
-                A run hands a goal to a chief, who plans tasks and runs workers on them.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {past.map((run) => (
-                  <RunCard key={run.id} run={run} compact />
-                ))}
-              </div>
-            )}
-          </section>
-        ) : null}
       </PageBody>
     </>
-  );
-}
-
-export function RunCard({ run, compact }: { run: Run; compact?: boolean }) {
-  const { ui } = useApp();
-  const now = useNow();
-  const label = runLabel(run.state);
-  const counts = run.counts;
-  return (
-    <button
-      type="button"
-      onClick={() => ui.navigate({ kind: "run", id: run.id })}
-      className="flex w-full flex-col gap-2 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-card transition-colors hover:border-line-strong hover:bg-raised"
-    >
-      <div className="flex w-full items-center gap-2.5">
-        <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{run.goal}</span>
-        <StateBadge label={label} />
-      </div>
-      {!compact && counts && counts.total > 0 ? (
-        <div className="h-1 w-full overflow-hidden rounded-full bg-subtle">
-          <div
-            className={`h-full rounded-full ${toneClasses[label.tone].edge}`}
-            style={{ width: `${Math.round(progress(counts) * 100)}%` }}
-          />
-        </div>
-      ) : null}
-      <div className="flex w-full items-center gap-2 text-[12px] text-ink-3">
-        <span className="truncate">
-          {counts && counts.total > 0 ? countsSummary(counts) : (run.reason ?? "No tasks yet")}
-        </span>
-        <span className="ml-auto shrink-0">{relativeTime(run.updatedAt, now)}</span>
-      </div>
-    </button>
   );
 }

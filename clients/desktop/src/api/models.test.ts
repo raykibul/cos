@@ -3,12 +3,9 @@ import { page } from "./decode";
 import {
   decodeAgent,
   decodeApproval,
-  decodeBoard,
   decodeEvent,
   decodeProject,
-  decodeRun,
   decodeStatus,
-  decodeTask,
   decodeWorkspace,
   cityOf,
   projectSlug,
@@ -35,7 +32,7 @@ describe("lenient decoding", () => {
     expect(agent).toMatchObject({
       state: "starting",
       role: "user",
-      runId: null,
+      spawnedBy: null,
       model: null,
       userSettings: true,
       cwd: null,
@@ -43,9 +40,9 @@ describe("lenient decoding", () => {
   });
 
   it("reads ids sent as strings", () => {
-    const agent = decodeAgent({ id: "5", workspace_id: "2", run_id: "9" });
+    const agent = decodeAgent({ id: "5", workspace_id: "2", spawned_by: "9" });
     expect(agent.id).toBe(5);
-    expect(agent.runId).toBe(9);
+    expect(agent.spawnedBy).toBe(9);
   });
 
   it("throws only when a required field is missing", () => {
@@ -66,9 +63,9 @@ describe("lenient decoding", () => {
     expect(page([{ id: 1, workspace_id: 1 }], "agents", decodeAgent)).toHaveLength(1);
   });
 
-  it("decodes approvals from a daemon without routes", () => {
+  it("decodes approvals from a daemon without the approvals policy", () => {
     const approval = decodeApproval({ id: 1, agent_id: 2, tool_name: "Write" });
-    expect(approval).toMatchObject({ route: null, tier: null, reason: null, state: "pending" });
+    expect(approval).toMatchObject({ tier: null, reason: null, state: "pending" });
     expect(approval.summary).toBe("Write");
   });
 
@@ -82,7 +79,6 @@ describe("lenient decoding", () => {
     expect(status.startedAt).toBe(Date.UTC(2026, 0, 2, 3, 4, 5));
     const event = decodeEvent({ seq: 1, ts: "2026-01-02T03:04:05Z", kind: "x", data: null });
     expect(event.data).toEqual({});
-    expect(event.runId).toBeNull();
   });
 
   it("decodes projects with their workspaces, skipping broken ones", () => {
@@ -202,57 +198,5 @@ describe("staff decoding", () => {
     });
     expect(items.map((i) => i.text)).toEqual(["npm install", "Done."]);
     expect(items[1]!.key).toBe("1");
-  });
-});
-
-describe("lenient decoding of runs", () => {
-  it("counts a run's tasks from its tasks object", () => {
-    const run = decodeRun({
-      id: 1,
-      workspace_id: 1,
-      goal: "G",
-      state: "running",
-      tasks: { merged: 2, running: 1 },
-    });
-    expect(run.counts).toMatchObject({ merged: 2, running: 1, total: 3 });
-  });
-
-  it("decodes a board, sorting tasks and surviving a broken workspace", () => {
-    const board = decodeBoard({
-      run: { id: 1, workspace_id: 1, goal: "G", state: "running" },
-      workspace: { broken: true },
-      tasks: [
-        { id: 11, title: "B", state: "ready", position: 1 },
-        { id: 10, title: "A", state: "merged", position: 0, description: "old name" },
-      ],
-    });
-    expect(board.workspace).toBeNull();
-    expect(board.tasks.map((t) => t.id)).toEqual([10, 11]);
-    expect(board.tasks[0]!.instructions).toBe("old name");
-    expect(board.counts).toMatchObject({ merged: 1, ready: 1, total: 2 });
-  });
-
-  it("decodes task checks and reviews", () => {
-    const task = decodeTask({
-      id: 1,
-      title: "T",
-      state: "review",
-      checks: {
-        scope: { ok: false, out_of_scope: ["a.rs"] },
-        tests: { status: "failed", exit_code: 1 },
-        commits_ahead: 2,
-      },
-      review: { verdict: "changes", notes: "add a test", agent_id: 4 },
-      depends_on: [3, "4"],
-    });
-    expect(task.checks?.scope).toMatchObject({
-      ok: false,
-      outOfScope: ["a.rs"],
-      wrongBranch: false,
-    });
-    expect(task.checks?.tests).toMatchObject({ status: "failed", exitCode: 1 });
-    expect(task.checks?.commitsAhead).toBe(2);
-    expect(task.review).toEqual({ verdict: "changes", notes: "add a test", agentId: 4 });
-    expect(task.dependsOn).toEqual([3, 4]);
   });
 });
