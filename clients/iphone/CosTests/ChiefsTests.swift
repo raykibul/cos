@@ -25,6 +25,15 @@ import Testing
         #expect(!chiefs[2].hasStarted)
     }
 
+    @Test func aWorkingChiefIsTyping() {
+        let project = Project(id: 1, name: "atlas", root: "/Users/me/atlas", baseBranch: "main", hasOrigin: true, createdAt: Date())
+        var chief = ChiefSummary(project: project, staff: Staff(projectId: 1, agentId: 40, state: .working, workingAgents: 2), waiting: 0, unread: false)
+        #expect(chief.preview == "typing… · 2 sessions working")
+        #expect(chief.previewIsActivity)
+        chief.staff?.workingAgents = 0
+        #expect(chief.preview == "typing…")
+    }
+
     @Test func filtersByWhatNeedsYouAndWhatWorks() async {
         let session = await liveSession()
         defer { session.stop() }

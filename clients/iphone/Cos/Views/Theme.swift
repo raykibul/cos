@@ -24,6 +24,8 @@ enum Palette {
     static let wallDot = Color("WallDot")
     /// Your own bubbles.
     static let outgoing = Color("Outgoing")
+    /// Two blue ticks: Claude has seen your message.
+    static let seen = Color("Seen")
 }
 
 /// A state's words, symbol and colour.

@@ -30,11 +30,13 @@ struct ChiefSummary: Identifiable, Equatable {
         return state == .working || state == .starting
     }
 
-    /// The line under its name: "2 sessions working…" while its agents
-    /// work (as a chat app shows "typing…"), else what it last said.
+    /// The line under its name: "typing…" while the chief works, as a chat
+    /// app shows it, "2 sessions working…" while its agents work, else what
+    /// it last said.
     var preview: String {
-        if working > 0 { return working == 1 ? "1 session working…" : "\(working) sessions working…" }
-        if isTyping { return "working…" }
+        let sessions = working == 1 ? "1 session working" : "\(working) sessions working"
+        if isTyping { return working > 0 ? "typing… · \(sessions)" : "typing…" }
+        if working > 0 { return sessions + "…" }
         guard hasStarted else { return "Not started · a message starts it" }
         if let message = agent?.lastMessage.map(Self.plain), !message.isEmpty { return message }
         return staff?.stateLabel ?? ""
