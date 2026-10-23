@@ -19,6 +19,11 @@ enum Palette {
     static let purple = Color("TonePurple")
     static let teal = Color("ToneTeal")
     static let amber = Color("ToneAmber")
+    /// Behind a chat's bubbles.
+    static let wall = Color("Wall")
+    static let wallDot = Color("WallDot")
+    /// Your own bubbles.
+    static let outgoing = Color("Outgoing")
 }
 
 /// A state's words, symbol and colour.
@@ -197,4 +202,79 @@ func shortAgo(_ ms: Int64, now: Date = Date()) -> String {
 
 func shortAgo(_ date: Date, now: Date = Date()) -> String {
     shortAgo(Int64(date.timeIntervalSince1970 * 1000), now: now)
+}
+
+/// A project's round avatar: its initial on a colour picked from its name,
+/// so a project keeps its colour across launches and hosts.
+struct ProjectAvatar: View {
+    var name: String
+    var size: CGFloat = 52
+
+    var body: some View {
+        Text(initial)
+            .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(color, in: Circle())
+            .accessibilityHidden(true)
+    }
+
+    private var initial: String {
+        name.first(where: \.isLetter).map { String($0).uppercased() } ?? "#"
+    }
+
+    private var color: Color {
+        let colors = [Palette.blue, Palette.green, Palette.purple, Palette.teal, Palette.amber, Palette.red]
+        // A stable hash: `hashValue` changes from launch to launch.
+        let sum = name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+        return colors[sum % colors.count]
+    }
+}
+
+/// A chat's wallpaper: the warm wall with a quiet grid of dots.
+struct ChatWallpaper: View {
+    var body: some View {
+        Canvas { context, size in
+            let step: CGFloat = 20
+            var y: CGFloat = step / 2
+            while y < size.height {
+                var x: CGFloat = step / 2
+                while x < size.width {
+                    context.fill(Path(ellipseIn: CGRect(x: x - 1.3, y: y - 1.3, width: 2.6, height: 2.6)), with: .color(Palette.wallDot))
+                    x += step
+                }
+                y += step
+            }
+        }
+        .background(Palette.wall)
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
+/// A count in a capsule: orange for what waits on you.
+struct CountBadge: View {
+    var count: Int
+    var color: Color = Palette.claude
+
+    var body: some View {
+        Text("\(count)")
+            .font(.caption.weight(.bold).monospacedDigit())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 21, minHeight: 21)
+            .background(color, in: Capsule())
+    }
+}
+
+/// "18:53" today, "Yesterday", the weekday this week, else the date: how a
+/// chat list dates its rows.
+func chatTime(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+    let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+    switch days {
+    case ...0: return date.formatted(date: .omitted, time: .shortened)
+    case 1: return "Yesterday"
+    case 2..<7: return date.formatted(.dateTime.weekday(.abbreviated))
+    default: return date.formatted(date: .numeric, time: .omitted)
+    }
 }

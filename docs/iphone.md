@@ -45,19 +45,27 @@ Any other error code is shown with its daemon message: `RefusalCode` is an open 
 
 ## Screens
 
-Four tabs. The host chip at the top left switches hosts from any of them.
+Three tabs: **Chiefs** (the home tab, with a badge of what waits on you), **Runs** and **Hosts**. The host chip at the top left switches hosts from Chiefs and Runs. The layout follows a messaging app: one chat per project's Chief of Staff, and a project's workspaces and sessions one menu away.
 
-- **Waiting on you** (the home tab, with a badge): approvals routed to you (`route` isn't `chief`) with the command, the policy's reason, Deny and Allow; questions from run chiefs with their choices and a free answer; plans to approve; agents at Claude's trust dialog (Trust folder); agents on Claude's login screen (`needs_login`, with `cos agent attach <id>` to log in on the host). Each card opens its agent or run.
-- **Projects:** each project with its Chief of Staff (★, its state, how many of the agents it started are working, and how many wait on you) and its workspaces by title or city, with their branch, agents and run state.
-  - **Chief of Staff:** a chat read from its transcript (`GET /v1/agents/{id}/transcript?after=N`). Your messages are bubbles, its replies are markdown, tool calls are one-line rows (the `cos` tools in words: "Started an agent"), and a `[cos · N updates]` wakeup is an "N updates from agents" row that expands. The composer posts to `/staff/message`, which starts the chief if needed; a sent message shows as pending until the transcript has it, and a failed one offers Retry and Discard. Agents it started that wait on you sit above the composer with Allow and Deny. It reads again on each `agent.transcript` event for its agent. An unstarted chief shows three suggestions.
-  - **Workspace:** the branch and base, its agents (state, role, last message) and its runs, and New run.
+- **Chiefs:** every project's Chief of Staff as a chat row, the most recently active first; chiefs that never started go last. Each row has the project's avatar (its initial on a colour picked from its name), the time of its last activity, and a preview: "2 sessions working…" while the agents it started work (as a chat app shows "typing…"), else what it last said as one plain line, or "Not started". An orange count is what waits on you in that project; an orange dot means it did something since you last opened its chat on this phone (`ReadMarks`, kept per host in `UserDefaults`; a chat never opened here isn't marked).
+  - Above the rows: chips for All, Needs you and Working, search by name or preview, and a pinned **Waiting on you** row with the count and a summary ("1 approval · 1 question · 2 logins").
+  - Swipe a row (or long-press it) for its workspaces and sessions, or the chief's screen.
+- **Waiting on you** (the pinned row): approvals routed to you (`route` isn't `chief`) with the command, the policy's reason, Deny and Allow; questions from run chiefs with their choices and a free answer; plans to approve; agents at Claude's trust dialog (Trust folder); agents on Claude's login screen (`needs_login`, with `cos agent attach <id>` to log in on the host). Each card opens its agent or run.
+- **Chief of Staff chat:** read from its transcript (`GET /v1/agents/{id}/transcript?after=N`) over a dotted wallpaper. Your messages are bubbles on the right, its replies are markdown bubbles on the left, each with its time; tool calls are slim rows (the `cos` tools in words: "Started an agent"); a `[cos · N updates]` wakeup is an "N updates from sessions" chip that expands. Agents it started that wait on you come last, as messages with their buttons in them: Allow and Deny for an approval, Trust folder for the trust dialog, and Open session. The composer posts to `/staff/message`, which starts the chief if needed; a sent message shows as pending until the transcript has it, and a failed one offers Retry and Discard. It reads again on each `agent.transcript` event for its agent. An unstarted chief shows three suggestions.
+  - The title (avatar, name, "2 sessions working…" or its state) opens its info page. The terminal button opens the chief's screen.
+  - The **⋯ menu:** Workspaces, Sessions and Runs (each with a count, opening the info page on that tab), the chief's screen, and Stop Chief of Staff (with a confirmation; its sessions keep running and your next message starts it again).
+- **Chief info:** the project's avatar, name, root and the chief's state and model; Chat, Screen and New run; then a segmented control:
+  - **Workspaces:** each workspace, newest first, as a section: the workspace (name, branch, base, what waits on you) with its sessions under it and its active run.
+  - **Sessions:** the project's agents, what needs you first.
+  - **Runs:** the project's runs, and New run.
+- **Workspace:** the branch and base, its agents (state, role, last message) and its runs, and New run.
 - **Runs:** active and finished runs with progress and blocked counts, and New run (goal and workspace).
   - **Run:** state, goal, place and preset; Approve plan when a plan waits; the chief's questions; the board (or the plan), each task with its state, dependencies, failure, and on tap its instructions, files, tests and review; the report as markdown; Cancel run, with a confirmation.
-- **Agents** (from any list): state, title, project and workspace, model, "Started by the Chief of Staff"; the approval it waits on (Allow, Deny), the trust dialog or the login hint; the last message as markdown; Screen, a plain-text snapshot of its terminal (`GET /v1/agents/{id}/screen`) loaded on request; Stop; and a message box that types into the agent, resuming it first when it has exited.
+- **Agents** (sessions, from any list): state, title, project and workspace, model, "Started by the Chief of Staff"; the approval it waits on (Allow, Deny), the trust dialog or the login hint; the last message as markdown; Screen, a plain-text snapshot of its terminal (`GET /v1/agents/{id}/screen`) loaded on request (or at once, from a chief's Screen); Stop; and a message box that types into the agent, resuming it first when it has exited.
 
 There's no live terminal and no environment editing on the phone. Markdown is rendered by blocks (headings, paragraphs, lists, quotes, code, rules) with inline styles from `AttributedString`.
 
-The look follows the desktop app: warm neutral pages, Claude orange (#d97757) only for actions and what waits on you, amber ★ for chiefs, SF Symbols, light and dark.
+The look follows the desktop app: warm neutral pages, Claude orange (#d97757) only for actions and what waits on you, SF Symbols, light and dark. Chats add a warm wallpaper (`Wall`, `WallDot`) and a light orange for your bubbles (`Outgoing`).
 
 ## Contract
 

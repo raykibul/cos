@@ -35,6 +35,12 @@ struct FakeData {
                     workspace(8, 2, "harbor", "kyoto", nil, .origin, 60_000),
                 ]
             ),
+            Project(
+                id: 3, name: "opal", root: "/Users/me/code/opal", baseBranch: "main", hasOrigin: true, createdAt: date(700_000),
+                workspaces: [
+                    workspace(10, 3, "opal", "oslo", "Nightly dependency check", .origin, 50_000),
+                ]
+            ),
         ]
     }
 
@@ -42,7 +48,15 @@ struct FakeData {
 
     var agents: [Agent] {
         [
-            Agent(id: 40, workspaceId: 901, role: .staff, title: "Chief of Staff", sessionId: "c0ffee40", pid: 51040, state: .idle, model: "sonnet", startedMs: ago(7_200), lastActivityMs: ago(240)),
+            Agent(
+                id: 40, workspaceId: 901, role: .staff, title: "Chief of Staff", sessionId: "c0ffee40", pid: 51040, state: .idle, model: "sonnet",
+                startedMs: ago(7_200), lastActivityMs: ago(240),
+                lastMessage: "Good news from **lisbon**: the timeout was a unit mix-up. The fix is in and the full suite is running.\n\n**porto** is still waiting on your approval for `left-pad`."
+            ),
+            Agent(
+                id: 41, workspaceId: 903, role: .staff, title: "Chief of Staff", state: .idle, model: "haiku", startedMs: ago(60_000), lastActivityMs: ago(30_000),
+                lastMessage: "The nightly dependency check passed. Nothing to update."
+            ),
             Agent(
                 id: 7, workspaceId: 3, title: "Fix the session timeout", pid: 51007, state: .working, model: "sonnet", startedMs: ago(1_500),
                 lastActivityMs: ago(20), lastMessage: "Found it: `SESSION_TTL` was in minutes where the code expected hours. Fixed, and running the whole suite now.",
@@ -154,6 +168,7 @@ struct FakeData {
         [
             1: Staff(projectId: 1, agentId: 40, state: .idle, model: "sonnet", brief: "Ship 0.2: the session fix, left-pad, release notes.", worktree: "/Users/me/.cos/worktrees/atlas-1/chief", branch: "atlas/chief", workingAgents: 1, waitingOnYou: 1),
             2: Staff(projectId: 2),
+            3: Staff(projectId: 3, agentId: 41, state: .idle, model: "haiku", brief: "Keep dependencies current.", branch: "opal/chief"),
         ]
     }
 

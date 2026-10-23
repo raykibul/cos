@@ -51,6 +51,9 @@ final class HostSession {
     /// Bumped whenever a run, its board or its report may have changed.
     private(set) var runTick = 0
 
+    /// When you last opened each chief's chat, for the chiefs list.
+    let readMarks: ReadMarks
+
     @ObservationIgnored private let notifications: any Notifications
     @ObservationIgnored private let backoff: Backoff
     @ObservationIgnored private var follow: Task<Void, Never>?
@@ -65,9 +68,13 @@ final class HostSession {
         case projects, agents, approvals, runs, questions, staffs
     }
 
-    init(host: Host, service: any CosService, notifications: any Notifications = NoNotifications(), backoff: Backoff = Backoff()) {
+    init(
+        host: Host, service: any CosService, notifications: any Notifications = NoNotifications(), backoff: Backoff = Backoff(),
+        readMarks: ReadMarks? = nil
+    ) {
         self.host = host
         self.service = service
+        self.readMarks = readMarks ?? ReadMarks(hostId: host.id)
         self.notifications = notifications
         self.backoff = backoff
         for kind in Refresh.allCases {
