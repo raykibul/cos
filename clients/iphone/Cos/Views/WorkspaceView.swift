@@ -1,16 +1,14 @@
 import CosKit
 import SwiftUI
 
-/// A workspace: its branch, its agents (state and last message) and its runs.
+/// A workspace: its branch and its agents (state and last message).
 struct WorkspaceView: View {
     var session: HostSession
     var workspaceId: Int
-    @State private var newRun = false
 
     var body: some View {
         let workspace = session.workspace(id: workspaceId)
         let agents = session.agents(inWorkspace: workspaceId)
-        let runs = session.runs(inWorkspace: workspaceId)
         List {
             if let workspace {
                 Section {
@@ -39,32 +37,10 @@ struct WorkspaceView: View {
                     }
                 }
             }
-
-            Section("Runs") {
-                if runs.isEmpty {
-                    Text("No runs in this workspace.")
-                        .font(.subheadline)
-                        .foregroundStyle(Palette.ink3)
-                }
-                ForEach(runs) { run in
-                    NavigationLink(value: Route.run(id: run.id)) {
-                        RunRow(run: run, place: nil)
-                    }
-                }
-                Button {
-                    newRun = true
-                } label: {
-                    Label("New run", systemImage: "plus")
-                }
-                .disabled(runs.contains { !$0.state.isFinished })
-            }
         }
         .pageBackground()
         .refreshable { await session.refresh() }
         .navigationTitle(workspace?.displayName ?? "Workspace")
-        .sheet(isPresented: $newRun) {
-            NewRunSheet(session: session, workspaceId: workspaceId)
-        }
     }
 }
 
@@ -97,76 +73,7 @@ struct AgentRow: View {
     }
 
     private var roleOrState: String {
-        if agent.role == .chief { return "chief · \(agent.state.style.label.lowercased())" }
-        if agent.role == .worker { return "worker · \(agent.state.style.label.lowercased())" }
-        if agent.role == .reviewer { return "reviewer · \(agent.state.style.label.lowercased())" }
+        if agent.role == .staff { return "chief · \(agent.state.style.label.lowercased())" }
         return agent.state.style.label
-    }
-}
-
-/// `POST /v1/runs`: a goal in a workspace.
-struct NewRunSheet: View {
-    var session: HostSession
-    var workspaceId: Int?
-    @Environment(\.dismiss) private var dismiss
-    @Environment(Navigator.self) private var navigator
-    @State private var goal = ""
-    @State private var chosen: Int?
-    @State private var error: String?
-    @State private var busy = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("What should get done?", text: $goal, axis: .vertical)
-                        .lineLimit(3...8)
-                } header: {
-                    Text("Goal")
-                } footer: {
-                    Text("A chief plans it as tasks and asks you to approve the plan before workers start.")
-                }
-                if workspaceId == nil {
-                    Section("Workspace") {
-                        Picker("Workspace", selection: $chosen) {
-                            Text("Choose…").tag(Int?.none)
-                            ForEach(session.projects) { project in
-                                ForEach(project.workspaces) { workspace in
-                                    Text("\(project.name) · \(workspace.displayName)").tag(Int?.some(workspace.id))
-                                }
-                            }
-                        }
-                        .pickerStyle(.navigationLink)
-                    }
-                }
-                if let error {
-                    Section { Text(error).foregroundStyle(Palette.red) }
-                }
-            }
-            .navigationTitle("New run")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Start", action: start)
-                        .disabled(busy || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (workspaceId ?? chosen) == nil)
-                }
-            }
-        }
-    }
-
-    private func start() {
-        guard let workspace = workspaceId ?? chosen else { return }
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                let run = try await session.startRun(workspaceId: workspace, goal: goal)
-                dismiss()
-                navigator.open(.run(id: run.id))
-            } catch {
-                self.error = error.localizedDescription
-            }
-        }
     }
 }

@@ -130,42 +130,6 @@ import Testing
 
 @MainActor
 @Suite struct DetailTests {
-    @Test func aRunLoadsItsBoardAndReport() async {
-        let session = await liveSession()
-        defer { session.stop() }
-        let detail = RunDetail(runId: 2, session: session)
-
-        await detail.load()
-
-        #expect(detail.board?.tasks.count == 2)
-        #expect(detail.report?.contains("Release notes for 0.2") == true)
-    }
-
-    @Test func approvingAndCancellingARun() async {
-        let session = await liveSession()
-        defer { session.stop() }
-        let detail = RunDetail(runId: 4, session: session)
-        await detail.load()
-        #expect(detail.run?.state == .awaitingPlanApproval)
-
-        await detail.approvePlan()
-        #expect(detail.run?.state == .running)
-        #expect(detail.error == nil)
-
-        await detail.approvePlan()
-        #expect(detail.error != nil, "a second approval is a conflict, shown")
-
-        await detail.cancel()
-        #expect(detail.run?.state == .cancelled)
-    }
-
-    @Test func aRunsQuestionsComeFromTheSession() async {
-        let session = await liveSession()
-        defer { session.stop() }
-        #expect(RunDetail(runId: 3, session: session).questions.map(\.id) == [5])
-        #expect(RunDetail(runId: 4, session: session).questions.isEmpty)
-    }
-
     @Test func messagingAnExitedAgentResumesItFirst() async {
         let fake = FakeCos(replyDelay: nil)
         let session = await liveSession(fake)

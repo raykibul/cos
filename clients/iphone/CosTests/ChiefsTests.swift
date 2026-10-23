@@ -13,9 +13,8 @@ import Testing
 
         // harbor's chief never started, so it goes last.
         #expect(chiefs.map(\.project.name) == ["atlas", "opal", "harbor"])
-        // atlas: the approval, the run's question and the plan; harbor: a
-        // trust dialog and a login.
-        #expect(chiefs.map(\.waiting) == [3, 0, 2])
+        // atlas: the approval; harbor: a trust dialog and a login.
+        #expect(chiefs.map(\.waiting) == [1, 0, 2])
         #expect(chiefs.map(\.waiting).reduce(0, +) == session.waitingCount)
         #expect(chiefs[0].preview == "1 session working…")
         #expect(chiefs[0].previewIsActivity)
@@ -52,13 +51,11 @@ import Testing
         let projects = Dictionary(uniqueKeysWithValues: session.waiting.map { ($0.id, session.projectId(of: $0)) })
 
         #expect(projects["approval-12"] == 1)
-        #expect(projects["question-5"] == 1)
-        #expect(projects["plan-4"] == 1)
         #expect(projects["trust-12"] == 2)
         #expect(projects["login-11"] == 2)
     }
 
-    @Test func aProjectsSessionsAndRuns() async {
+    @Test func aProjectsSessions() async {
         let session = await liveSession()
         defer { session.stop() }
 
@@ -66,8 +63,6 @@ import Testing
         #expect(Set(sessions).isSuperset(of: [7, 8, 13, 14]))
         #expect(!sessions.contains(40))
         #expect(!sessions.contains(11))
-        #expect(Set(session.runs(inProject: 1).map(\.id)) == [2, 3, 4])
-        #expect(session.runs(inProject: 2).map(\.id) == [1])
         #expect(session.agents(inProject: 99).isEmpty)
     }
 
@@ -107,7 +102,7 @@ import Testing
         #expect(ChiefSummary.plain(markdown) == "Done porto is waiting on left-pad. one more thing")
     }
 
-    @Test func routesOpenInTheirTabs() {
+    @Test func routesOpenInTheChiefsTab() {
         let navigator = Navigator()
 
         navigator.open(.chief(projectId: 1))
@@ -115,9 +110,10 @@ import Testing
         #expect(navigator.tab == .chiefs)
         #expect(navigator.chiefs == [.chief(projectId: 1), .chiefInfo(projectId: 1, tab: .sessions)])
 
-        navigator.open(.run(id: 3))
-        #expect(navigator.tab == .runs)
-        #expect(navigator.runs == [.run(id: 3)])
+        navigator.tab = .hosts
+        navigator.open(.agent(id: 7))
+        #expect(navigator.tab == .chiefs)
+        #expect(navigator.chiefs.last == .agent(id: 7))
 
         navigator.apply(screen: "waiting")
         #expect(navigator.tab == .chiefs)

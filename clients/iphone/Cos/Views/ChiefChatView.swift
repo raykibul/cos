@@ -5,7 +5,7 @@ import SwiftUI
 /// messages in bubbles on the right, its replies (markdown) on the left,
 /// tool calls as slim rows, news from its sessions as an "N updates" chip,
 /// and what its sessions need from you as messages with buttons in them.
-/// The ⋯ menu leads to its workspaces, sessions and runs. Live from
+/// The ⋯ menu leads to its workspaces and sessions. Live from
 /// `agent.transcript`.
 struct ChiefChatView: View {
     var session: HostSession
@@ -116,13 +116,12 @@ struct ChiefChatView: View {
         }
     }
 
-    /// The three dots: where its workspaces, sessions and runs are.
+    /// The three dots: where its workspaces and sessions are.
     private var menu: some View {
         let projectId = chat.projectId
         let sessions = session.agents(inProject: projectId)
         let working = sessions.filter { $0.state == .working || $0.state == .starting }.count
         let needYou = chat.agentsWaiting.count
-        let runs = session.runs(inProject: projectId)
         return Menu {
             Button {
                 navigator.open(.chiefInfo(projectId: projectId, tab: .workspaces))
@@ -135,12 +134,6 @@ struct ChiefChatView: View {
             } label: {
                 Label("Sessions", systemImage: "person.2")
                 Text([count(working, "working", "working"), needYou > 0 ? "\(needYou) need you" : nil].compactMap { $0 }.joined(separator: " · "))
-            }
-            Button {
-                navigator.open(.chiefInfo(projectId: projectId, tab: .runs))
-            } label: {
-                Label("Runs", systemImage: "list.bullet.clipboard")
-                Text(count(runs.filter { !$0.state.isFinished }.count, "active", "active"))
             }
             if let id = chat.chiefAgentId {
                 Button("Chief's terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: id)) }

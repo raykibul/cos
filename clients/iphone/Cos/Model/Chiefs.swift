@@ -8,8 +8,8 @@ struct ChiefSummary: Identifiable, Equatable {
     var staff: Staff?
     /// Its agent, once it has started.
     var agent: Agent?
-    /// What in this project waits on you: approvals, questions, plans,
-    /// trust dialogs and logins.
+    /// What in this project waits on you: approvals, trust dialogs and
+    /// logins.
     var waiting: Int
     /// Something happened since you last opened its chat.
     var unread: Bool
@@ -123,12 +123,6 @@ extension HostSession {
         case .approval(let approval):
             let workspace = approval.workspaceId ?? self.agent(id: approval.agentId)?.workspaceId
             return project(ofWorkspace: workspace)?.id ?? staffProject(ofAgent: approval.agentId)
-        case .question(let question):
-            if let runId = question.runId, let asking = self.run(id: runId) { return project(ofWorkspace: asking.workspaceId)?.id }
-            guard let agentId = question.agentId else { return nil }
-            return project(ofWorkspace: self.agent(id: agentId)?.workspaceId)?.id
-        case .plan(let run):
-            return project(ofWorkspace: run.workspaceId)?.id
         case .trust(let agent), .login(let agent):
             return project(ofWorkspace: agent.workspaceId)?.id ?? staffProject(ofAgent: agent.id)
         }
@@ -158,13 +152,6 @@ extension HostSession {
         return agents.filter { agent in
             agent.role != .staff && agent.workspaceId.map(workspaces.contains) == true
         }
-    }
-
-    /// A project's runs, newest first.
-    func runs(inProject id: Int) -> [Run] {
-        guard let project = project(id: id) else { return [] }
-        let workspaces = Set(project.workspaces.map(\.id))
-        return runs.filter { workspaces.contains($0.workspaceId) }
     }
 }
 

@@ -74,8 +74,10 @@ struct FakeData {
                 id: 14, workspaceId: 4, title: "Spike: streaming tokenizer", state: .exited, startedMs: ago(30_000), exitedMs: ago(26_000), exitCode: 0,
                 lastMessage: "The streaming reader halves peak memory on the 2 GB fixture. Notes are in docs/tokenizer.md."
             ),
-            Agent(id: 9, workspaceId: 5, runId: "3", role: .chief, title: "Chief · Faster search", state: .idle, model: "sonnet", startedMs: ago(5_000), lastActivityMs: ago(400)),
-            Agent(id: 10, workspaceId: 5, runId: "3", taskId: 21, role: .worker, title: "Build the trigram index", state: .working, model: "sonnet", startedMs: ago(1_200), lastActivityMs: ago(15), cwd: "/Users/me/.cos/tasks/madrid-5/t21-build-the-trigram-index"),
+            Agent(
+                id: 10, workspaceId: 5, title: "Build the trigram index", pid: 51010, state: .working, model: "sonnet", startedMs: ago(1_200),
+                lastActivityMs: ago(15)
+            ),
             Agent(
                 id: 11, workspaceId: 8, title: "Upgrade the payments SDK", state: .needsLogin, startedMs: ago(600), lastActivityMs: ago(600),
                 envNames: ["CLAUDE_CONFIG_DIR"]
@@ -88,77 +90,9 @@ struct FakeData {
         [
             Approval(
                 id: 12, agentId: 8, workspaceId: 4, toolName: "Bash", toolInput: .object(["command": .string("npm install left-pad --save")]),
-                summary: "Bash npm install left-pad --save", createdMs: ago(90), tier: .askUser, route: .user,
+                summary: "Bash npm install left-pad --save", createdMs: ago(90), tier: .askUser,
                 reason: "changes or downloads dependencies (npm install)"
             ),
-            Approval(
-                id: 13, agentId: 10, workspaceId: 5, toolName: "Bash", toolInput: .object(["command": .string("cargo add fst")]),
-                summary: "Bash cargo add fst", createdMs: ago(30), tier: .chief, route: .chief, reason: "installs a package into the task's worktree"
-            ),
-        ]
-    }
-
-    // MARK: Runs
-
-    var runs: [Run] {
-        [
-            Run(id: 3, workspaceId: 5, goal: "Speed up search with a trigram index", state: .running, chiefAgentId: 9, createdAt: date(5_000), updatedAt: date(60)),
-            Run(id: 4, workspaceId: 4, goal: "Stream the tokenizer instead of reading whole files", state: .awaitingPlanApproval, createdAt: date(2_400), updatedAt: date(300)),
-            Run(id: 2, workspaceId: 3, goal: "Write the 0.2 release notes", state: .done, preset: .strict, reportPath: "runs/2/report.md", createdAt: date(80_000), updatedAt: date(76_000)),
-            Run(id: 1, workspaceId: 9, goal: "Try a Rust rewrite of the exporter", state: .cancelled, reason: "Not worth it before the billing launch.", createdAt: date(200_000), updatedAt: date(190_000)),
-        ]
-    }
-
-    var tasks: [RunTask] {
-        [
-            RunTask(id: 20, runId: 3, position: 0, title: "Profile the slow queries", instructions: "Find the queries over 200 ms.", files: ["bench/**"], state: .merged, agentId: 15, checks: TaskChecks(scope: ScopeCheck(ok: true), tests: TestCheck(status: "passed")), review: TaskReview(verdict: "approve")),
-            RunTask(id: 21, runId: 3, position: 1, title: "Build the trigram index", instructions: "Index titles and bodies.", files: ["src/search/index.rs"], testCommand: "cargo test index", dependsOn: [20], state: .running, agentId: 10),
-            RunTask(id: 22, runId: 3, position: 2, title: "Cache the tokenized queries", instructions: "An LRU of 1,000.", files: ["src/search/cache.rs"], dependsOn: [20], state: .review, agentId: 16),
-            RunTask(id: 23, runId: 3, position: 3, title: "Highlight matches", instructions: "Bold the matched trigrams.", files: ["web/src/results.tsx"], dependsOn: [20], state: .blocked, retries: 1, lastFailure: "tests failed: 2 of 48 (results.test.tsx)"),
-            RunTask(id: 24, runId: 3, position: 4, title: "Wire it into the search API", instructions: "Behind a flag.", files: ["src/api/search.rs"], dependsOn: [21, 22], state: .proposed),
-            RunTask(id: 30, runId: 4, position: 0, title: "Add a streaming reader", instructions: "Read 64 KiB at a time.", files: ["src/io/reader.rs"], state: .proposed),
-            RunTask(id: 31, runId: 4, position: 1, title: "Port the tokenizer to the reader", instructions: "Keep the public API.", files: ["src/tokenizer/**"], dependsOn: [30], state: .proposed),
-            RunTask(id: 32, runId: 4, position: 2, title: "Document the memory limits", instructions: "In docs/tokenizer.md.", files: ["docs/tokenizer.md"], state: .proposed),
-            RunTask(id: 10, runId: 2, position: 0, title: "Collect the merged changes", files: ["CHANGELOG.md"], state: .merged),
-            RunTask(id: 11, runId: 2, position: 1, title: "Write the upgrade notes", files: ["docs/upgrading.md"], dependsOn: [10], state: .merged),
-            RunTask(id: 5, runId: 1, position: 0, title: "Port the CSV writer", files: ["exporter/**"], state: .cancelled),
-        ]
-    }
-
-    var questions: [Question] {
-        [
-            Question(
-                id: 5, runId: 3, agentId: 9,
-                question: "The trigram index adds about 40 MB per million rows. Build it at startup, or lazily on the first search?",
-                choices: ["At startup", "Lazily on first search"], createdMs: ago(200)
-            ),
-        ]
-    }
-
-    var reports: [Int: String] {
-        [
-            2: """
-            # Release notes for 0.2
-
-            Both tasks merged on the first try.
-
-            ## What changed
-            - **Sessions** now last 12 hours instead of 5 minutes.
-            - The formatter pads columns with `left-pad`.
-            - Search results show *where* they matched.
-
-            ## Left open
-            1. The upgrade notes don't cover Windows yet.
-            2. `CHANGELOG.md` needs a date before tagging.
-
-            ```
-            git tag v0.2.0 && git push --tags
-            ```
-
-            ## Approved on your behalf (2)
-            - `cargo test` in the task worktree (rule)
-            - `npm run lint` in the task worktree (rule)
-            """,
         ]
     }
 
@@ -184,7 +118,7 @@ struct FakeData {
         Before 0.2, three things are left:
 
         1. **Merge lisbon** once its tests pass.
-        2. **Approve the plan in porto** for the streaming tokenizer.
+        2. **Read the tokenizer spike in porto**: its notes are in `docs/tokenizer.md`.
         3. **Finish the release notes**, which don't mention the session fix yet.
         """
         let update = """

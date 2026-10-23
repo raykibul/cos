@@ -7,7 +7,7 @@ import Testing
 enum StaffSamples {
     static let staff = #"{"project_id":1,"agent_id":14,"state":"idle","model":"haiku","brief":"Ship 0.2.","worktree":"/w/chief","branch":"atlas/chief","working_agents":2,"waiting_on_you":1}"#
     static let notStarted = #"{"project_id":2,"agent_id":null,"state":null,"model":null,"brief":"","worktree":null,"branch":null,"working_agents":0,"waiting_on_you":0}"#
-    static let inbox = #"{"items":[{"id":7,"project_id":1,"kind":"agent","agent_id":15,"run_id":null,"text":"Agent 15 \"Add a README line\" finished a turn\nDone: added it.","created_ms":1792611174811,"delivered_ms":null},{"id":8,"project_id":1,"kind":"run","agent_id":null,"run_id":3,"text":"Run 3 is done","created_ms":1792611274811,"delivered_ms":1792611275000},{"oops":true}]}"#
+    static let inbox = #"{"items":[{"id":7,"project_id":1,"kind":"agent","agent_id":15,"text":"Agent 15 \"Add a README line\" finished a turn\nDone: added it.","created_ms":1792611174811,"delivered_ms":null},{"id":8,"project_id":1,"kind":"message","agent_id":null,"text":"Ship it","created_ms":1792611274811,"delivered_ms":1792611275000},{"oops":true}]}"#
     static let transcript = #"""
     {"messages":[
       {"n":2,"role":"assistant","kind":"tool","tool":{"name":"mcp__cos__agent_spawn","summary":"{\"prompt\":\"…\"}","is_error":false},"ts_ms":1792611174900},
@@ -162,9 +162,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(agent.state == AgentState(rawValue: "daydreaming"))
         #expect(agent.state.isAlive)
         #expect(agent.role == AgentRole(rawValue: "auditor"))
-        #expect(agent.runId == "3")
-        #expect(agent.runNumber == 3)
-        #expect(agent.taskId == 7)
         #expect(agent.rows == 40)
         #expect(agent.userSettings == false)
         #expect(agent.spawnedBy == 14)
@@ -190,9 +187,6 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(projects.projects.count == 1)
         #expect(projects.projects[0].workspaces.map(\.id) == [4])
         #expect(projects.projects[0].workspaces[0].city == "oslo")
-        let runs = try decode(RunsPage.self, #"{"runs":[{"id":1,"workspace_id":2,"state":"pondering"},{"id":2}]}"#)
-        #expect(runs.runs.map(\.state) == [RunState(rawValue: "pondering")])
-        #expect(!runs.runs[0].state.isFinished)
     }
 }
 

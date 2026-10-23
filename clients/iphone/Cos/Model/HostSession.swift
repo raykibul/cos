@@ -18,8 +18,8 @@ enum Connection: Equatable, Sendable {
     var isLive: Bool { self == .live }
 }
 
-/// One host's state for the app: its projects, agents, approvals, runs,
-/// questions and Chiefs of Staff, kept current from the event stream while
+/// One host's state for the app: its projects, agents, approvals and
+/// Chiefs of Staff, kept current from the event stream while
 /// the app is in the foreground. Every screen reads from it.
 @MainActor
 @Observable
@@ -38,18 +38,12 @@ final class HostSession {
     private(set) var agents: [Agent] = []
     /// Pending approvals, oldest first.
     private(set) var approvals: [Approval] = []
-    /// Open questions from run chiefs, oldest first.
-    private(set) var questions: [Question] = []
-    /// Newest first.
-    private(set) var runs: [Run] = []
     /// Each project's Chief of Staff, by project id.
     private(set) var staffs: [Int: Staff] = [:]
 
     /// Bumped per agent when its transcript grows (`agent.transcript`), so
     /// a chat on screen reads what's new.
     private(set) var transcriptTicks: [Int: Int] = [:]
-    /// Bumped whenever a run, its board or its report may have changed.
-    private(set) var runTick = 0
 
     /// When you last opened each chief's chat, for the chiefs list.
     let readMarks: ReadMarks
@@ -65,7 +59,7 @@ final class HostSession {
     @ObservationIgnored private var seenWaiting: Set<String>?
 
     private enum Refresh: CaseIterable {
-        case projects, agents, approvals, runs, questions, staffs
+        case projects, agents, approvals, staffs
     }
 
     init(
@@ -146,11 +140,6 @@ final class HostSession {
         if event.changesProjects { request(.projects) }
         if event.changesAgents { request(.agents) }
         if event.changesApprovals { request(.approvals) }
-        if event.changesRuns {
-            request(.runs)
-            runTick += 1
-        }
-        if event.changesQuestions { request(.questions) }
         if event.changesStaff || event.changesProjects { request(.staffs) }
         if event.kind == EventKind.agentTranscript, let agentId = event.number("agent_id") {
             transcriptTicks[agentId, default: 0] += 1
@@ -163,7 +152,6 @@ final class HostSession {
 
     private func requestAll() {
         Refresh.allCases.forEach(request)
-        runTick += 1
     }
 
     private func request(_ kind: Refresh) {
@@ -178,7 +166,6 @@ final class HostSession {
                 group.addTask { await self.load(kind) }
             }
         }
-        runTick += 1
     }
 
     private func load(_ kind: Refresh) async {
@@ -194,12 +181,6 @@ final class HostSession {
                 approvals = try await service.approvals(state: .pending)
                     .filter { $0.state == .pending }
                     .sorted { $0.createdMs < $1.createdMs }
-            case .runs:
-                runs = try await service.runs()
-            case .questions:
-                questions = try await service.questions(state: .open)
-                    .filter { $0.state == .open }
-                    .sorted { $0.createdMs < $1.createdMs }
             case .staffs:
                 var loaded: [Int: Staff] = [:]
                 for project in projects {
@@ -208,7 +189,7 @@ final class HostSession {
                 staffs = loaded
             }
             loaded.insert(kind)
-            if !hasLoaded, loaded.isSuperset(of: [.projects, .agents, .approvals, .runs, .questions]) {
+            if !hasLoaded, loaded.isSuperset(of: [.projects, .agents, .approvals]) {
                 hasLoaded = true
             }
             noticeWaiting()
@@ -223,8 +204,6 @@ final class HostSession {
     /// Everything blocked on you, in the order the home tab lists it.
     var waiting: [WaitingItem] {
         var items: [WaitingItem] = approvals.filter(\.isForYou).map { .approval($0) }
-        items += questions.map { .question($0) }
-        items += runs.filter { $0.state == .awaitingPlanApproval }.map { .plan($0) }
         items += agents.filter { $0.state == .needsTrust }.map { .trust($0) }
         items += agents.filter { $0.state == .needsLogin }.map { .login($0) }
         return items
@@ -257,10 +236,6 @@ final class HostSession {
         case .approval(let approval):
             let who = agent(id: approval.agentId)?.title ?? "An agent"
             return CosNotification(kind: .approval, title: "\(who) needs approval", body: approval.detail, thread: thread)
-        case .question(let question):
-            return CosNotification(kind: .question, title: "The chief asks", body: question.question, thread: thread)
-        case .plan(let run):
-            return CosNotification(kind: .plan, title: "A plan is ready to review", body: run.goal, thread: thread)
         case .trust(let agent):
             return CosNotification(kind: .trust, title: "\(agent.title) asks to trust its folder", body: workspaceName(agent.workspaceId), thread: thread)
         case .login(let agent):
@@ -290,15 +265,9 @@ final class HostSession {
         return agents.first { $0.id == id }
     }
 
-    func run(id: Int) -> Run? { runs.first { $0.id == id } }
-
-    /// A workspace's agents, newest first, without its runs' workers.
+    /// A workspace's agents, newest first, without its Chief of Staff.
     func agents(inWorkspace id: Int) -> [Agent] {
         agents.filter { $0.workspaceId == id && $0.role != .staff }
-    }
-
-    func runs(inWorkspace id: Int) -> [Run] {
-        runs.filter { $0.workspaceId == id }
     }
 
     func pendingApproval(forAgent id: Int) -> Approval? {
@@ -337,37 +306,6 @@ final class HostSession {
         }
     }
 
-    func answer(_ question: Question, _ text: String) async throws {
-        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !answer.isEmpty else { return }
-        _ = try await service.answer(questionId: question.id, answer)
-        questions.removeAll { $0.id == question.id }
-        request(.questions)
-    }
-
-    @discardableResult
-    func approvePlan(runId: Int) async throws -> Board {
-        let board = try await service.approvePlan(runId: runId)
-        apply(board)
-        return board
-    }
-
-    @discardableResult
-    func cancelRun(id: Int) async throws -> Board {
-        let board = try await service.cancelRun(id: id, reason: nil)
-        apply(board)
-        return board
-    }
-
-    @discardableResult
-    func startRun(workspaceId: Int, goal: String) async throws -> Run {
-        let run = try await service.createRun(NewRun(workspaceId: workspaceId, goal: goal))
-        runs.removeAll { $0.id == run.id }
-        runs.insert(run, at: 0)
-        request(.runs)
-        return run
-    }
-
     func trust(agentId: Int) async throws {
         try await service.trustAgent(id: agentId)
         request(.agents)
@@ -402,19 +340,6 @@ final class HostSession {
         staffs[staff.projectId] = staff
     }
 
-    private func apply(_ board: Board) {
-        var run = board.run
-        run.counts = run.counts ?? board.counts
-        if let index = runs.firstIndex(where: { $0.id == run.id }) {
-            runs[index] = run
-        } else {
-            runs.insert(run, at: 0)
-        }
-        runTick += 1
-        request(.runs)
-        request(.questions)
-    }
-
     private func upsert(_ agent: Agent) {
         if let index = agents.firstIndex(where: { $0.id == agent.id }) {
             agents[index] = agent
@@ -427,16 +352,12 @@ final class HostSession {
 /// One thing blocked on you.
 enum WaitingItem: Identifiable, Equatable, Sendable {
     case approval(Approval)
-    case question(Question)
-    case plan(Run)
     case trust(Agent)
     case login(Agent)
 
     var id: String {
         switch self {
         case .approval(let approval): "approval-\(approval.id)"
-        case .question(let question): "question-\(question.id)"
-        case .plan(let run): "plan-\(run.id)"
         case .trust(let agent): "trust-\(agent.id)"
         case .login(let agent): "login-\(agent.id)"
         }
