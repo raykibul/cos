@@ -25,13 +25,20 @@ enum ChatRow: Identifiable, Equatable {
     case reply(TranscriptMessage)
     /// One tool call, as a compact row.
     case tool(TranscriptMessage)
+    /// cos's `agent_spawn`: a session the chief started, as a card that opens it.
+    case spawned(TranscriptMessage, ToolCall)
+    /// Claude's `<task-notification>`: a subagent (or background command)
+    /// the chief ran finished.
+    case task(TranscriptMessage, TaskNotification)
     /// A `[cos · N updates]` wakeup: news from its agents.
     case updates(TranscriptMessage, count: Int)
     case pending(PendingMessage)
 
     var id: String {
         switch self {
-        case .user(let message), .reply(let message), .tool(let message), .updates(let message, _): "m\(message.n)"
+        case .user(let message), .reply(let message), .tool(let message), .spawned(let message, _), .task(let message, _),
+            .updates(let message, _):
+            "m\(message.n)"
         case .pending(let pending): "p\(pending.id)"
         }
     }
@@ -191,19 +198,32 @@ final class ChiefChat {
             switch (message.role, message.kind) {
             case (.user, .update):
                 rows.append(.updates(message, count: message.updateCount))
+            case (.user, .task), (.user, .text) where message.taskNotification != nil:
+                if let note = message.taskNotification { rows.append(.task(message, note)) }
             case (.user, .text):
                 if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { rows.append(.user(message)) }
             case (.user, _):
                 // A tool result logged as a user turn, or something newer.
                 continue
             case (_, .tool):
-                rows.append(.tool(message))
+                if let tool = message.tool, tool.isSpawn, !tool.isError {
+                    rows.append(.spawned(message, tool))
+                } else {
+                    rows.append(.tool(message))
+                }
             default:
                 if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { rows.append(.reply(message)) }
             }
         }
         rows += pending.map { .pending($0) }
         return rows
+    }
+
+    /// The session an `agent_spawn` started: by the id in its result, or,
+    /// from an older daemon, the chief's agent with the same title.
+    func spawnedAgent(_ tool: ToolCall) -> Agent? {
+        if let id = tool.agentId { return session.agent(id: id) }
+        return session.agentsStarted(byProject: projectId).first { $0.title == tool.summary }
     }
 
     /// The inbox items an update carried: reported after the previous update

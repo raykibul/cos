@@ -338,3 +338,65 @@ fn messages_serialize_in_the_contract_shape() {
         Some(true)
     );
 }
+
+#[test]
+fn cos_agent_tools_name_their_agent() {
+    let assistant = |id: &str, name: &str, input: Value| {
+        serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": id, "name": name, "input": input}
+        ]}})
+        .to_string()
+            + "\n"
+    };
+    let result = |id: &str, content: Value, is_error: bool| {
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": id, "content": content, "is_error": is_error}
+        ]}})
+        .to_string()
+            + "\n"
+    };
+    let lines = [
+        assistant(
+            "t1",
+            "mcp__cos__agent_spawn",
+            serde_json::json!({"prompt": "Fix the flaky test\nIt fails one run in three.", "new_workspace": {}}),
+        ),
+        result(
+            "t1",
+            serde_json::json!([{"type": "text", "text": "{\n  \"agent_id\": 17,\n  \"workspace_id\": 4\n}"}]),
+            false,
+        ),
+        assistant(
+            "t2",
+            "mcp__cos__agent_spawn",
+            serde_json::json!({"prompt": "Draft notes", "title": "Release notes", "workspace_id": 4}),
+        ),
+        result("t2", serde_json::json!("{\"agent_id\": 18, \"workspace_id\": 4}"), false),
+        assistant("t3", "mcp__cos__agent_spawn", serde_json::json!({"prompt": "Oops"})),
+        result("t3", serde_json::json!("give exactly one of workspace_id or new_workspace"), true),
+        assistant("t4", "mcp__cos__agent_read", serde_json::json!({"agent_id": 17})),
+        assistant("t5", "Bash", serde_json::json!({"command": "ls", "agent_id": 3})),
+    ]
+    .concat();
+    let transcript = parse(lines.as_bytes());
+    let calls: Vec<(&str, Option<i64>)> = transcript
+        .messages
+        .iter()
+        .filter_map(|message| message.tool.as_ref())
+        .map(|tool| (tool.summary.as_str(), tool.agent_id))
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            ("Fix the flaky test…", Some(17)),
+            ("Release notes", Some(18)),
+            ("Oops", None),
+            ("{\"agent_id\":17}", Some(17)),
+            ("ls", None),
+        ]
+    );
+    let json = serde_json::to_value(&transcript.messages[0]).unwrap();
+    assert_eq!(json["tool"]["agent_id"], 17);
+    let json = serde_json::to_value(&transcript.messages[4]).unwrap();
+    assert!(json["tool"].get("agent_id").is_none());
+}

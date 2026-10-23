@@ -132,6 +132,23 @@ extension HostSession {
         }
     }
 
+    /// The project an agent works in: its workspace's, or the one it is
+    /// Chief of Staff of.
+    func projectId(ofAgent id: Int) -> Int? {
+        staffProject(ofAgent: id) ?? project(ofWorkspace: self.agent(id: id)?.workspaceId)?.id
+    }
+
+    /// The terminals you can switch between from an agent's: its project's
+    /// Chief of Staff, then the project's sessions that are alive (and the
+    /// agent itself, whatever its state).
+    func terminalPeers(of id: Int) -> [Agent] {
+        guard let projectId = projectId(ofAgent: id) else { return self.agent(id: id).map { [$0] } ?? [] }
+        var peers: [Agent] = []
+        if let chief = self.agent(id: staffs[projectId]?.agentId) { peers.append(chief) }
+        peers += agents(inProject: projectId).filter { $0.state.isAlive || $0.id == id }
+        return peers
+    }
+
     /// A project's agents, newest first, without its Chief of Staff.
     func agents(inProject id: Int) -> [Agent] {
         guard let project = project(id: id) else { return [] }

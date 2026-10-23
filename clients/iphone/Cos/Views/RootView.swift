@@ -11,8 +11,8 @@ enum Route: Hashable {
     case workspace(id: Int)
     case run(id: Int)
     case agent(id: Int)
-    /// An agent with its terminal snapshot open.
-    case screen(agentId: Int)
+    /// An agent's live terminal, full screen: the chief's or a session's.
+    case terminal(agentId: Int)
 }
 
 enum AppTab: Hashable {
@@ -36,7 +36,7 @@ final class Navigator {
         case .run:
             tab = .runs
             runs.append(route)
-        case .waiting, .chief, .chiefInfo, .workspace, .agent, .screen:
+        case .waiting, .chief, .chiefInfo, .workspace, .agent, .terminal:
             tab = .chiefs
             chiefs.append(route)
         }
@@ -49,7 +49,8 @@ final class Navigator {
         case "chief": tab = .chiefs; chiefs = [.chief(projectId: 1)]
         case "chief-new": tab = .chiefs; chiefs = [.chief(projectId: 2)]
         case "chief-info": tab = .chiefs; chiefs = [.chief(projectId: 1), .chiefInfo(projectId: 1)]
-        case "chief-screen": tab = .chiefs; chiefs = [.chief(projectId: 1), .screen(agentId: 40)]
+        case "terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 7)]
+        case "chief-terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 40)]
         case "workspace": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .workspace(id: 5)]
         case "agent": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 7)]
         case "agent-approval": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 8)]
@@ -137,7 +138,7 @@ struct RouteView: View {
             case .workspace(let id): WorkspaceView(session: session, workspaceId: id)
             case .run(let id): RunView(session: session, runId: id)
             case .agent(let id): AgentView(session: session, agentId: id)
-            case .screen(let agentId): AgentView(session: session, agentId: agentId, showScreen: true)
+            case .terminal(let agentId): TerminalScreen(session: session, agentId: agentId)
             }
         }
     }

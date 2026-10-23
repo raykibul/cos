@@ -8,6 +8,7 @@ The iPhone app for the cos daemon, in SwiftUI. It reaches a Mac or server runnin
 - `Cos/Fake`: `FakeCos`, a daemon in memory with invented data, for `-fakeData`, screenshots and tests.
 - `CosTests`: unit tests of the models against `FakeCos`.
 - `../shared/CosKit`: the client library (HTTP over TCP or a Unix socket, models, the event follower), a local Swift package.
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) 1.10.1: draws the live terminal. Xcode fetches it on the first build.
 
 ## Build
 
@@ -36,7 +37,7 @@ Launch arguments (Product > Scheme > Edit Scheme > Arguments, or after `simctl l
 | Argument | Effect |
 |---|---|
 | `-fakeData` | Two invented hosts, both answered by `FakeCos`, on an invented tailnet (gpu-box runs cos and isn't saved, a Mac without cos, this iPhone, an offline iPad, a tagged CI server). Nothing touches the network or your saved hosts. |
-| `-screen <name>` | Opens a screen: `chiefs` (the default), `waiting`, `chief`, `chief-new`, `chief-info`, `chief-screen`, `workspace`, `agent`, `agent-approval`, `runs`, `run`, `plan`, `report`, `hosts`, `add-host`. |
+| `-screen <name>` | Opens a screen: `chiefs` (the default), `waiting`, `chief`, `chief-new`, `chief-info`, `chief-terminal`, `terminal`, `workspace`, `agent`, `agent-approval`, `runs`, `run`, `plan`, `report`, `hosts`, `add-host`. |
 | `-fakeRefusal <code>` | The fake refuses the device, e.g. `device_pending`, `device_denied`, `wrong_user`. |
 | `-fakeUnreachable` | The fake can't be reached. |
 | `-noHosts` | Starts with no hosts (the welcome screen). |

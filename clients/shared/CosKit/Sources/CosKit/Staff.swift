@@ -177,6 +177,9 @@ public struct MessageKind: RawRepresentable, Codable, Hashable, Sendable {
     public static let tool = MessageKind(rawValue: "tool")
     /// A cos inbox wakeup: a user turn that starts with `[cos ·`.
     public static let update = MessageKind(rawValue: "update")
+    /// Claude's `<task-notification>`: a subagent or background command it
+    /// started finished. Claude types it in as a user turn; CosKit tags it.
+    public static let task = MessageKind(rawValue: "task")
 }
 
 /// One tool call in a transcript.
@@ -185,11 +188,16 @@ public struct ToolCall: Codable, Equatable, Sendable {
     /// Its main argument on one line, such as Bash's command.
     public var summary: String
     public var isError: Bool
+    /// The agent one of cos's agent tools acted on: the one `agent_spawn`
+    /// started (once its result is in), or the one it messaged, read or
+    /// stopped.
+    public var agentId: Int?
 
-    public init(name: String, summary: String = "", isError: Bool = false) {
+    public init(name: String, summary: String = "", isError: Bool = false, agentId: Int? = nil) {
         self.name = name
         self.summary = summary
         self.isError = isError
+        self.agentId = agentId
     }
 
     public init(from decoder: Decoder) throws {
@@ -197,7 +205,11 @@ public struct ToolCall: Codable, Equatable, Sendable {
         name = c.string(.name).nilIfBlank ?? "tool"
         summary = c.string(.summary) ?? ""
         isError = c.optional(Bool.self, .isError) ?? false
+        agentId = c.int(.agentId)
     }
+
+    /// cos's `agent_spawn`: the chief started an agent.
+    public var isSpawn: Bool { name == "mcp__cos__agent_spawn" }
 
     /// The name as a page shows it: cos's own tools in words.
     public var title: String {
@@ -265,6 +277,7 @@ public struct TranscriptMessage: Codable, Equatable, Sendable, Identifiable {
         var kind = c.optional(MessageKind.self, .kind) ?? (tool != nil ? .tool : .text)
         // A wakeup the daemon didn't tag still reads as one.
         if kind == .text, role == .user, text.hasPrefix("[cos ·") { kind = .update }
+        if kind == .text, role == .user, TaskNotification(text) != nil { kind = .task }
         self.kind = kind
         tsMs = c.int64(.tsMs) ?? 0
     }
@@ -281,6 +294,74 @@ public struct TranscriptMessage: Codable, Equatable, Sendable, Identifiable {
     public var updateBody: String {
         text.replacing(/^\s*\[cos[^\]\n]*\]\s*/, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+extension TranscriptMessage {
+    /// For a `<task-notification>` Claude typed in: what finished, and how.
+    public var taskNotification: TaskNotification? {
+        role == .user ? TaskNotification(text) : nil
+    }
+}
+
+/// What Claude types into a session when a subagent or background command
+/// it started finishes:
+///
+///     <task-notification>
+///     <task-id>a066…</task-id>
+///     <status>completed</status>
+///     <summary>Agent "Update on open PRs" finished</summary>
+///     <result>…markdown…</result>
+///     </task-notification>
+///
+/// The format is Claude's and undocumented, so every tag is optional.
+public struct TaskNotification: Equatable, Sendable {
+    public var taskId: String?
+    /// `completed`, `failed`, `killed`…
+    public var status: String
+    /// Claude's one line: `Agent "X" finished`.
+    public var summary: String
+    /// What the subagent said at the end, as markdown.
+    public var result: String
+    /// How long it ran, when Claude says.
+    public var durationMs: Int64?
+
+    public init(taskId: String? = nil, status: String, summary: String, result: String, durationMs: Int64? = nil) {
+        self.taskId = taskId
+        self.status = status
+        self.summary = summary
+        self.result = result
+        self.durationMs = durationMs
+    }
+
+    /// `nil` unless `text` is a task notification.
+    public init?(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("<task-notification>") else { return nil }
+        func tag(_ name: String) -> String? {
+            guard let open = trimmed.range(of: "<\(name)>"),
+                  let close = trimmed.range(of: "</\(name)>", range: open.upperBound..<trimmed.endIndex)
+            else { return nil }
+            return String(trimmed[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        taskId = tag("task-id")
+        status = tag("status") ?? "completed"
+        summary = tag("summary") ?? ""
+        result = tag("result") ?? ""
+        let usage = tag("usage") ?? ""
+        durationMs = usage.firstMatch(of: /duration_ms\D{0,3}(\d+)/).flatMap { Int64($0.1) }
+    }
+
+    /// What finished: the quoted name in `Agent "X" finished`, else the summary.
+    public var title: String {
+        if let match = summary.firstMatch(of: /"([^"]+)"/) { return String(match.1) }
+        return summary.isEmpty ? "Background task" : summary
+    }
+
+    /// A subagent (Claude's Agent tool) rather than a background command.
+    public var isAgent: Bool { summary.hasPrefix("Agent ") || summary.isEmpty }
+
+    /// It ended well.
+    public var succeeded: Bool { status == "completed" }
 }
 
 /// `GET /v1/agents/{id}/transcript?after=N`.

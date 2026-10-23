@@ -45,6 +45,10 @@ actor FakeCos: CosService {
     private var reports: [Int: String] = [:]
     private var log: [LoggedEvent] = []
     private var subscribers: [UUID: AsyncThrowingStream<LoggedEvent, Error>.Continuation] = [:]
+    /// Open terminal streams, by agent.
+    private var terminals: [Int: [UUID: AsyncThrowingStream<TerminalEvent, Error>.Continuation]] = [:]
+    /// Keystrokes sent to each agent's terminal, for tests.
+    private(set) var keys: [Int: [UInt8]] = [:]
     private var nextId = 100
 
     /// Requests in order, as `METHOD path`, for tests.
@@ -461,5 +465,55 @@ actor FakeCos: CosService {
             ))
         }
         return data.peers(answering: hostName)
+    }
+}
+
+// MARK: Terminals
+
+extension FakeCos: TerminalSource, TerminalControl {
+    /// The agent's screen as a snapshot, then whatever is typed, echoed
+    /// back, until the view goes away.
+    nonisolated func terminal(agentId: Int) -> AsyncThrowingStream<TerminalEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let id = UUID()
+            let task = Task {
+                do {
+                    let screen = try await self.screen(agentId: agentId)
+                    continuation.yield(FakeData.snapshot(of: screen))
+                    await self.follow(agentId: agentId, id: id, continuation)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task { await self.unfollow(agentId: agentId, id: id) }
+            }
+        }
+    }
+
+    func sendKeys(agentId: Int, _ bytes: [UInt8]) async throws {
+        try check("POST /v1/agents/\(agentId)/keys")
+        keys[agentId, default: []] += bytes
+        // Echo, as a shell would: a return starts a new line.
+        let echo = bytes.flatMap { $0 == 0x0D ? [0x0D, 0x0A] : [$0] }
+        for continuation in terminals[agentId, default: [:]].values {
+            continuation.yield(.output(echo))
+        }
+    }
+
+    func resizeAgent(id: Int, rows: Int, cols: Int) async throws {
+        try check("POST /v1/agents/\(id)/resize")
+        for continuation in terminals[id, default: [:]].values {
+            continuation.yield(.resize(rows: rows, cols: cols))
+        }
+    }
+
+    private func follow(agentId: Int, id: UUID, _ continuation: AsyncThrowingStream<TerminalEvent, Error>.Continuation) {
+        terminals[agentId, default: [:]][id] = continuation
+    }
+
+    private func unfollow(agentId: Int, id: UUID) {
+        terminals[agentId]?[id] = nil
     }
 }

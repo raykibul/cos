@@ -49,7 +49,7 @@ struct ChiefsView: View {
                         navigator.chiefs.append(.chiefInfo(projectId: chief.id))
                     }
                     if let agentId = chief.agent?.id {
-                        Button("Chief's screen", systemImage: "terminal") { navigator.chiefs.append(.screen(agentId: agentId)) }
+                        Button("Chief's terminal", systemImage: "terminal") { navigator.chiefs.append(.terminal(agentId: agentId)) }
                     }
                 }
             }
