@@ -125,7 +125,6 @@ describe("conversation rows", () => {
       key,
       kind: "stop",
       agentId: 7,
-      runId: null,
       title: null,
       text: key,
       tsMs,

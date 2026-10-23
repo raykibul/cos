@@ -1,8 +1,8 @@
 // The fake bridge: the same interface as tauri.ts, backed by an in-memory
 // daemon with canned data (fake/fixtures.ts). Actions change its state and
 // log events like the real daemon, so the UI behaves live in a plain
-// browser: a new agent starts and goes to work, a new run plans, approving
-// a plan starts its tasks. Terminals replay a Claude Code screen.
+// browser: a new agent starts and goes to work. Terminals replay a Claude
+// Code screen.
 
 import { toBase64 } from "../api/client";
 import { makeFixtures, type FakeAgent, type Fixtures, type Raw } from "./fake/fixtures";
@@ -36,7 +36,7 @@ import type {
 export interface FakeOptions {
   /** How long each request takes, in ms. */
   latencyMs?: number;
-  /** Whether agents and runs move by themselves over time. */
+  /** Whether agents move by themselves over time. */
   simulate?: boolean;
   /** Start with the daemon stopped. */
   running?: boolean;
@@ -109,11 +109,6 @@ export class FakeDaemon {
   readonly workspaces: Raw[];
   readonly agents: FakeAgent[];
   readonly approvals: Raw[];
-  readonly runs: Raw[];
-  readonly tasks: Raw[];
-  readonly questions: Raw[];
-  readonly limits: Record<number, Raw>;
-  readonly reports: Record<number, string>;
   /** Devices that tried this daemon's tailnet listener. */
   readonly devices: Raw[];
   tailnet: Raw;
@@ -152,11 +147,6 @@ export class FakeDaemon {
     this.workspaces = f.workspaces;
     this.agents = f.agents;
     this.approvals = f.approvals;
-    this.runs = f.runs;
-    this.tasks = f.tasks;
-    this.questions = f.questions;
-    this.limits = f.limits;
-    this.reports = f.reports;
     this.running = options.running ?? true;
     this.simulate = options.simulate ?? true;
     this.startedAt = new Date(this.fixtures.now - 90_100_000).toISOString();
@@ -174,7 +164,7 @@ export class FakeDaemon {
         seq: this.events.length + 1,
         ts: new Date(this.fixtures.now - item.ago * 1000).toISOString(),
         kind: item.kind,
-        run_id: item.data.run_id !== undefined ? String(item.data.run_id) : null,
+        run_id: null,
         data: item.data,
       });
     }
@@ -198,12 +188,11 @@ export class FakeDaemon {
 
   /** Logs an event and sends it to every follower. */
   log(kind: string, data: Raw): void {
-    const runId = data.run_id;
     const event = {
       seq: this.events.length + 1,
       ts: new Date().toISOString(),
       kind,
-      run_id: runId !== undefined && runId !== null ? String(runId) : null,
+      run_id: null,
       data,
     };
     this.events.push(event);
@@ -365,78 +354,10 @@ export class FakeDaemon {
         .sort((x, y) => (y.created_ms as number) - (x.created_ms as number));
       return ok({ approvals: list });
     }
-    if ((p = m(/^\/v1\/approvals\/(\d+)(\/chief)?$/))) {
+    if ((p = m(/^\/v1\/approvals\/(\d+)$/))) {
       const approval = this.find(this.approvals, Number(p[1]), "approval");
-      if (method === "GET" && !p[2]) return ok(approval);
-      if (method === "POST") return this.decide(approval, b, p[2] ? "chief" : "user");
-    }
-
-    // Runs.
-    if (method === "GET" && path === "/v1/runs") {
-      return ok({
-        runs: [...this.runs]
-          .sort((x, y) => (y.id as number) - (x.id as number))
-          .map((r) => ({ ...r, tasks: this.counts(r.id as number) })),
-      });
-    }
-    if (method === "POST" && path === "/v1/runs") return this.createRun(b);
-    if ((p = m(/^\/v1\/runs\/(\d+)(?:\/([a-z-]+))?$/))) {
-      const run = this.find(this.runs, Number(p[1]), "run");
-      const action = p[2];
-      if (!action && method === "GET") return ok(this.board(run));
-      if (action === "approve-plan" && method === "POST") return this.approvePlan(run);
-      if (action === "cancel" && method === "POST")
-        return this.finishRun(run, "cancelled", String(b.reason ?? "") || null);
-      if (action === "message" && method === "POST") {
-        if (!String(b.text ?? "").trim()) throw new HttpError(400, "text can't be empty");
-        return { status: 202, body: null };
-      }
-      if (action === "report" && method === "GET") {
-        const report = this.reports[run.id as number];
-        if (!report) throw new HttpError(404, "the report hasn't been written yet");
-        return ok({ markdown: report });
-      }
-      if (action === "limits") {
-        const limits = this.limits[run.id as number] ?? {
-          preset: run.preset,
-          approval_cap: run.approval_cap,
-          chief_approvals: 0,
-        };
-        if (method === "GET") return ok(limits);
-        if (method === "PUT") {
-          if (["done", "failed", "cancelled"].includes(run.state as string))
-            throw new HttpError(409, "the run is finished");
-          if (b.preset) limits.preset = b.preset;
-          if (b.approval_cap !== undefined) {
-            if (Number(b.approval_cap) > 1000)
-              throw new HttpError(400, "approval_cap can't be over 1000");
-            limits.approval_cap = Number(b.approval_cap);
-          }
-          this.limits[run.id as number] = limits;
-          run.preset = limits.preset;
-          run.approval_cap = limits.approval_cap;
-          this.log("run.limits_changed", { run_id: run.id, ...limits });
-          return ok(limits);
-        }
-      }
-    }
-    if ((p = m(/^\/v1\/tasks\/(\d+)$/)) && method === "PATCH") {
-      return this.updateTask(this.find(this.tasks, Number(p[1]), "task"), b);
-    }
-
-    // Questions.
-    if (method === "GET" && path === "/v1/questions") {
-      const state = q.get("state");
-      return ok({ questions: this.questions.filter((x) => !state || x.state === state) });
-    }
-    if ((p = m(/^\/v1\/questions\/(\d+)\/answer$/)) && method === "POST") {
-      const question = this.find(this.questions, Number(p[1]), "question");
-      if (question.state !== "open") throw new HttpError(409, "this question was already answered");
-      const answer = String(b.answer ?? "").trim();
-      if (!answer) throw new HttpError(400, "answer can't be empty");
-      Object.assign(question, { state: "answered", answer, answered_ms: Date.now() });
-      this.log("question.answered", { question_id: question.id, run_id: question.run_id });
-      return ok(question);
+      if (method === "GET") return ok(approval);
+      if (method === "POST") return this.decide(approval, b);
     }
 
     // Devices and the tailnet: on the socket only.
@@ -665,8 +586,6 @@ export class FakeDaemon {
     const agent: FakeAgent = {
       id,
       workspace_id: workspaceId,
-      run_id: null,
-      task_id: null,
       role: "user",
       title,
       session_id: crypto.randomUUID?.() ?? `session-${id}`,
@@ -804,20 +723,20 @@ export class FakeDaemon {
     }
   }
 
-  private decide(approval: Raw, b: Raw, by: "user" | "chief"): DaemonResponse {
+  private decide(approval: Raw, b: Raw): DaemonResponse {
     if (approval.state !== "pending") throw new HttpError(409, "this request was already answered");
     const decision = b.decision === "allow" ? "allow" : b.decision === "deny" ? "deny" : null;
     if (!decision) throw new HttpError(400, "decision must be allow or deny");
     Object.assign(approval, {
       state: decision === "allow" ? "allowed" : "denied",
-      decided_by: by,
+      decided_by: "user",
       decided_ms: Date.now(),
       message: (b.message as string) ?? (b.reason as string) ?? null,
     });
     this.log("approval.decided", {
       approval_id: approval.id,
       state: approval.state,
-      decided_by: by,
+      decided_by: "user",
     });
     const agent = this.agents.find((a) => a.id === approval.agent_id);
     if (agent) {
@@ -841,220 +760,6 @@ export class FakeDaemon {
       });
     }
     return { status: 200, body: copy(approval) };
-  }
-
-  // MARK: Runs
-
-  counts(runId: number): Raw {
-    const counts: Record<string, number> = {
-      proposed: 0,
-      ready: 0,
-      running: 0,
-      checking: 0,
-      review: 0,
-      merged: 0,
-      blocked: 0,
-      failed: 0,
-      cancelled: 0,
-    };
-    const tasks = this.tasks.filter((t) => t.run_id === runId);
-    for (const task of tasks)
-      counts[task.state as string] = (counts[task.state as string] ?? 0) + 1;
-    return { ...counts, total: tasks.length };
-  }
-
-  board(run: Raw): Raw {
-    return {
-      run,
-      workspace: this.workspaces.find((w) => w.id === run.workspace_id) ?? null,
-      tasks: this.tasks
-        .filter((t) => t.run_id === run.id)
-        .sort((a, b) => (a.position as number) - (b.position as number)),
-      counts: this.counts(run.id as number),
-    };
-  }
-
-  private createRun(b: Raw): DaemonResponse {
-    const workspaceId = Number(b.workspace_id);
-    const ws = this.find(this.workspaces, workspaceId, "workspace");
-    const goal = String(b.goal ?? "").trim();
-    if (!goal) throw new HttpError(400, "the goal can't be empty");
-    if (
-      this.runs.some(
-        (r) =>
-          r.workspace_id === workspaceId &&
-          !["done", "failed", "cancelled"].includes(r.state as string),
-      )
-    ) {
-      throw new HttpError(409, `${(ws.title ?? ws.city) as string} already has a run going`);
-    }
-    const id = Math.max(...this.runs.map((r) => r.id as number)) + 1;
-    const chief = this.id();
-    const now = new Date().toISOString();
-    const run: Raw = {
-      id,
-      workspace_id: workspaceId,
-      goal,
-      state: "planning",
-      preset: (b.preset as string) ?? "normal",
-      approval_cap: Number(b.approval_cap ?? 20),
-      chief_agent_id: chief,
-      created_at: now,
-      updated_at: now,
-    };
-    this.runs.push(run);
-    this.limits[id] = { preset: run.preset, approval_cap: run.approval_cap, chief_approvals: 0 };
-    this.agents.push({
-      id: chief,
-      workspace_id: workspaceId,
-      run_id: id,
-      task_id: null,
-      role: "chief",
-      title: "Chief",
-      state: "working",
-      model: "opus",
-      permission_mode: "default",
-      user_settings: false,
-      rows: 34,
-      cols: 110,
-      started_ms: Date.now(),
-      pid: 31_000 + chief,
-    });
-    this.fixtures.screens[chief] = {
-      prompt: goal,
-      transcript: "blank",
-      footer: { kind: "working", verb: "Exploring the repo", seconds: 0 },
-    };
-    this.log("run.created", {
-      run_id: id,
-      workspace_id: workspaceId,
-      goal,
-      preset: run.preset,
-      approval_cap: run.approval_cap,
-    });
-    this.log("agent.started", {
-      agent_id: chief,
-      workspace_id: workspaceId,
-      role: "chief",
-      session_id: `chief-${chief}`,
-    });
-    this.later(3500, () => {
-      if (run.state !== "planning") return;
-      const titles = ["Read the code the goal touches", "Make the change", "Cover it with tests"];
-      titles.forEach((title, position) => {
-        this.tasks.push({
-          id: this.id(),
-          run_id: id,
-          position,
-          title,
-          instructions: `${title} for: ${goal}`,
-          files: position === 2 ? ["tests/**"] : ["src/**"],
-          test_command: position === 2 ? "cargo test" : null,
-          depends_on: position === 0 ? [] : [this.nextId - 1],
-          state: "proposed",
-          retries: 0,
-        });
-      });
-      this.log("plan.proposed", { run_id: id, tasks: titles.length, replaced: 0 });
-      this.moveRun(run, "awaiting_plan_approval");
-    });
-    return { status: 201, body: copy(run) };
-  }
-
-  private moveRun(run: Raw, to: string, extra: Raw = {}): void {
-    const from = run.state;
-    run.state = to;
-    run.updated_at = new Date().toISOString();
-    Object.assign(run, extra);
-    this.log("run.state_changed", { run_id: run.id, from, to, ...extra });
-  }
-
-  private moveTask(task: Raw, to: string, reason?: string): void {
-    const from = task.state;
-    task.state = to;
-    task.updated_at = new Date().toISOString();
-    if (reason) task.last_failure = reason;
-    this.log("task.state_changed", {
-      run_id: task.run_id,
-      task_id: task.id,
-      title: task.title,
-      from,
-      to,
-      retries: task.retries,
-      ...(reason ? { reason } : {}),
-    });
-  }
-
-  private approvePlan(run: Raw): DaemonResponse {
-    if (run.state !== "awaiting_plan_approval")
-      throw new HttpError(409, "no plan is waiting for approval");
-    const tasks = this.tasks.filter((t) => t.run_id === run.id);
-    this.log("plan.approved", { run_id: run.id, tasks: tasks.length });
-    this.moveRun(run, "running");
-    for (const task of tasks.filter((t) => (t.depends_on as number[]).length === 0)) {
-      this.moveTask(task, "ready");
-      this.later(1500, () => {
-        if (task.state !== "ready") return;
-        task.branch = `cos/task-${task.id as number}`;
-        this.moveTask(task, "running");
-      });
-    }
-    return { status: 200, body: copy(this.board(run)) };
-  }
-
-  private finishRun(run: Raw, to: "cancelled" | "failed", reason: string | null): DaemonResponse {
-    if (["done", "failed", "cancelled"].includes(run.state as string)) {
-      throw new HttpError(409, "the run is already finished");
-    }
-    for (const task of this.tasks.filter((t) => t.run_id === run.id)) {
-      if (!["merged", "failed", "cancelled"].includes(task.state as string))
-        this.moveTask(task, "cancelled");
-    }
-    this.moveRun(run, to, reason ? { reason } : {});
-    for (const agent of this.agents.filter((a) => a.run_id === run.id && this.alive(a))) {
-      this.later(500, () => this.exitAgent(agent, 0));
-    }
-    for (const question of this.questions.filter(
-      (q) => q.run_id === run.id && q.state === "open",
-    )) {
-      question.state = "answered";
-      question.answer = "(the run was cancelled)";
-    }
-    return { status: 200, body: copy(this.board(run)) };
-  }
-
-  private updateTask(task: Raw, b: Raw): DaemonResponse {
-    const run = this.find(this.runs, task.run_id as number, "run");
-    if (run.state !== "running")
-      throw new HttpError(409, "tasks only move while their run is running");
-    const to = String(b.state ?? "");
-    const reason = String(b.reason ?? "").trim();
-    const state = task.state as string;
-    if ((to === "ready" || to === "failed" || to === "blocked") && !reason) {
-      throw new HttpError(400, `moving a task to ${to} needs a reason`);
-    }
-    if (to === "ready") {
-      if (state !== "blocked") throw new HttpError(409, `a ${state} task can't be retried`);
-      if ((task.retries as number) >= 1)
-        throw new HttpError(409, "this task has used its retry; fail or cancel it instead");
-      task.retries = (task.retries as number) + 1;
-      this.moveTask(task, "ready", reason);
-      this.later(1200, () => task.state === "ready" && this.moveTask(task, "running"));
-    } else if (to === "failed" || to === "cancelled") {
-      if (["merged", "failed", "cancelled"].includes(state))
-        throw new HttpError(409, `the task is already ${state}`);
-      this.moveTask(task, to, reason || undefined);
-      for (const other of this.tasks.filter(
-        (t) => t.run_id === task.run_id && t.state === "proposed",
-      )) {
-        if ((other.depends_on as number[]).includes(task.id as number)) {
-          this.moveTask(other, "blocked", `depends on "${task.title as string}", which was ${to}`);
-        }
-      }
-    } else {
-      throw new HttpError(409, `can't move a ${state} task to ${to}`);
-    }
-    return { status: 200, body: copy(this.board(run)) };
   }
 
   // MARK: Terminals

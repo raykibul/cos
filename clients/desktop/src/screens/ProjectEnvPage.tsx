@@ -1,5 +1,5 @@
 // A project's environment variables for its agents: its Chief of Staff,
-// the agents the chief starts, workspace agents and runs. Opened from the
+// the agents the chief starts and workspace agents. Opened from the
 // project's ⋯ menu in the sidebar and on the chief's page.
 
 import { FolderGit2 } from "lucide-react";

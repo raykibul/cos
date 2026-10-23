@@ -1,6 +1,6 @@
 // The project the sidebar shows (the rail picks it): its name and menu, a
 // `★ Chief of Staff` row that opens the chief, and its workspaces, newest
-// first, each with your agents under it. Runs are on the workspace page.
+// first, each with your agents under it.
 
 import { GitBranch, LayoutGrid, MoreHorizontal, Plus, Variable } from "lucide-react";
 import { envHint } from "../../api/env";
@@ -12,7 +12,6 @@ import { staffLabel } from "../../pages/chief/staffState";
 import {
   type Activity,
   activityOf,
-  currentRun,
   projectEnvNames,
   spawnedAgents,
   staffState,
@@ -174,8 +173,6 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
   const exact = samePage(page, { kind: "workspace", id: workspace.id });
   const activity = useCos((s) => activityOf(s, workspaceAgents(s, workspace.id)));
   const agents = useCos((s) => userAgents(s, workspace.id));
-  const hasRun = useCos((s) => currentRun(s, workspace.id) !== undefined);
-  const runsSupported = useCos((s) => s.runsSupported);
   const agentsSupported = useCos((s) => s.agentsSupported);
   const name = workspaceName(workspace);
 
@@ -184,12 +181,6 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
       label: "New agent…",
       disabled: !canChange || !agentsSupported,
       onSelect: () => ui.open({ kind: "newAgent", workspaceId: workspace.id }),
-    },
-    {
-      label: "New run…",
-      disabled: !canChange || !runsSupported || hasRun,
-      detail: hasRun ? "A run is already going here." : undefined,
-      onSelect: () => ui.open({ kind: "newRun", workspaceId: workspace.id }),
     },
     {
       label: "Rename…",

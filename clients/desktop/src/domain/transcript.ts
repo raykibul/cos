@@ -140,7 +140,6 @@ const cosTools: Record<string, string> = {
   agent_send: "Messaged an agent",
   agent_read: "Checked on an agent",
   agent_stop: "Stopped an agent",
-  run_start: "Started a run",
   brief_update: "Updated its brief",
 };
 

@@ -49,7 +49,7 @@ const answer = `Here's where things stand.
 Before the 0.2 release, three things are left:
 
 1. **Review and merge lisbon.** One commit so far, and the new test covers the expiry.
-2. **Approve the plan in porto.** The run there split the streaming tokenizer into four tasks and is waiting for you.
+2. **Trust the folder in porto.** The parser agent there is waiting on Claude's trust dialog.
 3. **Finish the release notes.** They're drafted in \`CHANGELOG.md\` under 0.2.0, but they don't mention the login fix yet.
 
 Want me to start an agent on the release notes while you review lisbon?`;
@@ -132,8 +132,6 @@ export function makeStaff(
   const agent: FakeAgent = {
     id: 40,
     workspace_id: null,
-    run_id: null,
-    task_id: null,
     role: "staff",
     title: "Chief of Staff",
     session_id: "5504b543-4897-4751-add5-f81f24a60040",
@@ -319,8 +317,6 @@ export class FakeStaffDesk {
     const agent: FakeAgent = existing ?? {
       id: host.id(),
       workspace_id: null,
-      run_id: null,
-      task_id: null,
       role: "staff",
       title: "Chief of Staff",
       session_id: `staff-${staff.project_id as number}`,

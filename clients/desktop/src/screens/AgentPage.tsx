@@ -7,18 +7,12 @@ import {
   Square,
   SquareTerminal,
   Trash2,
-  UserRoundCheck,
 } from "lucide-react";
 import { useState } from "react";
 import { envHint, sortedNames } from "../api/env";
 import { type Agent, type Approval, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos } from "../app/context";
-import {
-  approvalDetail,
-  approvalHeadline,
-  isWithChief,
-  routeExplanation,
-} from "../domain/approvals";
+import { approvalDetail, approvalHeadline, routeExplanation } from "../domain/approvals";
 import { loginCommand } from "../domain/env";
 import { agentLabel, canResume, isAlive, permissionModeTitle } from "../domain/labels";
 import {
@@ -27,7 +21,6 @@ import {
   pendingApproval,
   project as projectOf,
   projectOfPage,
-  run as runOf,
   workspace as workspaceOf,
 } from "../store/selectors";
 import { AgentTerminal } from "../terminal/AgentTerminal";
@@ -67,7 +60,6 @@ function AgentView({ agent }: { agent: Agent }) {
     const id = workspace?.projectId ?? projectOfPage(s, { kind: "agent", id: agent.id });
     return id !== null ? projectOf(s, id) : undefined;
   });
-  const run = useCos((s) => (agent.runId !== null ? runOf(s, agent.runId) : undefined));
   const approval = useCos((s) => pendingApproval(s, agent.id));
   const [busy, setBusy] = useState<"stop" | "resume" | null>(null);
   const alive = isAlive(agent.state);
@@ -171,12 +163,6 @@ function AgentView({ agent }: { agent: Agent }) {
             <CrumbSep />
           </>
         ) : null}
-        {run ? (
-          <>
-            <Crumb onClick={() => ui.navigate({ kind: "run", id: run.id })}>{run.goal}</Crumb>
-            <CrumbSep />
-          </>
-        ) : null}
         <span className="truncate font-medium text-ink">{agent.title}</span>
         <StateBadge label={label} className="ml-1.5" />
         <span className="ml-1 hidden shrink-0 text-[12px] text-ink-3 lg:inline">
@@ -263,27 +249,19 @@ export function LoginHint({ agent, here = false }: { agent: Agent; here?: boolea
 }
 
 export function ApprovalBanner({ approval }: { approval: Approval }) {
-  const withChief = isWithChief(approval);
   const why = routeExplanation(approval);
   return (
-    <Banner
-      icon={withChief ? UserRoundCheck : ShieldQuestion}
-      tone={withChief ? "neutral" : "accent"}
-    >
+    <Banner icon={ShieldQuestion} tone="accent">
       <div className="min-w-0 flex-1">
-        <p className="text-[13.5px] font-medium text-ink">
-          {withChief ? "The chief is deciding" : approvalHeadline(approval)}
-        </p>
+        <p className="text-[13.5px] font-medium text-ink">{approvalHeadline(approval)}</p>
         <p
           className="mt-0.5 truncate font-mono text-[12.5px] text-ink-2 select-text"
           title={approvalDetail(approval)}
         >
-          {withChief ? `${approval.toolName}: ` : ""}
           {approvalDetail(approval)}
         </p>
         {why ? <p className="mt-0.5 text-[12px] text-ink-3">{why}</p> : null}
       </div>
-      {/* You can still answer one the chief is deciding. */}
       <ApprovalButtons approval={approval} />
     </Banner>
   );

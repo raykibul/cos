@@ -1,22 +1,17 @@
 // The daemon's state for the UI, kept current from `follow_events`: a port
-// of CosKit's DaemonMonitor (and DaemonMonitor+Runs). Each event kind
+// of CosKit's DaemonMonitor. Each event kind
 // refetches what it changes, through coalesced refreshes, and actions apply
 // the daemon's answer at once and then refresh.
 
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { DaemonClient, type Decision, type NewAgent, type NewRun } from "../api/client";
+import { DaemonClient, type Decision, type NewAgent } from "../api/client";
 import { CosError, isConflict, isNotFound } from "../api/errors";
 import {
   type Agent,
   type Approval,
-  type Board,
   type Device,
   type LoggedEvent,
   type Project,
-  type Question,
-  type Run,
-  type RunLimits,
-  type RunTask,
   type Status,
   type TailnetPeers,
   type TailnetStatus,
@@ -45,11 +40,8 @@ import {
   changesEnv,
   changesJudge,
   changesProjects,
-  changesQuestions,
-  changesRuns,
   changesStaff,
   projectOf,
-  runRefreshFor,
 } from "../domain/events";
 import { type PendingMessage, mergeMessages, reconcilePending } from "../domain/transcript";
 import { CoalescedRefresh, type Result } from "./coalesce";
@@ -68,11 +60,6 @@ export interface Refusal {
   /** The daemon's message, which names the command to run on the host. */
   message: string;
 }
-
-export type ReportState =
-  | { kind: "not_written" }
-  | { kind: "markdown"; markdown: string }
-  | { kind: "failed"; message: string };
 
 export interface DaemonState {
   connection: Connection;
@@ -102,29 +89,13 @@ export interface DaemonState {
   projectsError: string | null;
   /** Every agent, newest first. */
   agents: Agent[];
-  /** Pending approvals, oldest first, including ones routed to a chief. */
+  /** Pending approvals, oldest first. */
   approvals: Approval[];
   /** Whether the pending approvals have been fetched once. */
   approvalsLoaded: boolean;
   /** False when the daemon answers 404 for the agents routes. */
   agentsSupported: boolean;
   agentsError: string | null;
-  /** Every run, newest first, with task counts. */
-  runs: Run[];
-  runsSupported: boolean;
-  runsError: string | null;
-  /** Open questions from chiefs, oldest first. */
-  questions: Question[];
-  questionsLoaded: boolean;
-  questionsSupported: boolean;
-  /** Boards of the runs a page watches. */
-  boards: Record<number, Board>;
-  boardErrors: Record<number, string>;
-  limits: Record<number, RunLimits>;
-  limitsSupported: boolean;
-  reports: Record<number, ReportState>;
-  /** Every approval, newest first, while a run page shows its activity. */
-  allApprovals: Approval[];
   /** Each project's Chief of Staff, by project id. */
   staffs: Record<number, Staff>;
   /** False when the daemon answers 404 for the staff routes. */
@@ -188,18 +159,6 @@ export function initialState(): DaemonState {
     approvalsLoaded: false,
     agentsSupported: true,
     agentsError: null,
-    runs: [],
-    runsSupported: true,
-    runsError: null,
-    questions: [],
-    questionsLoaded: false,
-    questionsSupported: true,
-    boards: {},
-    boardErrors: {},
-    limits: {},
-    limitsSupported: true,
-    reports: {},
-    allApprovals: [],
     staffs: {},
     staffSupported: true,
     inboxes: {},
@@ -220,23 +179,11 @@ interface Watch<T> {
   refresh: CoalescedRefresh<T>;
 }
 
-interface RunWatch {
-  count: number;
-  board: CoalescedRefresh<Board>;
-  limits: CoalescedRefresh<RunLimits>;
-  report: CoalescedRefresh<string>;
-}
-
 export interface StoreOptions {
   /** How many events to keep in memory. */
   keep?: number;
   /** How many events before the newest to start with. */
   backlog?: number;
-  /**
-   * How long run refreshes wait, so a burst of events (approving a plan logs
-   * one per task) costs one request.
-   */
-  runsDebounceMs?: number;
 }
 
 function message(error: unknown): string {
@@ -260,7 +207,6 @@ export class CosStore {
   readonly client: DaemonClient;
   private readonly keep: number;
   private readonly backlog: number;
-  private readonly runsDebounceMs: number;
   private streamId: number | null = null;
   private started = false;
   /**
@@ -270,15 +216,11 @@ export class CosStore {
   private generation = 0;
   private pendingEvents: LoggedEvent[] = [];
   private flushScheduled = false;
-  private readonly watches = new Map<number, RunWatch>();
 
   // Made again for each host, so an answer from the last one is never applied.
   private projectsRefresh!: CoalescedRefresh<Project[]>;
   private agentsRefresh!: CoalescedRefresh<Agent[]>;
   private approvalsRefresh!: CoalescedRefresh<Approval[]>;
-  private runsRefresh!: CoalescedRefresh<Run[]>;
-  private questionsRefresh!: CoalescedRefresh<Question[]>;
-  private allApprovalsRefresh!: CoalescedRefresh<Approval[]>;
   private devicesRefresh!: CoalescedRefresh<Device[]>;
   private tailnetRefresh!: CoalescedRefresh<TailnetStatus>;
   private globalEnvRefresh!: CoalescedRefresh<EnvVars>;
@@ -303,7 +245,6 @@ export class CosStore {
     this.client = new DaemonClient(bridge);
     this.keep = options.keep ?? 1000;
     this.backlog = options.backlog ?? 200;
-    this.runsDebounceMs = options.runsDebounceMs ?? 120;
     this.createRefreshes();
   }
 
@@ -312,9 +253,6 @@ export class CosStore {
       this.projectsRefresh,
       this.agentsRefresh,
       this.approvalsRefresh,
-      this.runsRefresh,
-      this.questionsRefresh,
-      this.allApprovalsRefresh,
       this.devicesRefresh,
       this.tailnetRefresh,
       this.globalEnvRefresh,
@@ -399,42 +337,6 @@ export class CosStore {
             .sort((a, b) => a.createdMs - b.createdMs),
           approvalsLoaded: true,
         })),
-    );
-    this.runsRefresh = new CoalescedRefresh(
-      () => client.runs(),
-      (result) => {
-        if (result.ok) this.set({ runs: result.value, runsSupported: true, runsError: null });
-        else if (isNotFound(result.error))
-          this.set({ runs: [], runsSupported: false, runsError: null });
-        else this.set({ runsError: message(result.error) });
-      },
-      this.runsDebounceMs,
-    );
-    this.questionsRefresh = new CoalescedRefresh(
-      () => client.questions("open"),
-      (result) => {
-        if (result.ok) {
-          this.set({
-            questions: result.value
-              .filter((q) => q.state === "open")
-              .sort((a, b) => a.createdMs - b.createdMs),
-            questionsLoaded: true,
-            questionsSupported: true,
-          });
-        } else if (isNotFound(result.error)) {
-          this.set({ questions: [], questionsLoaded: true, questionsSupported: false });
-        }
-      },
-      this.runsDebounceMs,
-    );
-    this.allApprovalsRefresh = new CoalescedRefresh(
-      () => client.approvals(null),
-      (result) => {
-        if (result.ok) {
-          this.set({ allApprovals: [...result.value].sort((a, b) => b.createdMs - a.createdMs) });
-        }
-      },
-      this.runsDebounceMs,
     );
   }
 
@@ -545,7 +447,6 @@ export class CosStore {
         this.globalEnvRefresh.request();
         this.judgeRefresh.request();
         this.refreshAgents();
-        this.refreshRuns();
         // What changed while away: the conversations and inboxes on screen.
         for (const watch of this.transcriptWatches.values()) watch.refresh.request();
         for (const watch of this.inboxWatches.values()) watch.refresh.request();
@@ -594,8 +495,6 @@ export class CosStore {
     if (changesProjects(kind)) this.projectsRefresh.request();
     if (changesAgents(kind)) this.agentsRefresh.request();
     if (changesApprovals(kind)) this.approvalsRefresh.request();
-    if (changesRuns(kind)) this.runsRefresh.request();
-    if (changesQuestions(kind)) this.questionsRefresh.request();
     if (changesStaff(kind)) {
       const project = projectOf(event);
       if (project !== null) this.refreshStaff(project);
@@ -618,15 +517,6 @@ export class CosStore {
       }
     }
     if (kind === "agent.transcript") this.transcriptGrew(event);
-    if (this.watches.size > 0) {
-      for (const [id, watch] of this.watches) {
-        const refresh = runRefreshFor(event, id);
-        if (refresh.board) watch.board.request();
-        if (refresh.limits) watch.limits.request();
-        if (refresh.report) watch.report.request();
-      }
-      if (kind.startsWith("approval.")) this.allApprovalsRefresh.request();
-    }
     this.pendingEvents.push(event);
     this.scheduleFlush();
   }
@@ -671,118 +561,6 @@ export class CosStore {
   refreshAgents(): void {
     this.agentsRefresh.request();
     this.approvalsRefresh.request();
-  }
-
-  /** The run list, open questions, and every watched run. */
-  refreshRuns(): void {
-    this.runsRefresh.request();
-    this.questionsRefresh.request();
-    for (const [id, watch] of this.watches) {
-      watch.board.request();
-      watch.limits.request();
-      if (this.get().reports[id] !== undefined) watch.report.request();
-    }
-    if (this.watches.size > 0) this.allApprovalsRefresh.request();
-  }
-
-  // MARK: Watching a run
-
-  /**
-   * Keeps a run's board, limits, report and approvals current until the
-   * returned function is called. Calls are counted, so two pages can watch
-   * one run.
-   */
-  watchRun(id: number): () => void {
-    const existing = this.watches.get(id);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      const client = this.client;
-      const watch: RunWatch = {
-        count: 1,
-        board: new CoalescedRefresh(
-          () => client.board(id),
-          (result) => {
-            if (result.ok) this.storeBoard(result.value);
-            else
-              this.set((s) => ({ boardErrors: { ...s.boardErrors, [id]: message(result.error) } }));
-          },
-          this.runsDebounceMs,
-        ),
-        limits: new CoalescedRefresh(
-          () => client.limits(id),
-          (result) => {
-            if (result.ok) {
-              this.set((s) => ({
-                limits: { ...s.limits, [id]: result.value },
-                limitsSupported: true,
-              }));
-            } else if (isNotFound(result.error)) {
-              // No limits route, or no such run; the board says which.
-              this.set({ limitsSupported: false });
-            }
-          },
-          this.runsDebounceMs,
-        ),
-        report: new CoalescedRefresh(
-          () => client.report(id),
-          (result) => {
-            const report: ReportState = result.ok
-              ? { kind: "markdown", markdown: result.value }
-              : isNotFound(result.error)
-                ? { kind: "not_written" }
-                : { kind: "failed", message: message(result.error) };
-            this.set((s) => ({ reports: { ...s.reports, [id]: report } }));
-          },
-          this.runsDebounceMs,
-        ),
-      };
-      this.watches.set(id, watch);
-      watch.board.request();
-      watch.limits.request();
-      this.allApprovalsRefresh.request();
-    }
-    let done = false;
-    return () => {
-      if (done) return;
-      done = true;
-      this.unwatchRun(id);
-    };
-  }
-
-  private unwatchRun(id: number): void {
-    const watch = this.watches.get(id);
-    if (!watch) return;
-    watch.count -= 1;
-    if (watch.count <= 0) {
-      watch.board.dispose();
-      watch.limits.dispose();
-      watch.report.dispose();
-      this.watches.delete(id);
-    }
-  }
-
-  isWatching(id: number): boolean {
-    return this.watches.has(id);
-  }
-
-  /** Keeps a board and the run list in step, and fetches the report once there may be one. */
-  private storeBoard(board: Board): void {
-    const id = board.run.id;
-    this.set((s) => {
-      const run: Run = { ...board.run, counts: board.counts };
-      const index = s.runs.findIndex((r) => r.id === id);
-      const runs = index >= 0 ? s.runs.map((r, i) => (i === index ? run : r)) : [run, ...s.runs];
-      const boardErrors = { ...s.boardErrors };
-      delete boardErrors[id];
-      return { boards: { ...s.boards, [id]: board }, boardErrors, runs };
-    });
-    const mayHaveReport =
-      board.run.state === "done" ||
-      board.run.state === "reporting" ||
-      board.run.reportPath !== null;
-    const watch = this.watches.get(id);
-    if (mayHaveReport && this.get().reports[id] === undefined && watch) watch.report.request();
   }
 
   // MARK: The Chief of Staff
@@ -1296,7 +1074,6 @@ export class CosStore {
     } finally {
       this.approvalsRefresh.request();
       this.agentsRefresh.request();
-      if (this.watches.size > 0) this.allApprovalsRefresh.request();
     }
   }
 
@@ -1312,68 +1089,6 @@ export class CosStore {
           index >= 0 ? s.agents.map((a, i) => (i === index ? agent : a)) : [agent, ...s.agents],
       };
     });
-  }
-
-  // MARK: Run actions
-
-  async createRun(request: NewRun): Promise<Run> {
-    const run = await this.client.createRun(request);
-    this.set((s) => ({ runs: [run, ...s.runs.filter((r) => r.id !== run.id)] }));
-    this.runsRefresh.request();
-    return run;
-  }
-
-  async approvePlan(runId: number): Promise<Board> {
-    const board = await this.client.approvePlan(runId);
-    this.storeBoard(board);
-    this.runsRefresh.request();
-    return board;
-  }
-
-  async cancelRun(runId: number, reason?: string): Promise<Board> {
-    const board = await this.client.cancelRun(runId, reason);
-    this.storeBoard(board);
-    this.runsRefresh.request();
-    this.questionsRefresh.request();
-    return board;
-  }
-
-  /** Retry (`ready`), fail or cancel a task. */
-  async updateTask(task: RunTask, state: string, reason?: string): Promise<Board> {
-    const board = await this.client.updateTask(task.id, state, reason);
-    this.storeBoard(board);
-    this.runsRefresh.request();
-    return board;
-  }
-
-  /** One answered elsewhere meanwhile (409) leaves the list anyway; the error is rethrown. */
-  async answer(question: Question, text: string): Promise<Question> {
-    try {
-      const answered = await this.client.answer(question.id, text);
-      this.dropQuestion(question.id);
-      return answered;
-    } catch (error) {
-      if (isConflict(error)) this.dropQuestion(question.id);
-      throw error;
-    } finally {
-      this.questionsRefresh.request();
-    }
-  }
-
-  private dropQuestion(id: number): void {
-    this.set((s) => ({ questions: s.questions.filter((q) => q.id !== id) }));
-  }
-
-  messageChief(runId: number, text: string): Promise<void> {
-    return this.client.messageChief(runId, text);
-  }
-
-  async setLimits(runId: number, preset: string, approvalCap: number): Promise<RunLimits> {
-    const limits = await this.client.setLimits(runId, { preset, approvalCap });
-    this.set((s) => ({ limits: { ...s.limits, [runId]: limits } }));
-    this.watches.get(runId)?.board.request();
-    this.runsRefresh.request();
-    return limits;
   }
 
   // MARK: Hosts
@@ -1439,12 +1154,6 @@ export class CosStore {
     this.stop();
     this.streamId = null;
     this.disposeRefreshes();
-    for (const watch of this.watches.values()) {
-      watch.board.dispose();
-      watch.limits.dispose();
-      watch.report.dispose();
-    }
-    this.watches.clear();
     // Chiefs, conversations and inboxes belong to the old host. A page still
     // holding a watch lets go of nothing: its cleanup finds the watch gone.
     for (const refresh of this.staffRefreshes.values()) refresh.dispose();

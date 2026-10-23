@@ -1,10 +1,10 @@
 // What a tab across the top says about its page: a title, a kind for its
-// icon, and, for agents and runs, their state for a dot. Plain values only,
+// icon, and, for agents, their state for a dot. Plain values only,
 // so a component can select it without re-rendering on every event.
 
-import { type AgentState, type RunState, workspaceName } from "../api/models";
-import { type StateLabel, agentLabel, runLabel } from "../domain/labels";
-import { agent, project, run, workspace } from "../store/selectors";
+import { type AgentState, workspaceName } from "../api/models";
+import { type StateLabel, agentLabel } from "../domain/labels";
+import { agent, project, workspace } from "../store/selectors";
 import type { DaemonState } from "../store/store";
 import type { Page } from "./ui";
 
@@ -14,18 +14,16 @@ export interface TabInfo {
   hint: string;
   kind: Page["kind"];
   agentState: AgentState | null;
-  runState: RunState | null;
 }
 
-/** An agent's or a run's state, for the tab's dot. */
+/** An agent's state, for the tab's dot. */
 export function tabState(info: TabInfo): StateLabel | null {
   if (info.agentState !== null) return agentLabel(info.agentState);
-  if (info.runState !== null) return runLabel(info.runState);
   return null;
 }
 
 export function tabInfo(s: DaemonState, page: Page): TabInfo {
-  const base = { kind: page.kind, agentState: null, runState: null };
+  const base = { kind: page.kind, agentState: null };
   switch (page.kind) {
     case "waiting":
       return { ...base, title: "Waiting on you", hint: "Waiting on you" };
@@ -64,11 +62,6 @@ export function tabInfo(s: DaemonState, page: Page): TabInfo {
         hint: ws ? `${workspaceName(ws)} · ${title}` : title,
         agentState: a.state,
       };
-    }
-    case "run": {
-      const r = run(s, page.id);
-      if (!r) return { ...base, title: "Removed run", hint: "Removed run" };
-      return { ...base, title: r.goal, hint: `Run · ${r.goal}`, runState: r.state };
     }
   }
 }

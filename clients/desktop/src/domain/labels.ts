@@ -1,4 +1,4 @@
-import type { AgentState, Preset, RunState, TaskState } from "../api/models";
+import type { AgentState } from "../api/models";
 import type { Tone } from "./approvals";
 
 export type { Tone };
@@ -47,78 +47,6 @@ export function isAlive(state: AgentState): boolean {
 
 export function canResume(state: AgentState): boolean {
   return state === "exited" || state === "interrupted";
-}
-
-export function runLabel(state: RunState): StateLabel {
-  switch (state) {
-    case "planning":
-      return { title: "Planning", tone: "purple", busy: true, attention: false };
-    case "awaiting_plan_approval":
-      return { title: "Plan ready", tone: "accent", busy: false, attention: true };
-    case "running":
-      return { title: "Running", tone: "blue", busy: true, attention: false };
-    case "reporting":
-      return { title: "Writing report", tone: "teal", busy: true, attention: false };
-    case "done":
-      return { title: "Done", tone: "green", busy: false, attention: false };
-    case "failed":
-      return { title: "Failed", tone: "red", busy: false, attention: false };
-    case "cancelled":
-      return { title: "Cancelled", tone: "neutral", busy: false, attention: false };
-    default:
-      return { title: titleCase(state), tone: "neutral", busy: false, attention: false };
-  }
-}
-
-export function taskLabel(state: TaskState): StateLabel {
-  switch (state) {
-    case "proposed":
-      return { title: "Proposed", tone: "neutral", busy: false, attention: false };
-    case "ready":
-      return { title: "Ready", tone: "teal", busy: false, attention: false };
-    case "running":
-      return { title: "Working", tone: "blue", busy: true, attention: false };
-    case "checking":
-      return { title: "Checking", tone: "purple", busy: true, attention: false };
-    case "review":
-      return { title: "In review", tone: "purple", busy: true, attention: false };
-    case "merged":
-      return { title: "Merged", tone: "green", busy: false, attention: false };
-    case "blocked":
-      return { title: "Blocked", tone: "accent", busy: false, attention: true };
-    case "failed":
-      return { title: "Failed", tone: "red", busy: false, attention: false };
-    case "cancelled":
-      return { title: "Cancelled", tone: "neutral", busy: false, attention: false };
-    default:
-      return { title: titleCase(state), tone: "neutral", busy: false, attention: false };
-  }
-}
-
-export const presets: Preset[] = ["strict", "normal", "trusted"];
-
-export function presetTitle(preset: Preset): string {
-  return preset === "strict"
-    ? "Strict"
-    : preset === "normal"
-      ? "Normal"
-      : preset === "trusted"
-        ? "Trusted"
-        : titleCase(preset);
-}
-
-/** One line on what the chief may approve for you. */
-export function presetExplanation(preset: Preset): string {
-  switch (preset) {
-    case "strict":
-      return "The chief approves nothing. Every request the rules don't allow asks you.";
-    case "normal":
-      return "The chief may approve builds, scripts and edits inside a task's worktree. Network access and installs ask you.";
-    case "trusted":
-      return "The chief may also approve downloads, network reads and installs into the worktree.";
-    default:
-      return "A preset this app doesn't know yet.";
-  }
 }
 
 export const models = [

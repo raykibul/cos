@@ -1,5 +1,5 @@
 import type { Bridge, HttpMethod } from "../bridge/types";
-import { DecodeError, isObject, page } from "./decode";
+import { DecodeError, page } from "./decode";
 import {
   type EnvAnswer,
   type EnvVars,
@@ -14,25 +14,17 @@ import {
   type Agent,
   type AgentScreen,
   type Approval,
-  type Board,
   type Device,
   type LoggedEvent,
   type Project,
-  type Question,
-  type Run,
-  type RunLimits,
   type Status,
   type TailnetStatus,
   type Workspace,
   decodeAgent,
   decodeApproval,
-  decodeBoard,
   decodeDevice,
   decodeEvent,
-  decodeLimits,
   decodeProject,
-  decodeQuestion,
-  decodeRun,
   decodeScreen,
   decodeStatus,
   decodeTailnet,
@@ -57,21 +49,6 @@ export interface NewAgent {
   userSettings?: boolean;
   rows?: number;
   cols?: number;
-}
-
-export interface NewRun {
-  workspaceId: number;
-  goal: string;
-  preset?: string;
-  approvalCap?: number;
-}
-
-export interface ProposedTask {
-  title: string;
-  instructions: string;
-  files: string[];
-  test_command?: string;
-  depends_on?: string[];
 }
 
 export type Decision = "allow" | "deny";
@@ -279,93 +256,6 @@ export class DaemonClient {
     const text = trimmed(message);
     if (text) body.message = text;
     return this.send("POST", `/v1/approvals/${id}`, body, decodeApproval);
-  }
-
-  /** The chief's `approval_decide`. Apps don't normally call it. */
-  chiefDecide(id: number, decision: Decision, reason: string): Promise<Approval> {
-    return this.send("POST", `/v1/approvals/${id}/chief`, { decision, reason }, decodeApproval);
-  }
-
-  // MARK: Runs
-
-  runs(): Promise<Run[]> {
-    return this.get("/v1/runs", (b) => page(b, "runs", decodeRun));
-  }
-
-  createRun(request: NewRun): Promise<Run> {
-    const body: Record<string, unknown> = {
-      workspace_id: request.workspaceId,
-      goal: request.goal.trim(),
-    };
-    if (request.preset) body.preset = request.preset;
-    if (request.approvalCap !== undefined) body.approval_cap = request.approvalCap;
-    return this.send("POST", "/v1/runs", body, decodeRun);
-  }
-
-  board(runId: number): Promise<Board> {
-    return this.get(`/v1/runs/${runId}`, decodeBoard);
-  }
-
-  /** The chief's `board_propose`, raw. Apps don't normally call it. */
-  proposePlan(runId: number, tasks: ProposedTask[]): Promise<Board> {
-    return this.send("POST", `/v1/runs/${runId}/plan`, { tasks }, decodeBoard);
-  }
-
-  approvePlan(runId: number): Promise<Board> {
-    return this.send("POST", `/v1/runs/${runId}/approve-plan`, undefined, decodeBoard);
-  }
-
-  cancelRun(runId: number, reason?: string): Promise<Board> {
-    const text = trimmed(reason);
-    return this.send(
-      "POST",
-      `/v1/runs/${runId}/cancel`,
-      text ? { reason: text } : undefined,
-      decodeBoard,
-    );
-  }
-
-  /** `ready` retries a blocked task; `failed` and `cancelled` end it. */
-  updateTask(taskId: number, state: string, reason?: string): Promise<Board> {
-    const body: Record<string, string> = { state };
-    const text = trimmed(reason);
-    if (text) body.reason = text;
-    return this.send("PATCH", `/v1/tasks/${taskId}`, body, decodeBoard);
-  }
-
-  /** Open ones by default; `null` for all. */
-  questions(state: string | null = "open"): Promise<Question[]> {
-    return this.get(`/v1/questions${query({ state })}`, (b) =>
-      page(b, "questions", decodeQuestion),
-    );
-  }
-
-  answer(questionId: number, answer: string): Promise<Question> {
-    return this.send("POST", `/v1/questions/${questionId}/answer`, { answer }, decodeQuestion);
-  }
-
-  async messageChief(runId: number, text: string): Promise<void> {
-    await this.request("POST", `/v1/runs/${runId}/message`, { text });
-  }
-
-  /** The report's markdown; `not_found` before it's written. */
-  report(runId: number): Promise<string> {
-    return this.get(`/v1/runs/${runId}/report`, (body) => {
-      if (isObject(body) && typeof body.markdown === "string") return body.markdown;
-      if (typeof body === "string") return body;
-      throw new DecodeError("report has no markdown");
-    });
-  }
-
-  limits(runId: number): Promise<RunLimits> {
-    return this.get(`/v1/runs/${runId}/limits`, decodeLimits);
-  }
-
-  setLimits(runId: number, limits: { preset?: string; approvalCap?: number }): Promise<RunLimits> {
-    const body: Record<string, unknown> = {};
-    if (limits.preset) body.preset = limits.preset;
-    if (limits.approvalCap !== undefined) body.approval_cap = limits.approvalCap;
-    return this.send("PUT", `/v1/runs/${runId}/limits`, body, decodeLimits);
   }
 
   // MARK: The Chief of Staff (docs/chief-of-staff.md)

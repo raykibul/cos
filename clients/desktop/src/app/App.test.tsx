@@ -42,15 +42,12 @@ async function renderApp(page: Page = { kind: "waiting" }, running = true) {
 }
 
 describe("Waiting on you", () => {
-  it("lists plans, questions, your approvals and trust dialogs, not the chief's", async () => {
+  it("lists your approvals, trust dialogs and Claude logins", async () => {
     await renderApp();
     expect(screen.getByRole("heading", { name: "Waiting on you", level: 1 })).toBeInTheDocument();
-    expect(page().getByText("Move the parser to a streaming tokenizer")).toBeInTheDocument();
-    expect(screen.getByText(/30-day revenue rollup/)).toBeInTheDocument();
     expect(screen.getByText("npm install left-pad --save")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Trust folder" })).toBeInTheDocument();
-    // Routed to the chief of run 10: not yours.
-    expect(screen.queryByText("cargo build --release")).not.toBeInTheDocument();
+    expect(screen.getByText("Claude needs you to log in")).toBeInTheDocument();
   });
 
   it("allows a request, which then leaves the list", async () => {
@@ -64,14 +61,6 @@ describe("Waiting on you", () => {
       path: "/v1/approvals/12",
       body: { decision: "allow" },
     });
-  });
-
-  it("answers a question with a choice", async () => {
-    const { user, daemon } = await renderApp();
-    await user.click(screen.getByRole("button", { name: "Precompute nightly" }));
-    await act(() => settle());
-    expect(daemon.requests.some((r) => r.path.endsWith("/answer"))).toBe(true);
-    expect(screen.queryByText(/30-day revenue rollup/)).not.toBeInTheDocument();
   });
 
   it("shows the waiting count in the sidebar", async () => {
@@ -139,10 +128,13 @@ describe("agent page", () => {
     await waitFor(() => expect(written.join("")).toContain("Do you want to proceed?"));
   });
 
-  it("says the chief is deciding for a chief-routed request, and still lets you answer", async () => {
-    await renderApp({ kind: "agent", id: 25 });
-    expect(screen.getByText("The chief is deciding")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+  it("shows a pending request with why cos asks you", async () => {
+    await renderApp({ kind: "agent", id: 8 });
+    expect(page().getByText("Claude wants to run")).toBeInTheDocument();
+    expect(
+      page().getByText(/cos asks you because it changes or downloads dependencies/),
+    ).toBeInTheDocument();
+    expect(page().getByRole("button", { name: "Allow" })).toBeInTheDocument();
   });
 
   it("offers Resume for an exited agent", async () => {
@@ -150,62 +142,6 @@ describe("agent page", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
-  });
-});
-
-describe("run page", () => {
-  it("approves a proposed plan", async () => {
-    const { user, daemon } = await renderApp({ kind: "run", id: 11 });
-    await act(() => settle());
-    expect(screen.getByText("The chief's plan is ready")).toBeInTheDocument();
-    expect(screen.getByText("Write a streaming tokenizer")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Approve plan" }));
-    await act(() => settle());
-    expect(daemon.requests.some((r) => r.path === "/v1/runs/11/approve-plan")).toBe(true);
-    expect(screen.queryByText("The chief's plan is ready")).not.toBeInTheDocument();
-  });
-
-  it("shows the board with task actions by the rules", async () => {
-    const { user } = await renderApp({ kind: "run", id: 10 });
-    await act(() => settle());
-    // Its worker carries the same title.
-    expect(page().getAllByText("Rate-limit the API routes").length).toBeGreaterThan(0);
-    // Merged tasks have no actions; blocked ones can be retried.
-    expect(screen.queryByRole("button", { name: "Actions for Add a token bucket" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Actions for Rate-limit the API routes" }));
-    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
-    expect(items).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/Mark failed/),
-        expect.stringMatching(/Cancel task/),
-      ]),
-    );
-  });
-
-  it("asks a reason before failing a task", async () => {
-    const { user, daemon } = await renderApp({ kind: "run", id: 10 });
-    await act(() => settle());
-    await user.click(screen.getByRole("button", { name: "Actions for Rate-limit the API routes" }));
-    await user.click(screen.getByRole("menuitem", { name: /Mark failed/ }));
-    const dialog = screen.getByRole("dialog");
-    const submit = within(dialog).getByRole("button", { name: "Mark failed" });
-    expect(submit).toBeDisabled();
-    await user.type(within(dialog).getByRole("textbox"), "Out of scope");
-    await user.click(submit);
-    await act(() => settle());
-    expect(daemon.requests).toContainEqual({
-      method: "PATCH",
-      path: "/v1/tasks/103",
-      body: { state: "failed", reason: "Out of scope" },
-    });
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
-
-  it("renders the report of a finished run", async () => {
-    await renderApp({ kind: "run", id: 7 });
-    await act(() => settle());
-    expect(screen.getByRole("heading", { name: "What changed" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
   });
 });
 
@@ -226,23 +162,5 @@ describe("sheets", () => {
     await act(() => settle());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(ui.store.getState().page.kind).toBe("chief");
-  });
-
-  it("starts a run with a preset and cap", async () => {
-    const { user, daemon } = await renderApp({ kind: "workspace", id: 8 });
-    await user.click(screen.getByRole("button", { name: "New run" }));
-    const dialog = screen.getByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox", { name: "Goal" }), "Speed up parsing");
-    await user.click(within(dialog).getByRole("radio", { name: /Strict/ }));
-    const cap = within(dialog).getByRole("spinbutton");
-    await user.clear(cap);
-    await user.type(cap, "5");
-    await user.click(within(dialog).getByRole("button", { name: "Start run" }));
-    await act(() => settle());
-    expect(daemon.requests).toContainEqual({
-      method: "POST",
-      path: "/v1/runs",
-      body: { workspace_id: 8, goal: "Speed up parsing", preset: "strict", approval_cap: 5 },
-    });
   });
 });

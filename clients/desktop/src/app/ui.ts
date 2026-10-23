@@ -4,7 +4,6 @@
 
 import { createStore } from "zustand/vanilla";
 import { messageOf } from "../api/errors";
-import type { TaskActionKind } from "../domain/tasks";
 
 export type Page =
   | { kind: "waiting" }
@@ -14,7 +13,6 @@ export type Page =
   | { kind: "chief"; id: number }
   | { kind: "workspace"; id: number }
   | { kind: "agent"; id: number }
-  | { kind: "run"; id: number }
   /** A project's environment variables for its agents; `id` is the project's. */
   | { kind: "projectEnv"; id: number }
   /** Settings: your machines, environment variables for all projects, and remote access to this one. */
@@ -28,10 +26,6 @@ export type DialogState =
   | { kind: "removeWorkspace"; workspaceId: number }
   | { kind: "newAgent"; workspaceId: number }
   | { kind: "removeAgent"; agentId: number }
-  | { kind: "newRun"; workspaceId: number }
-  | { kind: "cancelRun"; runId: number }
-  | { kind: "taskAction"; runId: number; taskId: number; action: TaskActionKind }
-  | { kind: "limits"; runId: number }
   /**
    * Adds or changes an environment variable, for all projects (`projectId`
    * null) or one. `edit` changes one the scope has; `override` gives a

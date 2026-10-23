@@ -1,21 +1,11 @@
 // Lookups over the store's state. Pure functions, so components and tests
 // share them.
 
-import type {
-  Agent,
-  AgentState,
-  Approval,
-  Device,
-  Project,
-  Question,
-  Run,
-  Workspace,
-} from "../api/models";
+import type { Agent, AgentState, Approval, Device, Project, Workspace } from "../api/models";
 import { CLAUDE_CONFIG_DIR, accountOf, sortedNames } from "../api/env";
 import type { Page } from "../app/ui";
 import { isForYou } from "../domain/approvals";
 import { isAlive } from "../domain/labels";
-import { isRunFinished } from "../domain/tasks";
 import type { DaemonState } from "./store";
 
 export function project(s: DaemonState, id: number): Project | undefined {
@@ -39,9 +29,9 @@ export function agent(
   return s.agents.find((a) => a.id === id);
 }
 
-/** Your agents in a workspace, newest first; a run's are on its page. */
+/** The agents in a workspace, newest first. */
 export function userAgents(s: DaemonState, workspaceId: number): Agent[] {
-  return s.agents.filter((a) => a.workspaceId === workspaceId && a.runId === null);
+  return s.agents.filter((a) => a.workspaceId === workspaceId);
 }
 
 /** The approval an agent waits on, if any. */
@@ -52,7 +42,7 @@ export function pendingApproval(
   return s.approvals.find((a) => a.agentId === agentId && a.state === "pending");
 }
 
-/** Pending approvals that are yours to answer: not routed to a chief. */
+/** Pending approvals: every one is yours to answer. */
 export function approvalsForYou(s: DaemonState): Approval[] {
   return s.approvals.filter(isForYou);
 }
@@ -67,90 +57,30 @@ export function loginAgents(s: DaemonState): Agent[] {
   return s.agents.filter((a) => a.state === "needs_login");
 }
 
-/** Runs whose plan waits for you, oldest first. */
-export function plansAwaitingApproval(s: DaemonState): Run[] {
-  return s.runs
-    .filter((r) => r.state === "awaiting_plan_approval")
-    .sort((a, b) => a.createdAt - b.createdAt);
-}
-
 /** Devices asking to reach this Mac over Tailscale, oldest first. */
 export function pendingDevices(s: DaemonState): Device[] {
   return s.devices.filter((d) => d.state === "pending");
 }
 
 /**
- * Everything blocked on you: approvals routed to you (not to a chief),
- * agents on the trust dialog or the login screen, chiefs' open questions, plans to approve, and
- * devices asking to reach this Mac.
+ * Everything blocked on you: approvals, agents on the trust dialog or the
+ * login screen, and devices asking to reach this Mac.
  */
 export function waitingCount(s: DaemonState): number {
   return (
     approvalsForYou(s).length +
     trustAgents(s).length +
     loginAgents(s).length +
-    s.questions.length +
-    plansAwaitingApproval(s).length +
     pendingDevices(s).length
   );
 }
 
-/** Whether an agent waits on you: the trust dialog, the login screen, or an approval routed to you. */
+/** Whether an agent waits on you: the trust dialog, the login screen, or an approval. */
 export function agentNeedsYou(s: DaemonState, a: Agent): boolean {
   if (a.state === "needs_trust" || a.state === "needs_login") return true;
   const approval = pendingApproval(s, a.id);
   if (approval) return isForYou(approval);
   return a.state === "waiting_approval";
-}
-
-/** The run with its counts: from its board when a page shows it. */
-export function run(s: DaemonState, id: number): Run | undefined {
-  const board = s.boards[id];
-  if (board) return { ...board.run, counts: board.counts };
-  return s.runs.find((r) => r.id === id);
-}
-
-/** A workspace's runs, newest first. */
-export function runsIn(s: DaemonState, workspaceId: number): Run[] {
-  return s.runs.filter((r) => r.workspaceId === workspaceId);
-}
-
-/** The workspace's unfinished run. There is at most one. */
-export function currentRun(s: DaemonState, workspaceId: number): Run | undefined {
-  return s.runs.find((r) => r.workspaceId === workspaceId && !isRunFinished(r.state));
-}
-
-export function questionsFor(s: DaemonState, runId: number): Question[] {
-  return s.questions.filter((q) => q.runId === runId);
-}
-
-/** Agents a run started: its chief, workers and reviewers. */
-export function agentsForRun(s: DaemonState, runId: number): Agent[] {
-  return s.agents.filter((a) => a.runId === runId);
-}
-
-/**
- * Every approval of a run's agents, newest first, including the ones rules
- * allowed. Pending ones come from the live list too, in case the full list lags.
- */
-export function approvalsForRun(s: DaemonState, runId: number): Approval[] {
-  const ids = new Set(agentsForRun(s, runId).map((a) => a.id));
-  const seen = new Set<number>();
-  return [...s.approvals, ...s.allApprovals]
-    .filter((a) => ids.has(a.agentId))
-    .filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)))
-    .sort((a, b) => b.createdMs - a.createdMs);
-}
-
-/** How many things in a run wait on you: its plan, its questions, and its agents' approvals routed to you. */
-export function waitingCountForRun(s: DaemonState, runId: number): number {
-  const ids = new Set(agentsForRun(s, runId).map((a) => a.id));
-  const plan = run(s, runId)?.state === "awaiting_plan_approval" ? 1 : 0;
-  return (
-    plan +
-    questionsFor(s, runId).length +
-    approvalsForYou(s).filter((a) => ids.has(a.agentId)).length
-  );
 }
 
 // MARK: The Chief of Staff and workspaces
@@ -187,7 +117,7 @@ export function spawnedAgents(
 /** Something one of the chief's agents (or the chief) waits on you for. */
 export interface ChiefRequest {
   agent: Agent;
-  /** Its approval routed to you; none for the trust dialog or the login screen (see `agent.state`). */
+  /** Its approval; none for the trust dialog or the login screen (see `agent.state`). */
   approval: Approval | undefined;
 }
 
@@ -224,7 +154,7 @@ export function activityOf(s: DaemonState, agents: Agent[]): Activity {
   return "none";
 }
 
-/** Every agent in a workspace, yours and a run's. */
+/** Every agent in a workspace. */
 export function workspaceAgents(s: DaemonState, workspaceId: number): Agent[] {
   return s.agents.filter((a) => a.workspaceId === workspaceId);
 }
@@ -240,15 +170,13 @@ export function projectActivity(s: DaemonState, project: Project): Activity {
   return activity === "idle" ? "none" : activity;
 }
 
-/** The workspace a page shows, directly or through one of its agents or runs. */
+/** The workspace a page shows, directly or through one of its agents. */
 export function workspaceOfPage(s: DaemonState, page: Page): number | null {
   switch (page.kind) {
     case "workspace":
       return page.id;
     case "agent":
       return agent(s, page.id)?.workspaceId ?? null;
-    case "run":
-      return run(s, page.id)?.workspaceId ?? null;
     default:
       return null;
   }
@@ -311,24 +239,6 @@ export function claudeAccount(s: DaemonState, projectId: number): ClaudeAccount 
   return { account, value, inherited: !(CLAUDE_CONFIG_DIR in env.variables) };
 }
 
-/** The current run and the latest two finished ones, plus the selected one. */
-export function sidebarRuns(
-  s: DaemonState,
-  workspaceId: number,
-  selectedRun: number | null,
-): Run[] {
-  const runs = runsIn(s, workspaceId);
-  const shown = [
-    ...runs.filter((r) => !isRunFinished(r.state)),
-    ...runs.filter((r) => isRunFinished(r.state)).slice(0, 2),
-  ];
-  if (selectedRun !== null && !shown.some((r) => r.id === selectedRun)) {
-    const selected = runs.find((r) => r.id === selectedRun);
-    if (selected) shown.push(selected);
-  }
-  return shown;
-}
-
 // MARK: The project rail
 
 /** Every agent of a project: its chief, its workspaces' agents and the ones its chief started. */
@@ -344,16 +254,11 @@ export function projectAgents(s: DaemonState, project: Project): Agent[] {
 }
 
 /**
- * How many things in a project wait on you: its agents' approvals routed to
- * you, trust dialogs and login screens, plans to approve and open questions.
+ * How many things in a project wait on you: its agents' approvals, trust
+ * dialogs and login screens.
  */
 export function projectWaitingCount(s: DaemonState, project: Project): number {
-  const ids = new Set(project.workspaces.map((w) => w.id));
-  const runs = new Set(s.runs.filter((r) => ids.has(r.workspaceId)).map((r) => r.id));
-  const agents = projectAgents(s, project).filter((a) => agentNeedsYou(s, a)).length;
-  const plans = s.runs.filter((r) => runs.has(r.id) && r.state === "awaiting_plan_approval").length;
-  const questions = s.questions.filter((q) => q.runId !== null && runs.has(q.runId)).length;
-  return agents + plans + questions;
+  return projectAgents(s, project).filter((a) => agentNeedsYou(s, a)).length;
 }
 
 /**

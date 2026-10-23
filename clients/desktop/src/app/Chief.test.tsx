@@ -135,7 +135,7 @@ describe("chief page", () => {
     const items = log.getAllByRole("listitem").map((li) => li.textContent);
     expect(items).toEqual([
       expect.stringMatching(/^Review and merge lisbon/),
-      expect.stringMatching(/^Approve the plan in porto/),
+      expect.stringMatching(/^Trust the folder in porto/),
       expect.stringMatching(/^Finish the release notes/),
     ]);
     // A wakeup isn't shown as your message.

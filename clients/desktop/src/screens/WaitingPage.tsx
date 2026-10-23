@@ -1,13 +1,12 @@
 import {
   CheckCircle2,
-  ClipboardList,
   KeyRound,
   ShieldQuestion,
   SquareTerminal,
   TerminalSquare,
 } from "lucide-react";
 import { useState } from "react";
-import { type Agent, type Approval, type Run, workspaceName } from "../api/models";
+import { type Agent, type Approval, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { approvalDetail, approvalHeadline, routeExplanation } from "../domain/approvals";
 import { pluralize } from "../domain/labels";
@@ -16,7 +15,6 @@ import {
   approvalsForYou,
   loginAgents,
   pendingDevices,
-  plansAwaitingApproval,
   trustAgents,
   waitingCount,
   workspace as workspaceOf,
@@ -26,18 +24,13 @@ import { Button, EmptyState, PathText, SectionTitle } from "../ui/kit";
 import { PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { LoginHint } from "./AgentPage";
 import { DeviceRequestCard } from "./Devices";
-import { ApprovalButtons, QuestionCard } from "./shared";
+import { ApprovalButtons } from "./shared";
 
 /**
- * Everything blocked on you, oldest first: plans to approve, chiefs'
- * questions, permission requests routed to you, trust dialogs and Claude
- * login screens. Requests
- * routed to a chief aren't here; they're on their agent and in their run's
- * activity.
+ * Everything blocked on you, oldest first: permission requests, trust
+ * dialogs, Claude login screens and devices asking to reach this Mac.
  */
 export function WaitingPage() {
-  const plans = useCos(plansAwaitingApproval);
-  const questions = useCos((s) => s.questions);
   const approvals = useCos(approvalsForYou);
   const trusting = useCos(trustAgents);
   const logins = useCos(loginAgents);
@@ -53,7 +46,7 @@ export function WaitingPage() {
         <PageTitle
           subtitle={
             count === 0
-              ? "Plans to approve, chiefs' questions and permission requests show up here."
+              ? "Permission requests and trust dialogs show up here."
               : `${pluralize(count, "thing")} can't go on until you answer.`
           }
         >
@@ -63,32 +56,10 @@ export function WaitingPage() {
         {count === 0 ? (
           <div className="rounded-2xl border border-dashed border-line-strong">
             <EmptyState icon={CheckCircle2} title="Nothing needs you right now">
-              When an agent asks for permission, a chief has a question or a plan is ready, it
-              appears here and in the menu bar.
+              When an agent asks for permission or Claude asks to trust a folder, it appears here
+              and in the menu bar.
             </EmptyState>
           </div>
-        ) : null}
-
-        {plans.length > 0 ? (
-          <section className="mb-8">
-            <SectionTitle>Plans to review</SectionTitle>
-            <div className="flex flex-col gap-3">
-              {plans.map((run) => (
-                <PlanCard key={run.id} run={run} />
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {questions.length > 0 ? (
-          <section className="mb-8">
-            <SectionTitle>Questions from chiefs</SectionTitle>
-            <div className="flex flex-col gap-3">
-              {questions.map((question) => (
-                <QuestionCard key={question.id} question={question} />
-              ))}
-            </div>
-          </section>
         ) : null}
 
         {approvals.length > 0 ? (
@@ -166,30 +137,6 @@ function Meta({
       {ws ? <span className="truncate">· in {workspaceName(ws)}</span> : null}
       <span className="ml-auto shrink-0">{relativeTime(since, now)}</span>
     </div>
-  );
-}
-
-function PlanCard({ run }: { run: Run }) {
-  const { ui } = useApp();
-  const now = useNow();
-  const ws = useCos((s) => workspaceOf(s, run.workspaceId));
-  const tasks = run.counts?.total ?? 0;
-  return (
-    <article className="flex items-center gap-4 rounded-xl border border-line bg-surface p-4 shadow-card">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent-ink">
-        <ClipboardList className="size-[18px]" strokeWidth={1.8} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[12.5px] text-ink-3">
-          The chief's plan is ready{tasks ? ` · ${pluralize(tasks, "task")}` : ""}
-          {ws ? ` · in ${workspaceName(ws)}` : ""} · {relativeTime(run.updatedAt, now)}
-        </p>
-        <p className="mt-0.5 truncate text-[14.5px] font-medium text-ink">{run.goal}</p>
-      </div>
-      <Button variant="primary" onClick={() => ui.navigate({ kind: "run", id: run.id })}>
-        Review plan
-      </Button>
-    </article>
   );
 }
 

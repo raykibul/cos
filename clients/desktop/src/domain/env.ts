@@ -27,6 +27,6 @@ export function envNote(projectName: string | null): string {
   const who =
     projectName === null
       ? "Used by every project's agents, unless a project sets its own value."
-      : `Used by every agent in ${projectName}: its Chief of Staff, workspace agents and runs.`;
+      : `Used by every agent in ${projectName}: its Chief of Staff and workspace agents.`;
   return `${who} Running agents keep their current values until they restart.`;
 }

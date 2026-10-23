@@ -76,17 +76,8 @@ const shots = [
   ["agent-approval", "page=agent:8"],
   ["agent-trust", "page=agent:9"],
   ["agent-login", "page=agent:11"],
-  ["run-running", "page=run:10"],
-  ["run-plan", "page=run:11"],
-  ["run-done", "page=run:7"],
-  [
-    "run-chief-terminal",
-    "page=run:10",
-    (page) => page.getByRole("button", { name: "Chief", exact: true }).click(),
-  ],
   ["not-running", "daemon=off"],
   ["sheet-new-agent", "page=workspace:3&dialog=newAgent:3"],
-  ["sheet-new-run", "page=workspace:4&dialog=newRun:4"],
   ["sheet-add-project", "page=waiting&dialog=addProject"],
   ["sheet-new-workspace", "page=project:1&dialog=newWorkspace:1"],
   [

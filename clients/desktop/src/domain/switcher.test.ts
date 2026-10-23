@@ -20,9 +20,7 @@ describe("switcher items", () => {
     ]);
     const waiting = all.filter((i) => i.section === "Waiting on you");
     expect(waiting.some((i) => i.detail.startsWith("npm install left-pad --save"))).toBe(true);
-    expect(waiting.some((i) => i.title.startsWith("Plan ready:"))).toBe(true);
-    // Routed to a run's chief: not yours.
-    expect(waiting.some((i) => i.detail.includes("cargo build --release"))).toBe(false);
+    expect(waiting.some((i) => i.key === "login:11")).toBe(true);
     expect(all.find((i) => i.key === "events")?.page).toEqual({ kind: "events" });
   });
 
