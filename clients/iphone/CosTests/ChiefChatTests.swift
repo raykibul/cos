@@ -23,6 +23,32 @@ import Testing
         #expect(chat.rows.contains { if case .reply = $0 { true } else { false } })
     }
 
+    @Test func sessionsItStartedAndAgentsThatFinishedAreCards() async throws {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = ChiefChat(projectId: 1, session: session)
+        await chat.load()
+
+        let spawned = chat.rows.compactMap { row -> ToolCall? in
+            if case .spawned(_, let tool) = row { tool } else { nil }
+        }
+        #expect(spawned.map(\.agentId) == [7, 8])
+        #expect(spawned.compactMap { chat.spawnedAgent($0)?.title } == ["Fix the session timeout", "Add left-pad to the formatter"])
+        // From an older daemon, without the id: matched by title.
+        #expect(chat.spawnedAgent(ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix the session timeout"))?.id == 7)
+        #expect(chat.spawnedAgent(ToolCall(name: "mcp__cos__agent_spawn", summary: "Something else")) == nil)
+
+        // The task notification is a card, never your message.
+        let tasks = chat.rows.compactMap { row -> TaskNotification? in
+            if case .task(_, let note) = row { note } else { nil }
+        }
+        #expect(tasks.map(\.title) == ["Check the 0.2 milestone"])
+        #expect(tasks.first?.durationMs == 94_000)
+        #expect(!chat.rows.contains { row in
+            if case .user(let message) = row { message.text.contains("<task-notification>") } else { false }
+        })
+    }
+
     @Test func aSentMessageShowsUntilTheTranscriptHasIt() async {
         let session = await liveSession()
         defer { session.stop() }

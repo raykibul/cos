@@ -78,8 +78,8 @@ struct ChiefChatView: View {
                 .accessibilityHint("Shows its workspaces and sessions")
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("Chief's screen", systemImage: "terminal") {
-                    if let id = chat.chiefAgentId { navigator.open(.screen(agentId: id)) }
+                Button("Chief's terminal", systemImage: "terminal") {
+                    if let id = chat.chiefAgentId { navigator.open(.terminal(agentId: id)) }
                 }
                 .disabled(chat.chiefAgentId == nil)
                 menu
@@ -135,7 +135,7 @@ struct ChiefChatView: View {
                 Text(count(runs.filter { !$0.state.isFinished }.count, "active", "active"))
             }
             if let id = chat.chiefAgentId {
-                Button("Chief's screen", systemImage: "terminal") { navigator.open(.screen(agentId: id)) }
+                Button("Chief's terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: id)) }
             }
             if let agent = session.agent(id: chat.chiefAgentId), agent.state.isAlive {
                 Divider()
@@ -273,6 +273,12 @@ struct ChatRowView: View {
             }
         case .tool(let message):
             toolRow(message.tool ?? ToolCall(name: "tool"))
+        case .spawned(let message, let tool):
+            SpawnedCard(tool: tool, agent: chat.spawnedAgent(tool), time: message.tsMs)
+        case .task(let message, let note):
+            TaskCard(note: note, time: message.tsMs) { reply in
+                chat.draft = reply
+            }
         case .updates(let message, let count):
             updatesRow(message, count: count)
         }
@@ -462,9 +468,9 @@ struct WaitingMessage: View {
             }
             Divider()
             Button {
-                navigator.open(.agent(id: agent.id))
+                navigator.open(.terminal(agentId: agent.id))
             } label: {
-                Text("Open session")
+                Text("Open its terminal")
                     .font(.body)
                     .foregroundStyle(Palette.claude)
                     .frame(maxWidth: .infinity, minHeight: 42)

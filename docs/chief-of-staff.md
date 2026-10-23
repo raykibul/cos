@@ -84,6 +84,9 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
  "ts_ms": 1792611174811}
 ```
 
+- **Agent tools:** cos's own agent tools carry the agent they acted on: `tool.agent_id` is `agent_spawn`'s new agent (read from its result, so it appears once the result is in, and never on a failed call), or the `agent_id` that `agent_send`, `agent_read` and `agent_stop` were given. Apps open that agent from the row. `agent_spawn`'s summary is its `title`, else the first line of its `prompt`.
+- **Task notifications:** when a subagent Claude ran in the background finishes, Claude types a `<task-notification>` (with `<status>`, `<summary>` and `<result>`) into the session as a user turn. The daemon passes it on as `kind: "text"`; apps show it as a finished-agent card rather than as your message (CosKit: `TranscriptMessage.taskNotification`).
+
 - **Wakeups:** a user turn that is a cos inbox wakeup (it starts with `[cos ·`) has `kind: "update"`, and the app shows it as a small "N updates from agents" row, not as your message.
 - **Skipped entries:** thinking, system and meta entries, and entries the daemon doesn't understand, are left out. Parse leniently: an unknown line is skipped, never an error.
 - **Missing file:** while there's no transcript file, the result is `{messages: [], next: 0, context: null}`.

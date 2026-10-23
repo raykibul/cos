@@ -70,6 +70,59 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(transcript.messages[4].kind == MessageKind(rawValue: "thinking_v2"))
     }
 
+    @Test func toolCallsNameTheAgentTheyActedOn() throws {
+        let json = #"{"messages":[{"n":1,"role":"assistant","kind":"tool","tool":{"name":"mcp__cos__agent_spawn","summary":"Fix the flaky test","is_error":false,"agent_id":17},"ts_ms":1},{"n":2,"role":"assistant","kind":"tool","tool":{"name":"Bash","summary":"ls"},"ts_ms":2}],"next":2}"#
+        let transcript = try decode(Transcript.self, json)
+        let spawn = try #require(transcript.messages[0].tool)
+        #expect(spawn.isSpawn)
+        #expect(spawn.agentId == 17)
+        #expect(transcript.messages[1].tool?.agentId == nil)
+        #expect(transcript.messages[1].tool?.isSpawn == false)
+    }
+
+    @Test func taskNotificationsReadAsFinishedAgents() throws {
+        let text = """
+        <task-notification>
+        <task-id>a066345f791fd4714</task-id>
+        <tool-use-id>toolu_01N</tool-use-id>
+        <output-file>/tmp/tasks/a066345f791fd4714.output</output-file>
+        <status>completed</status>
+        <summary>Agent "Update on open PRs" finished</summary>
+        <note>A task-notification fires each time this agent stops.</note>
+        <result>**PR status for raykibul (44 open)**
+
+        3 need you.</result>
+        <usage>total_tokens: 51234
+        tool_uses: 12
+        duration_ms: 241000</usage>
+        </task-notification>
+        """
+        let encoded = try JSONEncoder().encode(["messages": [["n": "1", "role": "user", "kind": "text", "text": text]]])
+        let transcript = try JSONDecoder.cos().decode(Transcript.self, from: encoded)
+        let message = try #require(transcript.messages.first)
+        #expect(message.kind == .task)
+        let task = try #require(message.taskNotification)
+        #expect(task.taskId == "a066345f791fd4714")
+        #expect(task.title == "Update on open PRs")
+        #expect(task.isAgent)
+        #expect(task.succeeded)
+        #expect(task.result == "**PR status for raykibul (44 open)**\n\n3 need you.")
+        #expect(task.durationMs == 241_000)
+
+        // A background command, and a bare one with no tags.
+        let command = try #require(TaskNotification("<task-notification><status>failed</status><summary>Background command \"npm test\" failed (exit code 1)</summary></task-notification>"))
+        #expect(command.title == "npm test")
+        #expect(!command.isAgent)
+        #expect(!command.succeeded)
+        #expect(command.result.isEmpty)
+        #expect(command.durationMs == nil)
+        #expect(TaskNotification("<task-notification></task-notification>")?.title == "Background task")
+
+        // Not one: ordinary text, or Claude's own (assistant) words about one.
+        #expect(TaskNotification("I got a <task-notification>") == nil)
+        #expect(TranscriptMessage(n: 2, role: .assistant, kind: .text, text: text).taskNotification == nil)
+    }
+
     @Test func mergesPagesByNumber() {
         let first = [TranscriptMessage(n: 1, role: .user, kind: .text, text: "hi"), TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash"))]
         let second = [TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", isError: true)), TranscriptMessage(n: 3, role: .assistant, kind: .text, text: "done")]

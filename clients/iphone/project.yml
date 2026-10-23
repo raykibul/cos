@@ -11,6 +11,10 @@ options:
 packages:
   CosKit:
     path: ../shared/CosKit
+  # Draws agents' live terminals (TerminalHost.swift).
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.10.1
 
 settings:
   base:
@@ -33,6 +37,7 @@ targets:
       - path: Cos
     dependencies:
       - package: CosKit
+      - package: SwiftTerm
     settings:
       base:
         PRODUCT_NAME: Cos
@@ -44,7 +49,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: cos
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        # Landscape too: turned sideways, a terminal gets about twice the columns.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         # Only asked if you add a host by a local (not tailnet) address.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "cos connects to the cos daemon on your Mac or server."

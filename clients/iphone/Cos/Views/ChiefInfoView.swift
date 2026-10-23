@@ -61,8 +61,8 @@ struct ChiefInfoView: View {
 
                 HStack(spacing: 8) {
                     QuickAction(title: "Chat", symbol: "bubble.left.fill") { openChat() }
-                    QuickAction(title: "Screen", symbol: "terminal") {
-                        if let id = staff?.agentId { navigator.open(.screen(agentId: id)) }
+                    QuickAction(title: "Terminal", symbol: "terminal") {
+                        if let id = staff?.agentId { navigator.open(.terminal(agentId: id)) }
                     }
                     .disabled(staff?.agentId == nil)
                     QuickAction(title: "New run", symbol: "plus") { newRun = true }
@@ -114,8 +114,12 @@ struct ChiefInfoView: View {
                     WorkspaceHeaderRow(workspace: workspace, waiting: agents.filter { needsYou($0) }.count)
                 }
                 ForEach(agents) { agent in
-                    NavigationLink(value: Route.agent(id: agent.id)) {
+                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: needsYou(agent))
+                    }
+                    .swipeActions {
+                        Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
+                            .tint(Palette.ink2)
                     }
                 }
                 if let activeRun {
@@ -149,8 +153,12 @@ struct ChiefInfoView: View {
         if !waiting.isEmpty {
             Section("Needs you") {
                 ForEach(waiting) { agent in
-                    NavigationLink(value: Route.agent(id: agent.id)) {
+                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: true, place: session.workspaceName(agent.workspaceId))
+                    }
+                    .swipeActions {
+                        Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
+                            .tint(Palette.ink2)
                     }
                 }
             }
@@ -158,8 +166,12 @@ struct ChiefInfoView: View {
         if !others.isEmpty {
             Section(waiting.isEmpty ? "Sessions" : "Others") {
                 ForEach(others) { agent in
-                    NavigationLink(value: Route.agent(id: agent.id)) {
+                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: false, place: session.workspaceName(agent.workspaceId))
+                    }
+                    .swipeActions {
+                        Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
+                            .tint(Palette.ink2)
                     }
                 }
             }

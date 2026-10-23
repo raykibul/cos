@@ -200,16 +200,39 @@ struct FakeData {
                 TranscriptMessage(n: 1, role: .user, kind: .text, text: ask, tsMs: ago(1_600)),
                 TranscriptMessage(n: 2, role: .assistant, kind: .text, text: "I'll check the workspaces, then start one agent on each.", tsMs: ago(1_590)),
                 TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__workspaces_list"), tsMs: ago(1_585)),
-                TranscriptMessage(n: 4, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix the session timeout · lisbon"), tsMs: ago(1_500)),
-                TranscriptMessage(n: 5, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_spawn", summary: "Add left-pad to the formatter · porto"), tsMs: ago(1_400)),
+                TranscriptMessage(n: 4, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix the session timeout", agentId: 7), tsMs: ago(1_500)),
+                TranscriptMessage(n: 5, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_spawn", summary: "Add left-pad to the formatter", agentId: 8), tsMs: ago(1_400)),
                 TranscriptMessage(n: 6, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "git log --oneline -5 origin/main"), tsMs: ago(1_390)),
                 TranscriptMessage(n: 7, role: .assistant, kind: .text, text: answer, tsMs: ago(1_380)),
-                TranscriptMessage(n: 8, role: .user, kind: .update, text: update, tsMs: ago(260)),
-                TranscriptMessage(n: 9, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_read", summary: "agent 7"), tsMs: ago(250)),
-                TranscriptMessage(n: 10, role: .assistant, kind: .text, text: after, tsMs: ago(240)),
+                TranscriptMessage(n: 8, role: .user, kind: .task, text: Self.milestoneCheck, tsMs: ago(900)),
+                TranscriptMessage(n: 9, role: .user, kind: .update, text: update, tsMs: ago(260)),
+                TranscriptMessage(n: 10, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_read", summary: "{\"agent_id\":7}", agentId: 7), tsMs: ago(250)),
+                TranscriptMessage(n: 11, role: .assistant, kind: .text, text: after, tsMs: ago(240)),
             ],
         ]
     }
+
+    /// What Claude types into the chief when a subagent it ran finishes.
+    static let milestoneCheck = """
+    <task-notification>
+    <task-id>a066345f791fd4714</task-id>
+    <tool-use-id>toolu_01NzzivZP49fSMRjtJ3AyN7V</tool-use-id>
+    <output-file>/tmp/claude/tasks/a066345f791fd4714.output</output-file>
+    <status>completed</status>
+    <summary>Agent "Check the 0.2 milestone" finished</summary>
+    <note>A task-notification fires each time this agent stops.</note>
+    <result>**0.2 milestone: 9 of 12 issues closed.**
+
+    Three are open:
+
+    - **#41 Session expires after five minutes**: lisbon is on it.
+    - **#44 Formatter pads with spaces**: waits on left-pad in porto.
+    - **#47 Release notes**: drafted, missing the session fix.</result>
+    <usage>total_tokens: 18234
+    tool_uses: 6
+    duration_ms: 94000</usage>
+    </task-notification>
+    """
 
     var inboxes: [Int: [StaffItem]] {
         [
@@ -221,6 +244,17 @@ struct FakeData {
     }
 
     // MARK: Screens
+
+    /// A screen as the terminal stream's first event: clear, draw each
+    /// line, put the cursor back.
+    static func snapshot(of screen: AgentScreen) -> TerminalEvent {
+        var text = "\u{1B}[2J\u{1B}[H"
+        text += screen.text.split(separator: "\n", omittingEmptySubsequences: false).joined(separator: "\r\n")
+        let row = (screen.cursor.first ?? 0) + 1
+        let col = (screen.cursor.dropFirst().first ?? 0) + 1
+        text += "\u{1B}[\(row);\(col)H"
+        return .snapshot(rows: max(screen.rows, 1), cols: max(screen.cols, 1), data: Array(text.utf8))
+    }
 
     static func screen(for agent: Agent) -> AgentScreen {
         let lines = [

@@ -30,6 +30,14 @@ pub(crate) const UPDATE_PREFIX: &str = "[cos ·";
 const SUMMARY_CHARS: usize = 160;
 /// Tools that are Claude's plumbing rather than work (loading deferred tools).
 const HIDDEN_TOOLS: [&str; 1] = ["ToolSearch"];
+/// cos's tool that starts an agent; its result names the agent.
+const SPAWN_TOOL: &str = "mcp__cos__agent_spawn";
+/// cos's tools that act on an agent named by `agent_id` in their input.
+const AGENT_TOOLS: [&str; 3] = [
+    "mcp__cos__agent_send",
+    "mcp__cos__agent_read",
+    "mcp__cos__agent_stop",
+];
 /// How many transcripts the cache keeps parsed.
 const CACHED_FILES: usize = 64;
 /// Context windows, in tokens.
@@ -76,6 +84,11 @@ pub(crate) struct ToolCall {
     /// Its main argument on one line, such as the command or the file.
     pub summary: String,
     pub is_error: bool,
+    /// The agent a cos agent tool acted on: `agent_spawn`'s new agent
+    /// (from its result), or `agent_send`, `agent_read` and `agent_stop`'s
+    /// `agent_id`. Apps open that agent from the row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<i64>,
     #[serde(skip)]
     id: String,
     /// Its result is in.
@@ -209,6 +222,9 @@ impl Parser {
                             if let Some(call) = call {
                                 call.done = true;
                                 call.is_error = block["is_error"].as_bool().unwrap_or(false);
+                                if call.name == SPAWN_TOOL && !call.is_error {
+                                    call.agent_id = spawned_agent(&block["content"]);
+                                }
                             }
                         }
                         _ => {}
@@ -242,6 +258,10 @@ impl Parser {
                                 name: name.to_owned(),
                                 summary: summarize(name, &block["input"]),
                                 is_error: false,
+                                agent_id: AGENT_TOOLS
+                                    .contains(&name)
+                                    .then(|| block["input"]["agent_id"].as_i64())
+                                    .flatten(),
                                 id: id.clone(),
                                 done: false,
                             };
@@ -495,6 +515,7 @@ fn summarize(name: &str, input: &Value) -> String {
     let text = match name {
         "Bash" => field("command"),
         "Task" | "Agent" => field("description"),
+        SPAWN_TOOL => field("title").or_else(|| field("prompt")),
         "WebSearch" => field("query"),
         _ => field("file_path")
             .or_else(|| field("notebook_path"))
@@ -507,6 +528,21 @@ fn summarize(name: &str, input: &Value) -> String {
         None if input.is_null() => String::new(),
         None => crate::try_cmd::first_line(&input.to_string(), SUMMARY_CHARS),
     }
+}
+
+/// The agent id in `agent_spawn`'s result, `{"agent_id": 7, …}`, which
+/// Claude writes as a string or as text blocks.
+fn spawned_agent(content: &Value) -> Option<i64> {
+    let text = match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => return None,
+    };
+    serde_json::from_str::<Value>(&text).ok()?["agent_id"].as_i64()
 }
 
 #[cfg(test)]
