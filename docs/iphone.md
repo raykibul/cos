@@ -45,24 +45,21 @@ Any other error code is shown with its daemon message: `RefusalCode` is an open 
 
 ## Screens
 
-Three tabs: **Chiefs** (the home tab, with a badge of what waits on you), **Runs** and **Hosts**. The host chip at the top left switches hosts from Chiefs and Runs. The layout follows a messaging app: one chat per project's Chief of Staff, and a project's workspaces and sessions one menu away.
+Two tabs: **Chiefs** (the home tab, with a badge of what waits on you) and **Hosts**. The host chip at the top left switches hosts from Chiefs. The layout follows a messaging app: one chat per project's Chief of Staff, and a project's workspaces and sessions one menu away.
 
 - **Chiefs:** every project's Chief of Staff as a chat row, the most recently active first; chiefs that never started go last. Each row has the project's avatar (its initial on a colour picked from its name), the time of its last activity, and a preview: "2 sessions working…" while the agents it started work (as a chat app shows "typing…"), else what it last said as one plain line, or "Not started". An orange count is what waits on you in that project; an orange dot means it did something since you last opened its chat on this phone (`ReadMarks`, kept per host in `UserDefaults`; a chat never opened here isn't marked).
-  - Above the rows: chips for All, Needs you and Working, search by name or preview, and a pinned **Waiting on you** row with the count and a summary ("1 approval · 1 question · 2 logins").
+  - Above the rows: chips for All, Needs you and Working, search by name or preview, and a pinned **Waiting on you** row with the count and a summary ("1 approval · 1 trust dialog · 2 logins").
   - Swipe a row (or long-press it) for its workspaces and sessions, or the chief's terminal.
-- **Waiting on you** (the pinned row): approvals routed to you (`route` isn't `chief`) with the command, the policy's reason, Deny and Allow; questions from run chiefs with their choices and a free answer; plans to approve; agents at Claude's trust dialog (Trust folder); agents on Claude's login screen (`needs_login`, with `cos agent attach <id>` to log in on the host). Each card opens its agent or run.
+- **Waiting on you** (the pinned row): pending approvals with the command, the policy's reason, Deny and Allow; agents at Claude's trust dialog (Trust folder); agents on Claude's login screen (`needs_login`, with `cos agent attach <id>` to log in on the host). Each card opens its agent.
 - **Chief of Staff chat:** read from its transcript (`GET /v1/agents/{id}/transcript?after=N`) over a dotted wallpaper. Your messages are bubbles on the right, its replies are markdown bubbles on the left, each with its time; tool calls are slim rows (the `cos` tools in words: "Started an agent"); a `[cos · N updates]` wakeup is an "N updates from sessions" chip that expands. A session the chief started (`mcp__cos__agent_spawn`) is a **Session started** card with its title, branch, model and live state, and Terminal and Session buttons; it finds the agent by the `agent_id` the daemon adds to the tool row, else by title. Claude's `<task-notification>` (a subagent or background command the chief ran inside its own session finished) is an **Agent finished** card with the time it took and the first lines of its result, never a raw bubble; Read the report opens the whole result as markdown in a sheet, with Copy and Reply to the chief about it. Agents it started that wait on you come last, as messages with their buttons in them: Allow and Deny for an approval, Trust folder for the trust dialog, and Open its terminal. The composer posts to `/staff/message`, which starts the chief if needed; a failed message offers Retry and Discard. It reads again on each `agent.transcript` event for its agent. An unstarted chief shows three suggestions.
   - **Ticks** on your messages, as a messaging app has them: a clock while the phone sends it; ✓ once cos has it (while the chief is mid-task it waits in cos's inbox and goes in when the chief pauses); ✓✓ once it is in the transcript (Claude has it); blue ✓✓ once Claude has started on it (its next transcript entry is Claude's own, or the chief is working right after your message). Long-press a message for Info (when each happened; the Sent time is known only for what this phone sent while the app ran) and Copy.
   - **Typing:** while the chief works (`working` or `starting`), the title says "typing…" and the chat ends with moving dots and its latest tool call with how long ago it started ("cargo test · 12s"), unless it has written since. Tapping it opens the chief's terminal. The chiefs list shows "typing…" too.
   - The title (avatar, name, "2 sessions working…" or its state) opens its info page. The terminal button opens the chief's terminal.
-  - The **⋯ menu:** Workspaces, Sessions and Runs (each with a count, opening the info page on that tab), the chief's terminal, and Stop Chief of Staff (with a confirmation; its sessions keep running and your next message starts it again).
-- **Chief info:** the project's avatar, name, root and the chief's state and model; Chat, Terminal and New run; then a segmented control:
-  - **Workspaces:** each workspace, newest first, as a section: the workspace (name, branch, base, what waits on you) with its sessions under it and its active run.
+  - The **⋯ menu:** Workspaces and Sessions (each with a count, opening the info page on that tab), the chief's terminal, and Stop Chief of Staff (with a confirmation; its sessions keep running and your next message starts it again).
+- **Chief info:** the project's avatar, name, root and the chief's state and model; Chat and Terminal; then a segmented control:
+  - **Workspaces:** each workspace, newest first, as a section: the workspace (name, branch, base, what waits on you) with its sessions under it.
   - **Sessions:** the project's agents, what needs you first. A row opens its terminal; swipe it for its details.
-  - **Runs:** the project's runs, and New run.
-- **Workspace:** the branch and base, its agents (state, role, last message) and its runs, and New run.
-- **Runs:** active and finished runs with progress and blocked counts, and New run (goal and workspace).
-  - **Run:** state, goal, place and preset; Approve plan when a plan waits; the chief's questions; the board (or the plan), each task with its state, dependencies, failure, and on tap its instructions, files, tests and review; the report as markdown; Cancel run, with a confirmation.
+- **Workspace:** the branch and base, and its agents (state, role, last message).
 - **Agents** (sessions, from any list): state, title, project and workspace, model, "Started by the Chief of Staff"; the approval it waits on (Allow, Deny), the trust dialog or the login hint; the last message as markdown; Open its terminal; Screen, a plain-text snapshot of its terminal (`GET /v1/agents/{id}/screen`) loaded on request; Stop; and a message box that types into the agent, resuming it first when it has exited.
 
 - **Terminal** (full screen, for the chief and every session): the agent's live Claude Code terminal, drawn by [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (pinned to 1.10.1, the last release without a build-tool plugin) from `GET /v1/agents/{id}/terminal`. It starts from the daemon's snapshot, follows the stream, and reconnects to a fresh snapshot. Typing goes to `POST …/keys`, and the PTY is resized to fit the view (`POST …/resize`), so it reflows on rotation; the app turns to landscape for it.
@@ -87,8 +84,6 @@ The app uses CosKit's `CosService` protocol, which `CosClient` implements over H
 | `GET /v1/agents/{id}/terminal` (SSE), `POST …/keys`, `POST …/resize` | The live terminal. |
 | `GET /v1/agents/{id}/transcript?after=N` | The Chief of Staff chat. |
 | `GET /v1/approvals?state=pending`, `POST /v1/approvals/{id}` | Approvals. |
-| `GET /v1/runs`, `POST /v1/runs`, `GET /v1/runs/{id}`, `POST …/approve-plan`, `POST …/cancel`, `GET …/report` | Runs. |
-| `GET /v1/questions?state=open`, `POST /v1/questions/{id}/answer` | Questions. |
 | `GET /v1/projects/{id}/staff`, `POST …/staff/start`, `POST …/staff/message`, `GET …/staff/inbox` | The Chief of Staff. |
 | `GET /v1/tailnet/peers` | The tailnet, from every saved host (`is_you`, `self`). |
 
@@ -98,8 +93,6 @@ Each event refreshes only what it touches, and refreshes of one kind fold togeth
 |---|---|
 | `project.*`, `workspace.*` | projects, chiefs |
 | `agent.*`, `approval.*` | agents, approvals |
-| `run.*`, `plan.*`, `task.*` | runs, and the run on screen |
-| `question.*`, `run.state_changed` | questions |
 | `staff.*`, agent state changes | chiefs |
 | `agent.transcript` | the chat of that agent, if open |
 
@@ -115,7 +108,7 @@ Everything that would raise a notification already goes through one seam, `Notif
 
 1. Add the Push Notifications capability and the `aps-environment` entitlement (development for Xcode builds, production for TestFlight).
 2. An `APNsNotifications` in place of `NoNotifications`: `start()` asks for permission and calls `registerForRemoteNotifications()`; the app delegate gets the device token and sends it to every saved host (`PUT /v1/push/token`) whenever it changes or a host is added.
-3. Categories with actions: Allow and Deny on approvals, a text reply on questions. Actions post to the same routes the cards use, through Tailscale's VPN on demand.
+3. Categories with actions: Allow and Deny on approvals. Actions post to the same routes the cards use, through Tailscale's VPN on demand.
 4. A notification's `thread-id` is the host, and tapping one opens its card (`Navigator.open`).
 
 ### On the daemon (changes wanted)
@@ -123,11 +116,8 @@ Everything that would raise a notification already goes through one seam, `Notif
 - **Device token route:** `PUT /v1/push/token` with `{"token": "<hex>", "environment": "development" | "production", "bundle_id": "…"}`, tailnet only, saved against the approved device that sent it; `DELETE` to stop. Removing or denying a device drops its token. APNs answering `410 Unregistered` drops it too.
 - **APNs key:** a `.p8` auth key with its Key ID and Team ID, set on the host (for example `cos push setup --key AuthKey_ABC123.p8 --key-id ABC123 --team-id XYZ987`), kept in `~/.cos` with mode 0600 and never sent over the API. The daemon signs an ES256 JWT, refreshes it within the hour, and posts over HTTP/2 to `api.push.apple.com` or `api.sandbox.push.apple.com` by the token's environment.
 - **What notifies:**
-  - `approval.requested` routed to you (not to a run's chief), and `approval.routed` that comes back to you;
-  - `question.asked`;
-  - `plan.proposed`, as the run waits for approval;
+  - `approval.requested`;
   - `agent.state_changed` to `needs_trust` or `needs_login`;
-  - `run.state_changed` to `done`, `failed` or `cancelled`, and tasks reaching `blocked`;
   - optionally, the Chief of Staff ending a turn that answered your message (`staff.changed` to idle after `staff/message`).
-- **Payload:** `alert` (title and body as the cards word them), `badge` (the count of what waits on you), `thread-id` (the host), `category` (approval, question, plan, trust, login, run), and the ids (`approval_id`, `run_id`, …) as custom keys. `apns-collapse-id` per item, so a decided approval can be replaced or withdrawn.
+- **Payload:** `alert` (title and body as the cards word them), `badge` (the count of what waits on you), `thread-id` (the host), `category` (approval, trust, login), and the ids (`approval_id`, `agent_id`) as custom keys. `apns-collapse-id` per item, so a decided approval can be replaced or withdrawn.
 - **Not for every event:** at most one push per item, and none while the phone is following the event stream (the daemon knows which devices have a stream open).

@@ -13,10 +13,10 @@ pub mod projects;
 pub mod staff;
 mod store;
 
+pub use agents::ApprovalTier;
 pub use agents::{
     Agent, AgentState, Agents, Approval, ApprovalState, DecidedBy, Launch, NewAgent, NewApproval, Role,
 };
-pub use agents::ApprovalTier;
 pub use devices::{Device, DeviceError, DeviceState, Devices, SeenDevice};
 pub use env::{EnvError, Environment, GlobalEnv, ProjectEnv, Variables};
 pub use events::{EventLog, LoggedEvent, Subscription};

@@ -7,14 +7,15 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 ## Concepts
 
 - **Agent:** one Claude Code session that the daemon started, running Claude's own UI in a PTY the daemon owns, in a workspace's folder. Each agent has a `role`:
-  - `user`: you started it from an app or the CLI.
-  - `chief`, `worker`, `reviewer`: started by a run (later).
+  - `user`: you started it from an app or the CLI, or a Chief of Staff started it for you.
+  - `staff`: a project's Chief of Staff (see [chief-of-staff.md](chief-of-staff.md)).
 - **Several agents per workspace:** a workspace can hold several agents at once, sharing its folder.
 - **Followed through hooks:** the daemon follows each agent through hooks (see [claude-protocol.md](claude-protocol.md)), never by reading the screen.
 - **Approval:** a permission request from an agent, waiting for an answer. It can be answered:
   - in the app or CLI (`allow` or `deny`),
-  - by someone typing in the agent's terminal (then it's `settled`),
-  - for agents a run starts: by Rust rules straight away, or by the run's chief within your limits (see [approvals.md](approvals.md#daemon-wiring)). Agents you start always ask you.
+  - by someone typing in the agent's terminal (then it's `settled`).
+
+  Every approval waits for you; nothing answers on your behalf (see [approvals.md](approvals.md)).
 
 ## Agent JSON
 
@@ -22,8 +23,6 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 {
   "id": 7,
   "workspace_id": 3,
-  "run_id": null,
-  "task_id": null,
   "role": "user",
   "title": "fix login bug",
   "session_id": "5504b543-4897-4751-add5-f81f24a6316c",
@@ -61,15 +60,13 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 
 `last_message` is the `Stop` hook's `last_assistant_message`, cut to 2,000 characters.
 
-- **`role`:** `user` (you, or a Chief of Staff for you, started it), `chief`, `worker`, `reviewer`, or `staff` (a project's Chief of Staff).
-- **`run_id`:** the run's id (an integer), or null for agents you start.
+- **`role`:** `user` (you, or a Chief of Staff for you, started it) or `staff` (a project's Chief of Staff).
 - **`spawned_by`:** the Chief of Staff agent that started it, else null.
 - **`transcript_path`:** Claude's transcript file, from the hooks; null until the first hook.
 - **`env_names`:** the sorted names of the extra environment variables (global and project, see "Environment" in [daemon.md](daemon.md#environment)) it was last launched with, so an app can show "uses CLAUDE_CONFIG_DIR". Never the values. Empty for an agent launched before this existed, or with none.
-- **`task_id`:** the task a worker or reviewer works on, else null.
-- **`cwd`:** only present when the agent runs somewhere other than the workspace folder: a worker or reviewer runs in its task's worktree.
+- **`cwd`:** only present when the agent runs somewhere other than the workspace folder: the Chief of Staff runs in its own worktree.
 - **`permission_mode`:** `default`, `acceptEdits`, `plan` or `dontAsk`. `default` is started as `--permission-mode manual`, which is what the CLI now calls it.
-- **`user_settings`:** whether Claude loads your own settings (`~/.claude/settings.json`: allow rules, MCP servers, theme). True by default for agents you start, false for agents a run starts. With false, only the repo's settings apply, so your allow rules don't approve anything and more requests come to cos as approvals.
+- **`user_settings`:** whether Claude loads your own settings (`~/.claude/settings.json`: allow rules, MCP servers, theme). True by default. With false, only the repo's settings apply, so your allow rules don't approve anything and more requests come to cos as approvals.
 
 ## Routes
 
@@ -90,8 +87,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 | `GET /v1/agents/{id}/transcript?after=N` | | `{"messages": [Message], "next": N, "context": Context \| null}`: the chat read from Claude's transcript, and how full its context is (below) |
 | `GET /v1/approvals?state=pending` | | `{"approvals": [Approval]}`, newest first. Without `state`, every approval. |
 | `GET /v1/approvals/{id}` | | Approval |
-| `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. You can answer any pending approval, including one routed to the chief. |
-| `POST /v1/approvals/{id}/chief` | `{"decision": "allow" \| "deny", "reason"}` | 200 Approval: the chief's `approval_decide`. 400 an allow without a reason, 403 when the run's limits refuse it (the approval then waits for you), 409 no longer pending. See [daemon.md](daemon.md#approvals-policy). |
+| `POST /v1/approvals/{id}` | `{"decision": "allow" \| "deny", "message"?}` | 200 Approval. 409 if it's no longer pending. |
 
 ### Terminal stream
 
@@ -136,8 +132,7 @@ data: {"exit_code":0}
   "created_ms": 1792611174811,
   "decided_ms": null,
   "tier": "chief",
-  "route": "user",
-  "reason": "changes or downloads dependencies (npm install); installing packages needs the Trusted preset"
+  "reason": "changes or downloads dependencies (npm install)"
 }
 ```
 
@@ -145,12 +140,11 @@ data: {"exit_code":0}
   - `pending`,
   - `allowed`, `denied`: answered through cos,
   - `settled`: answered in the terminal, or the tool went ahead some other way,
-  - `expired`: nobody answered in 5 minutes, so it was denied and the agent told to carry on without that step. Only for agents a run starts; yours wait for you.
-- **`decided_by`:** `user`, `terminal`, `rule` or `chief`, or null when nobody decided: `expired`, or `settled` because the agent exited or the daemon restarted while it was pending.
-- **`tier`:** how the approvals policy classified the request: `allowed`, `chief`, `ask_user` or `never_delegated` (see [approvals.md](approvals.md#tiers)). Null on approvals from before the policy.
-- **`route`:** who answers it: `auto` (Rust rules allowed it at once, `state: allowed, decided_by: rule`; nobody is notified), `chief` (waiting for the run's chief) or `user` (waiting for you). A chief answer the limits refuse moves it from `chief` to `user`. Agents you start are always `user`.
-- **`reason`:** the policy's one-line reason; for a chief-tier request that came to you, also why it didn't go to the chief.
-- **`message`:** the message sent with a denial, or the chief's reason when the chief answered.
+  - `expired`: only on old approvals, from when some agents' requests were refused after 5 minutes. Nothing expires now.
+- **`decided_by`:** `user` or `terminal`, or null when nobody decided: `expired`, or `settled` because the agent exited or the daemon restarted while it was pending.
+- **`tier`:** how the approvals policy classified the request: `allowed`, `chief`, `ask_user` or `never_delegated` (see [approvals.md](approvals.md#tiers)). It's shown with the request; you answer every tier. Null on approvals from before the policy.
+- **`reason`:** the policy's one-line reason.
+- **`message`:** the message sent with a denial.
 - **`settled` by `terminal`:** the request's hook was withdrawn (Claude stopped waiting, which is what happens when someone answers in the terminal), or the agent's next hook arrived first. The real CLI doesn't always kill a waiting hook promptly when the terminal answers, so the next hook is the reliable signal.
 - **`tool_use_id`:** taken from the `PreToolUse` just before the request, since `PermissionRequest` has none.
 - **`summary`:** the tool and its main argument, such as `Bash npm install left-pad` or `Write /path/to/file`.
@@ -182,13 +176,12 @@ These go in the event log, so apps get them over `/v1/events/stream`. `data` hol
 
 | Kind | `data` |
 |---|---|
-| `agent.started` | `{agent_id, workspace_id, role, run_id, session_id}` (`run_id` is null for your own agents) |
+| `agent.started` | `{agent_id, workspace_id, role, session_id}` |
 | `agent.state_changed` | `{agent_id, state, from}` |
 | `agent.exited` | `{agent_id, exit_code}` |
 | `agent.removed` | `{agent_id}` |
-| `approval.requested` | `{approval_id, agent_id, summary, tier, route}`. Not logged for `auto` approvals. |
-| `approval.decided` | `{approval_id, state, decided_by}`, plus `route: "auto"` for approvals Rust rules allowed |
-| `approval.routed` | `{approval_id, route, tier, run_id, agent_id, summary, reason}`: sent to the chief, or moved to you. The event's `run_id` is set. |
+| `approval.requested` | `{approval_id, agent_id, summary, tier}` |
+| `approval.decided` | `{approval_id, state, decided_by}` |
 | `agent.transcript` | `{agent_id, next}`: the transcript grew. At most once a second per agent. |
 
 Terminal output is never in the event log; it's too much data.

@@ -1,6 +1,6 @@
 # Chief of Staff (contract)
 
-A permanent Chief of Staff per project: one Claude session you talk to, which creates workspaces, starts agents in them, follows them, and reports back. It is modelled on Selene's Chief of Staff (`~/personal/apps/selene`, `docs/specs/chief-of-staff.md` there). It is not the same as a run's chief ([orchestration.md](orchestration.md)), which plans one goal and ends with the run. The Chief of Staff can start runs too.
+A permanent Chief of Staff per project: one Claude session you talk to, which creates workspaces, starts agents in them, follows them, and reports back. It is modelled on Selene's Chief of Staff (`~/personal/apps/selene`, `docs/specs/chief-of-staff.md` there). It is the only coordinator in cos: there are no goals or runs. You talk to it, and it decides which agents to start and what to tell them.
 
 Three pieces are built in parallel against this document:
 
@@ -27,7 +27,7 @@ Change it only together with all sides.
 - **It survives daemon restarts.** When the daemon starts, every chief that was running when it stopped or crashed (now `interrupted`) is resumed with `--resume`, one a second, once the daemon serves. A chief you stopped yourself (the stop route, `cos agent stop`, the app's Stop) stays stopped: that intent is stored with the chief and cleared by the next start or resume. Your own agents, and the ones a chief started, stay `interrupted` until you resume them (the app's Resume, `cos agent resume <id>`).
   - **Model:** `COS_STAFF_MODEL`, else Claude's default. It can be set per project with `PUT /v1/projects/{id}/staff`.
   - **Permission mode:** `default`.
-  - **User settings:** loaded (`user_settings: true`). This is your own assistant, unlike run agents.
+  - **User settings:** loaded (`user_settings: true`). This is your own assistant.
   - **MCP:** one server, `cos` (`cos mcp --agent <id>`), with the staff tools below, pre-approved with `--allowedTools mcp__cos__*`.
 - **Its standing instructions** go in `--append-system-prompt`. Write them in the repo's plain style. They cover:
   - who it is (the Chief of Staff for project X);
@@ -38,7 +38,7 @@ Change it only together with all sides.
   - that it keeps a short brief with `brief_update`, under 4 KiB.
 
   The current brief is appended to the system prompt on each (re)start.
-- **Approvals:** its own permission requests, and those of agents it starts, go to you, like your own agents (`role: user`). Only run agents use the chief tiers.
+- **Approvals:** its own permission requests, and those of agents it starts, go to you, like every approval.
 
 ### Staff MCP tools (server `cos`)
 
@@ -50,7 +50,6 @@ Change it only together with all sides.
 | `agent_send` | `{agent_id, message}` | Types a message into the agent, as one bracketed paste. A stopped agent is resumed first. |
 | `agent_read` | `{agent_id, screen?: bool}` | `{state, last_message}` with the full last message, plus the screen text if asked. |
 | `agent_stop` | `{agent_id}` | Stops the agent. |
-| `run_start` | `{workspace_id, goal, preset?}` | Starts a run (see orchestration.md); returns the run. |
 | `brief_update` | `{brief}` | Saves the brief. At most 4 KiB. |
 
 The tools work only on the chief's own project. An id from another project gets a tool error.
@@ -63,10 +62,9 @@ The tools work only on the chief's own project. An id from another project gets 
 
 These go into the chief's inbox:
 - an agent it started finishes a turn (`Stop`), with that turn's last message;
-- an agent it started exits, or has an approval waiting for you;
-- a run it started changes state.
+- an agent it started exits, or has an approval waiting for you.
 
-Wakeups follow the run chief's rules: only while the chief is idle, at most 20 items or 24 KiB per wakeup, and at most 30 wakeups an hour. Messages you type go straight in and are never batched. Reuse the run chief's inbox code where you can.
+Wakeups are delivered only while the chief is idle, at most 20 items or 24 KiB per wakeup, and at most 30 wakeups an hour. Messages you type go straight in and are never batched.
 
 **Pausing coordination:** a per-project flag, `paused`. While it's on, news still collects in the inbox but no wakeup is delivered; your typed messages still go in. Resuming delivers what waited once the chief is idle. It is set with `PUT …/staff {paused}`, shows in `Staff` with `updates_waiting` (news not delivered yet), and each change logs `staff.changed`. CLI: `cos staff pause [project]` and `cos staff resume [project]`.
 
@@ -133,7 +131,7 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
   - Under "Projects", each project is one row: `★ Chief of Staff  <project>`, followed by a count of its workspaces.
   - Clicking the row opens that project's chief page and expands the project, showing its workspaces underneath, newest first. Clicking again folds it.
   - A workspace row shows its title, or the city when there's no title, with the branch and path in the tooltip and a status dot for its agents.
-  - A workspace's agents and runs are listed on the workspace page, not in the sidebar. Selene does the same, and it keeps the sidebar short.
+  - A workspace's agents are listed on the workspace page, not in the sidebar. Selene does the same, and it keeps the sidebar short.
   - "Waiting on you" and the event log stay at the top. Add Project stays as a `+` beside "Projects".
 - **The chief page** looks like a chat, as in the screenshot the user shared:
   - **Header:** ★, "Chief of Staff · project", and its state ("Ready for your next message", "Working…", "Not started"). On the right: a context meter ("42% context", with the exact numbers in its tooltip, from the transcript's `context`), the model, a terminal toggle (opens Claude's own terminal for it in a right-hand split, as in Selene's Ctrl+J), and a ⋯ menu with Stop, Restart and Pause coordination (Resume coordination while paused).
@@ -143,7 +141,7 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
   - **Composer:** "What should we work on?", where Enter sends and Shift-Enter adds a line. It posts to `…/staff/message`.
   - **Before it starts:** an empty state with three suggestions that fill the composer: "Plan the next feature and split it across agents", "Review what every workspace is doing right now", "Collect the open questions from running agents".
   - **"Agents waiting on you":** a strip above the composer listing approvals and trust dialogs of the agents it started.
-- **Workspace page:** the title (or city) as the heading, the branch, its agents as cards or tabs, and its runs. New Agent and New Run stay as they are. New Workspace no longer requires a title.
+- **Workspace page:** the title (or city) as the heading, the branch, and its agents as cards or tabs. New Agent stays as it is. New Workspace no longer requires a title.
 
 ## App: hosts and remote access
 
@@ -169,9 +167,9 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
 What the daemon side does differently from, or in addition to, the above. Details are in "The Chief of Staff" in [daemon.md](daemon.md#the-chief-of-staff).
 
 - **The chief's worktree is a hidden workspace row.** It is stored with the workspaces (kind `staff`) so the staff agent has a `workspace_id` like every agent. That workspace is never listed and the workspace routes answer 404 for it, but `GET /v1/agents` includes the staff agent, whose `workspace_id` points at it. Apps should find the chief through `GET /v1/projects/{id}/staff` and not expect its workspace in the project.
-- **Agents it starts answer their trust dialog by themselves**, as run agents do: they work in a worktree cos made for a registered project. Their permission requests still come to you.
-- **More inbox news:** a spawned agent stuck on its trust dialog is also news (rare, given the above). Every state change of a run it started is news.
-- **Inbox items** have the shape `{id, project_id, kind: "agent" | "run" | "message", agent_id, run_id, text, created_ms, delivered_ms}`; the first line of `text` is a heading. `GET …/staff/inbox` returns the latest 100 items of news and leaves out your messages.
+- **Agents it starts answer their trust dialog by themselves**: they work in a worktree cos made for a registered project. Their permission requests still come to you.
+- **More inbox news:** a spawned agent stuck on its trust dialog is also news (rare, given the above).
+- **Inbox items** have the shape `{id, project_id, kind: "agent" | "message", agent_id, text, created_ms, delivered_ms}`; the first line of `text` is a heading. `GET …/staff/inbox` returns the latest 100 items of news and leaves out your messages.
 - **`Staff.model`** is the model it runs: the project's, else `COS_STAFF_MODEL`; null means Claude's default.
 - **`POST …/staff/message`** returns the start error (for example 409 when the repo folder is gone) instead of 202 when the chief can't be started. A message waits until the chief is idle, so one sent while it starts goes in once it's ready. Messages are at most 100,000 characters.
 - **Two more events:** `staff.changed` `{project_id}` when its model, brief or pause changes, and `staff.stopped` `{project_id, agent_id}` when its process ends.

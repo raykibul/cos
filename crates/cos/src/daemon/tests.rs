@@ -71,8 +71,7 @@ impl TestServer {
         )
         .unwrap();
         let (stop, stopping) = watch::channel(false);
-        let judge =
-            crate::daemon::judge::Judge::off_for_tests(&store, &log, &projects, &agents, dir.path());
+        let judge = crate::daemon::judge::Judge::off_for_tests(&store, &log, &projects, &agents, dir.path());
         let state = api::AppState {
             log: log.clone(),
             projects,

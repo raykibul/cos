@@ -342,16 +342,14 @@ pub(crate) fn secret_name(name: &str) -> bool {
         || SSH_KEY_PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
 }
 
-/// Files every agent in the worktree reads as instructions. The task-branch
-/// check doesn't cover them, but an agent that rewrites them steers the
-/// chief, the reviewer and every later worker, so changing them is never
+/// Files every agent in the worktree reads as instructions. An agent that
+/// rewrites them steers every later agent there, so changing them is never
 /// delegated.
 const INSTRUCTION_FILES: &[&str] = &["claude.md", "claude.local.md", "agents.md"];
 
 /// Names files inside the worktree that change how agents behave or what
 /// they may do. Editing them is never delegated. The folder and `.env*`
-/// rules mirror `cos_core::taskgit::is_protected` (any depth, any letter
-/// case), which rejects a task branch that touches them anyway.
+/// rules match at any depth and in any letter case.
 fn protected_kind(rel: &str) -> Option<&'static str> {
     let parts: Vec<String> = rel.split('/').map(str::to_lowercase).collect();
     for part in &parts {
@@ -373,9 +371,9 @@ fn protected_kind(rel: &str) -> Option<&'static str> {
 }
 
 /// Whether `pattern` (relative to the worktree, `/`-separated) covers `rel`
-/// or one of its folders, so `src` and `src/**` both cover `src/a/b.rs`. The
-/// rules are `cos_core::taskgit::Scope`'s: `*` and `?` within a segment, `**`
-/// for any depth, `[` literal, anchored at the root, `..` never matches.
+/// or one of its folders, so `src` and `src/**` both cover `src/a/b.rs`: `*`
+/// and `?` within a segment, `**` for any depth, `[` literal, anchored at the
+/// root, `..` never matches.
 pub(crate) fn scope_matches(pattern: &str, rel: &str) -> bool {
     let pattern = pattern.trim();
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);

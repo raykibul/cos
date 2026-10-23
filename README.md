@@ -1,6 +1,6 @@
 # cos
 
-A chief of staff for coding agents. A Rust daemon runs Claude Code agents in terminals in git worktrees, plans runs with a chief, checks and merges their work, and asks you only what it must. The desktop app drives it, locally or over Tailscale.
+A chief of staff for coding agents. A Rust daemon runs Claude Code agents in terminals in git worktrees. You talk to each project's Chief of Staff, which starts agents, follows them and reports back, and every permission request comes to you. The desktop app drives it, locally or over Tailscale.
 
 ## Install
 

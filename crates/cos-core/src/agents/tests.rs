@@ -263,5 +263,8 @@ fn approvals_carry_their_tier_and_reason() {
         .decide_approval(approval.id, ApprovalState::Denied, Some(DecidedBy::User), None)
         .unwrap();
     let json = serde_json::to_value(agents.approval(approval.id).unwrap().unwrap()).unwrap();
-    assert_eq!((&json["tier"], &json["state"]), (&json!("chief"), &json!("denied")));
+    assert_eq!(
+        (&json["tier"], &json["state"]),
+        (&json!("chief"), &json!("denied"))
+    );
 }

@@ -3,7 +3,6 @@
 //! - [`classify`] sorts an [`ApprovalRequest`] into a [`Tier`] with a reason:
 //!   always allowed by Rust rules, the chief may approve it, ask you, or
 //!   never delegated.
-//! - [`timeout`] refuses requests nobody answers within five minutes.
 //!
 //! You answer every request today; the tier and reason are shown with it,
 //! and jev (`cos-judge`) gets them in shadow mode.
@@ -17,7 +16,6 @@ mod classify;
 mod paths;
 mod request;
 mod shell;
-pub mod timeout;
 mod verdict;
 
 pub use classify::{classify, classify_with};

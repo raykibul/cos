@@ -595,7 +595,10 @@ mod tests {
 
         let staff = books.staff_inbox_after(0, 10).unwrap();
 
-        assert_eq!((staff[0].project_id, staff[0].text.as_str()), (1, "Agent 3 is done."));
+        assert_eq!(
+            (staff[0].project_id, staff[0].text.as_str()),
+            (1, "Agent 3 is done.")
+        );
         assert_eq!(books.inbox_cursor().unwrap(), 1);
         assert!(books.staff_inbox_after(1, 10).unwrap().is_empty());
     }

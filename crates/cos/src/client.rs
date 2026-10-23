@@ -13,9 +13,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use anyhow::Context;
-use cos_core::{
-    Base, Device, LoggedEvent, Project, Workspace,
-};
+use cos_core::{Base, Device, LoggedEvent, Project, Workspace};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};

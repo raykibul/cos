@@ -6,7 +6,7 @@ This guide sets up the cos daemon on an EC2 instance and drives it from the Mac 
 
 - **Architecture.** Either works: arm64 (Graviton, such as `t4g` or `m7g`) or x86_64. cos ships static binaries for both.
 - **OS.** Amazon Linux 2023, Ubuntu or Debian. Anything with systemd will do.
-- **Size.** Every agent is its own Claude Code process, using a few hundred MB. Pick 4 GB of RAM or more if you'll run several at once. Leave disk space for your repos and one worktree per task.
+- **Size.** Every agent is its own Claude Code process, using a few hundred MB. Pick 4 GB of RAM or more if you'll run several at once. Leave disk space for your repos and one worktree per workspace.
 - **Security group.** You need **no inbound rule** for cos. Tailscale makes outbound connections and does NAT traversal, so port 7700 is never opened to the internet. Keep SSH open until Tailscale works. With `tailscale up --ssh` you can close it afterwards.
 
 ## 2. Tailscale, logged in as you
@@ -65,7 +65,7 @@ cos daemon &                   # or skip ahead to step 6 and come back
 cos project add ~/src/your-repo
 ```
 
-Workers push nothing. cos merges into a workspace branch in the clone. `cos workspace new` fetches `origin` first by default, so the clone needs read access to its remote, such as an SSH deploy key. `--from head` starts from the clone's HEAD without fetching.
+Agents work on a workspace branch in the clone and cos pushes nothing. `cos workspace new` fetches `origin` first by default, so the clone needs read access to its remote, such as an SSH deploy key. `--from head` starts from the clone's HEAD without fetching.
 
 ## 6. The daemon as a service
 
@@ -76,7 +76,7 @@ cos status
 
 - **Lingering.** Without it, systemd stops your user's services when your last SSH session ends, so the daemon would stop when you log out. With it on, the daemon keeps running and starts at boot. `cos daemon install` turns it on for you when the system allows that without a password. If not, it says so: run `sudo loginctl enable-linger $USER`, then `cos daemon install` again.
 - **Shells without a login session.** AWS Session Manager, `su` and `sudo -u` shells have no `XDG_RUNTIME_DIR`. `install` finds your user's systemd anyway once lingering is on.
-- **Settings it records.** The unit records your `PATH`, so the daemon finds `claude`, `git` and `tailscale`. It also records `COS_HOME`, `CLAUDE_CONFIG_DIR`, `COS_RUN_MODEL` and the other `COS_*` settings, if they're set. Run `cos daemon install` again after changing any of them.
+- **Settings it records.** The unit records your `PATH`, so the daemon finds `claude`, `git` and `tailscale`. It also records `COS_HOME`, `CLAUDE_CONFIG_DIR`, `COS_STAFF_MODEL` and the other `COS_*` settings, if they're set. Run `cos daemon install` again after changing any of them.
 - **Logs.** They go to `~/.cos/logs/daemon.log`. `systemctl --user status cos` shows the service itself.
 - **Removing it.** `cos daemon uninstall` stops the daemon and removes the unit.
 
