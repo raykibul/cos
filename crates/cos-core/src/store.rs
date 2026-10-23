@@ -814,10 +814,8 @@ mod tests {
         assert_eq!(ids("SELECT spawned_by FROM agents"), [3]);
         assert_eq!(ids("SELECT id FROM approvals"), [1]);
         assert_eq!(ids("SELECT id FROM staff_inbox"), [1]);
-        let gone = ids(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
-             AND name IN ('runs', 'tasks', 'inbox', 'wakeups', 'questions', 'approval_audit')",
-        );
+        let gone = ids("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
+             AND name IN ('runs', 'tasks', 'inbox', 'wakeups', 'questions', 'approval_audit')");
         assert_eq!(gone, [0]);
         // The cascade points at the rebuilt table.
         conn.execute("DELETE FROM workspaces WHERE id = 1", []).unwrap();

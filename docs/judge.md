@@ -1,6 +1,6 @@
 # jev in cos
 
-jev is TypeSafe's "System One" model: structured state in, typed probabilistic answers out, never text. cos uses it as a fast judgment layer between the daemon's Rust rules and the chief model (the design is "jev: a fast judgment layer" in [proposal.md](proposal.md#jev-a-fast-judgment-layer)). **Today it runs in shadow mode only:** at each decision point jev is asked, cos stores what it would have done next to what actually happened, and nothing it says changes anything. Each decision point goes live separately, once its agreement with you looks good.
+jev is TypeSafe's "System One" model: structured state in, typed probabilistic answers out, never text. cos uses it as a fast judgment layer next to the daemon's Rust rules (the design is "jev: a fast judgment layer" in [proposal.md](proposal.md#jev-a-fast-judgment-layer)). **Today it runs in shadow mode only:** at each decision point jev is asked, cos stores what it would have done next to what actually happened, and nothing it says changes anything. Each decision point goes live separately, once its agreement with you looks good.
 
 The code: the `cos-judge` crate (client, questions, would-haves, key lookup), `cos_core::judge` (storage), `crates/cos/src/daemon/judge.rs` (the decision points), `daemon/judge_api.rs` (routes) and `judge_cmd.rs` (`cos judge`).
 
@@ -29,7 +29,7 @@ Each option has a `what`, a `not_for` and examples, written as situations rather
 
 ## Decision point 1: permission requests
 
-For every permission request the approvals policy sends **to you** (`route: user`: everything from your own agents and Chiefs of Staff, and run agents' requests the chief may not take), the daemon sends jev the trimmed request (tool, input, `cwd`, the asking agent's role), the task's title and instructions (or the agent's title when it has no task), and cos-policy's tier and reason. Then code works out what jev **would** do:
+For every permission request (all of them come to you), the daemon sends jev the trimmed request (tool, input, `cwd`, the asking agent's role), the agent's title as its task, and cos-policy's tier and reason. Then code works out what jev **would** do:
 
 - **approve** only if Rust says the action stays in the worktree (cos-policy's tier is `allowed` or `chief (worktree)`: every path checked, no network, no install), `action_kind` is one of `auto_approve` with confidence **above 0.9**, `serves_task` is **above 0.8** and `leaves_worktree` is below 0.5;
 - **ask you** otherwise, with the reason (`not a kind jev may approve: install_dep (0.97), …`), or as **no opinion** on an error, a timeout or low confidence.
@@ -42,8 +42,7 @@ When you answer, the daemon records what you did next to jev's would-have (from 
 |---|---|
 | `allowed`, `denied` | you answered through cos (app, phone, `cos allow`/`deny`) |
 | `terminal` | answered in the agent's terminal; allow or deny isn't known |
-| `expired` | nobody answered in 5 minutes |
-| `chief_denied` | the chief denied it (it may deny any run agent's request) |
+| `expired` | an old approval that was refused unanswered, from before nothing expired |
 
 Stats count only `allowed` and `denied`:
 
@@ -54,11 +53,11 @@ Stats count only `allowed` and `denied`:
 
 Every decision row (input, answers, your answer) is a labelled example for tuning `questions.json`.
 
-## Decision point 2: waking a chief
+## Decision point 2: waking the Chief of Staff
 
-Every item added to a run chief's inbox (`inbox`) or a Chief of Staff's (`staff_inbox`) is sent to jev with which chief it's for, its kind, its text (cut to 2,000 characters) and, for a run, the run's goal. Your own messages and answers are skipped: they always wake the chief. The would-have is `now`, `batch`, `none`, or `no_opinion`. Wakeups are unchanged; this only collects what jev would have done, to replace the flat cap of 30 wakeups an hour with something that reads the item.
+Every item added to a Chief of Staff's inbox (`staff_inbox`) is sent to jev with its kind and its text (cut to 2,000 characters). Your own messages are skipped: they always wake the chief. The would-have is `now`, `batch`, `none`, or `no_opinion`. Wakeups are unchanged; this only collects what jev would have done, to replace the flat cap of 30 wakeups an hour with something that reads the item.
 
-The daemon follows both inbox tables by id (every 2 s, from the newest item at startup), so the chiefs' code doesn't know jev exists. Items added while a project is switched off, or while there's no key, are passed by.
+The daemon follows the inbox table by id (every 2 s, from the newest item at startup), so the Chief of Staff's code doesn't know jev exists. Items added while a project is switched off, or while there's no key, are passed by.
 
 ## The per-project switch
 

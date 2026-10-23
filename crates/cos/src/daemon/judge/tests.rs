@@ -246,7 +246,12 @@ async fn inbox_items_are_judged_except_your_own_words() {
 
     // Off: nothing judged, and the items are passed by.
     staff
-        .add(fixture.project_id, StaffItemKind::Agent, Some(2), "Agent 2 exited.")
+        .add(
+            fixture.project_id,
+            StaffItemKind::Agent,
+            Some(2),
+            "Agent 2 exited.",
+        )
         .unwrap();
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(fixture.decisions().is_empty());

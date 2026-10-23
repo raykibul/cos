@@ -458,12 +458,8 @@ mod tests {
     fn news_waiting_leaves_out_your_messages() {
         let (books, _, project) = books();
         assert!(books.records().unwrap().is_empty(), "no chief yet");
-        books
-            .add(project, StaffItemKind::Message, None, "hi")
-            .unwrap();
-        books
-            .add(project, StaffItemKind::Agent, Some(3), "done")
-            .unwrap();
+        books.add(project, StaffItemKind::Message, None, "hi").unwrap();
+        books.add(project, StaffItemKind::Agent, Some(3), "done").unwrap();
         assert_eq!(books.news_waiting(project).unwrap(), 1);
         assert_eq!(books.waiting_count(project).unwrap(), 2);
     }

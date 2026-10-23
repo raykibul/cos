@@ -5,9 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use cos_policy::{
-    ApprovalRequest, Needs, PathProbe, Role, Tier, Verdict, classify, classify_with,
-};
+use cos_policy::{ApprovalRequest, Needs, PathProbe, Role, Tier, Verdict, classify, classify_with};
 use serde_json::{Value, json};
 
 const ROOT: &str = "/Users/me/.cos/worktrees/shop-1/lisbon";

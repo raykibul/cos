@@ -346,9 +346,7 @@ impl Staff {
         }
         let project = inner.projects.get(project_id).await?;
         inner.ensure_running(project.id).await?;
-        inner
-            .books
-            .add(project.id, StaffItemKind::Message, None, text)?;
+        inner.books.add(project.id, StaffItemKind::Message, None, text)?;
         inner.wake.notify_one();
         Ok(())
     }
@@ -416,9 +414,9 @@ impl Inner {
                     system_prompt: Some(system_prompt),
                     ..Launch::default()
                 };
-                let agent =
-                    self.agents
-                        .start_agent_with(worktree.id, Role::Staff, &request, &launch)?;
+                let agent = self
+                    .agents
+                    .start_agent_with(worktree.id, Role::Staff, &request, &launch)?;
                 self.books.set_agent(project.id, agent.id)?;
                 agent
             }

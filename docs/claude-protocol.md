@@ -17,7 +17,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 |---|---|
 | `--permission-prompt-tool stdio` | Claude refuses anything that needs approval ("needs approval", `source: config`) and never asks cos. The flag is hidden from `--help`; `--permission-prompts host` alone is not enough. Found in the Agent SDK source, which always passes it when a `canUseTool` callback is set. |
 | `--setting-sources project` | Your user settings apply. Your personal allow rules approved `touch` (`source: user_permanent`), and your default `auto` mode let its classifier approve the command. cos never saw either request. |
-| `--strict-mcp-config` | Your personal MCP servers load into every worker. |
+| `--strict-mcp-config` | Your personal MCP servers load into every agent. |
 
 Also: Claude treats paths under `~/.claude/` as sensitive and refuses writes there whatever cos answers. Use a normal directory such as `.sandbox/` for experiments.
 

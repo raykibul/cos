@@ -89,8 +89,8 @@ function envPath(projectId: number | null, name: string): string {
 }
 
 /**
- * Typed calls for every route in docs/daemon.md, docs/agents-api.md and
- * docs/orchestration.md, over the bridge's `daemon_request`. Non-2xx answers
+ * Typed calls for every route in docs/daemon.md and docs/agents-api.md, over
+ * the bridge's `daemon_request`. Non-2xx answers
  * throw `CosError`s carrying the daemon's message; a daemon without a newer
  * route answers 404 (`not_found`).
  */

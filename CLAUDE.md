@@ -1,6 +1,6 @@
 # cos
 
-Rust chief of staff for coding agents. Read `docs/proposal.md` for the design and milestone list. Its Progress section says what's done. `docs/daemon.md` covers the daemon, the event log and the API. `docs/claude-protocol.md` covers how cos drives Claude Code. `docs/approvals.md` covers who may answer a permission request (the `cos-policy` crate). `docs/judge.md` covers jev, the fast judgment layer (`cos-judge`), in shadow mode.
+Rust chief of staff for coding agents. Read `docs/proposal.md` for the design and milestone list. Its Progress section says what's done. `docs/daemon.md` covers the daemon, the event log and the API. `docs/claude-protocol.md` covers how cos drives Claude Code. `docs/approvals.md` covers how a permission request is classified (the `cos-policy` crate); you answer every one. There are no runs or goals: you talk to a project's Chief of Staff (`docs/chief-of-staff.md`), which coordinates agents. `docs/judge.md` covers jev, the fast judgment layer (`cos-judge`), in shadow mode.
 
 ## Commands
 

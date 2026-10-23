@@ -5,9 +5,7 @@
 use std::sync::Arc;
 
 use cos_core::events::kind;
-use cos_core::{
-    Agent, AgentState, Agents, Base, EventLog, Projects, Role, StaffBooks, StaffItemKind, Store,
-};
+use cos_core::{Agent, AgentState, Agents, Base, EventLog, Projects, Role, StaffBooks, StaffItemKind, Store};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use tokio::net::UnixListener;
@@ -834,12 +832,7 @@ async fn paused_coordination_holds_news_but_not_your_messages() {
     assert_eq!(fixture.events(kind::STAFF_CHANGED).len(), changed + 1);
     fixture
         .books
-        .add(
-            fixture.project_id,
-            StaffItemKind::Agent,
-            None,
-            "News 1\nbody",
-        )
+        .add(fixture.project_id, StaffItemKind::Agent, None, "News 1\nbody")
         .unwrap();
 
     // Your messages still go in; the news waits.
