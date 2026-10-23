@@ -404,7 +404,10 @@ actor FakeCos: CosService {
         append(agentId, role: .user, kind: .text, text: text)
         setStaffState(projectId, .working)
         if let replyDelay {
+            // A tool call first, then the answer: the chat shows what it's doing in between.
             Task {
+                try? await Task.sleep(for: replyDelay)
+                self.append(agentId, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__workspaces_list"))
                 try? await Task.sleep(for: replyDelay)
                 self.reply(projectId, agentId, to: text)
             }
@@ -412,7 +415,6 @@ actor FakeCos: CosService {
     }
 
     private func reply(_ projectId: Int, _ agentId: Int, to text: String) {
-        append(agentId, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__workspaces_list"))
         append(agentId, role: .assistant, kind: .text, text: "On it. I checked the workspaces: **lisbon** is still running the test suite and **porto** is waiting for your approval. I'll report back when either finishes.")
         setStaffState(projectId, .idle)
     }

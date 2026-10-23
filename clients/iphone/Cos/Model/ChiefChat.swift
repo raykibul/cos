@@ -15,12 +15,58 @@ struct PendingMessage: Identifiable, Equatable, Sendable {
     /// The transcript's `next` when it was sent: only later messages can be it.
     var afterN: Int
     var state: State
+    /// When you pressed send.
+    var createdMs: Int64 = nowMs()
+    /// When cos took it.
+    var sentMs: Int64?
+
+    /// Its ticks, until it fails.
+    var receipt: Receipt? {
+        switch state {
+        case .sending: .sending
+        case .sent: .sent
+        case .failed: nil
+        }
+    }
+}
+
+/// The ticks on what you sent, as a messaging app has them.
+enum Receipt: Hashable, Sendable {
+    /// The phone is sending it.
+    case sending
+    /// cos has it. While the chief is mid-task it waits in cos's inbox and
+    /// goes in when the chief pauses.
+    case sent
+    /// It is in Claude's conversation.
+    case delivered
+    /// Claude has started on it: its next entry is Claude's own, or it is
+    /// working right after your message.
+    case seen
+}
+
+/// When each tick of a message happened, for its info sheet.
+struct ReceiptTimes: Equatable {
+    /// Known only for what you sent from this phone, while the app runs.
+    var sentMs: Int64?
+    var deliveredMs: Int64
+    var seenMs: Int64?
+    var receipt: Receipt
+}
+
+/// What the chief is doing while it works: its latest tool call, and since when.
+struct ChiefActivity: Equatable {
+    var text: String
+    var sinceMs: Int64
+}
+
+func nowMs() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
 }
 
 /// One row of the chat.
 enum ChatRow: Identifiable, Equatable {
-    /// What you typed.
-    case user(TranscriptMessage)
+    /// What you typed, with its ticks.
+    case user(TranscriptMessage, Receipt)
     /// What the chief said, as markdown.
     case reply(TranscriptMessage)
     /// One tool call, as a compact row.
@@ -36,7 +82,7 @@ enum ChatRow: Identifiable, Equatable {
 
     var id: String {
         switch self {
-        case .user(let message), .reply(let message), .tool(let message), .spawned(let message, _), .task(let message, _),
+        case .user(let message, _), .reply(let message), .tool(let message), .spawned(let message, _), .task(let message, _),
             .updates(let message, _):
             "m\(message.n)"
         case .pending(let pending): "p\(pending.id)"
@@ -56,6 +102,8 @@ final class ChiefChat {
     private(set) var messages: [TranscriptMessage] = []
     private(set) var next = 0
     private(set) var pending: [PendingMessage] = []
+    /// When cos took each message you sent from here, by transcript `n`.
+    private(set) var sentAt: [Int: Int64] = [:]
     /// What its agents reported, newest first.
     private(set) var inbox: [StaffItem] = []
     private(set) var isLoading = false
@@ -142,7 +190,10 @@ final class ChiefChat {
         pending.append(PendingMessage(id: id, text: text, afterN: next, state: .sending))
         do {
             try await session.service.messageStaff(projectId: projectId, text: text)
-            update(id) { $0.state = .sent }
+            update(id) {
+                $0.state = .sent
+                $0.sentMs = nowMs()
+            }
             session.refreshStaff()
             if let staff = try? await session.service.staff(projectId: projectId) { session.setStaff(staff) }
             await read()
@@ -180,6 +231,7 @@ final class ChiefChat {
             }
             if let match {
                 used.insert(match.n)
+                if let sent = item.sentMs { sentAt[match.n] = sent }
                 return false
             }
             return true
@@ -194,6 +246,9 @@ final class ChiefChat {
 
     var rows: [ChatRow] {
         var rows: [ChatRow] = []
+        let answered = answeredAt()
+        let lastTyped = messages.last { $0.role == .user && $0.kind == .text }?.n
+        let typing = isTyping
         for message in messages {
             switch (message.role, message.kind) {
             case (.user, .update):
@@ -201,7 +256,10 @@ final class ChiefChat {
             case (.user, .task), (.user, .text) where message.taskNotification != nil:
                 if let note = message.taskNotification { rows.append(.task(message, note)) }
             case (.user, .text):
-                if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { rows.append(.user(message)) }
+                if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let seen = answered[message.n] != nil || (typing && message.n == lastTyped)
+                    rows.append(.user(message, seen ? .seen : .delivered))
+                }
             case (.user, _):
                 // A tool result logged as a user turn, or something newer.
                 continue
@@ -217,6 +275,57 @@ final class ChiefChat {
         }
         rows += pending.map { .pending($0) }
         return rows
+    }
+
+    /// For each message in the transcript that is yours, when Claude's next
+    /// entry came: the moment it had seen it.
+    private func answeredAt() -> [Int: Int64] {
+        var answered: [Int: Int64] = [:]
+        var next: Int64?
+        for message in messages.reversed() {
+            if message.role == .user {
+                if let next { answered[message.n] = next }
+            } else {
+                next = message.tsMs
+            }
+        }
+        return answered
+    }
+
+    /// When each tick of one of your messages happened.
+    func receiptTimes(for message: TranscriptMessage) -> ReceiptTimes {
+        let seenMs = messages.first { $0.n > message.n && $0.role != .user }?.tsMs
+        let lastTyped = messages.last { $0.role == .user && $0.kind == .text }?.n
+        let seen = seenMs != nil || (isTyping && message.n == lastTyped)
+        return ReceiptTimes(sentMs: sentAt[message.n], deliveredMs: message.tsMs, seenMs: seenMs, receipt: seen ? .seen : .delivered)
+    }
+
+    // MARK: Typing
+
+    /// The chief is mid-turn: the chat shows it typing.
+    var isTyping: Bool {
+        guard let state = session.agent(id: chiefAgentId)?.state ?? staff?.state else { return false }
+        return state == .working || state == .starting
+    }
+
+    /// While it works, its latest tool call ("cargo test", "Read
+    /// src/app.ts"), unless it has written since.
+    var activity: ChiefActivity? {
+        guard isTyping else { return nil }
+        // Tool results come back as user entries; skip them.
+        guard let last = messages.last(where: { $0.role != .user || $0.kind == .text }), last.role != .user,
+            let tool = last.tool, last.kind == .tool
+        else { return nil }
+        return ChiefActivity(text: Self.describe(tool), sinceMs: last.tsMs)
+    }
+
+    /// A tool call as one short line: Bash's command, else the tool and its argument.
+    static func describe(_ tool: ToolCall) -> String {
+        let summary = tool.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tool.isCosTool { return tool.title }
+        if summary.isEmpty { return tool.title }
+        if tool.name == "Bash" { return summary }
+        return "\(tool.title) \(summary)"
     }
 
     /// The session an `agent_spawn` started: by the id in its result, or,

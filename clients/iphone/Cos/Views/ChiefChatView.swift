@@ -38,6 +38,13 @@ struct ChiefChatView: View {
                         WaitingMessage(session: session, agent: entry.agent, approval: entry.approval)
                             .id("waiting-\(entry.agent.id)")
                     }
+                    if chat.isTyping {
+                        TypingBubble(activity: chat.activity) {
+                            if let id = chat.chiefAgentId { navigator.open(.terminal(agentId: id)) }
+                        }
+                        .id("typing")
+                        .transition(.opacity)
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 10)
@@ -47,7 +54,8 @@ struct ChiefChatView: View {
             .defaultScrollAnchor(.bottom)
             .background(ChatWallpaper())
             .refreshable { await chat.load() }
-            .onChange(of: chat.rows.count + chat.agentsWaiting.count) { old, _ in
+            .animation(.easeOut(duration: 0.2), value: chat.isTyping)
+            .onChange(of: chat.rows.count + chat.agentsWaiting.count + (chat.isTyping ? 1 : 0)) { old, _ in
                 if old == 0 {
                     // The first load jumps to the end, after layout.
                     Task { @MainActor in
@@ -72,7 +80,7 @@ struct ChiefChatView: View {
                 Button {
                     navigator.open(.chiefInfo(projectId: chat.projectId))
                 } label: {
-                    ChatTitle(name: chat.project?.name ?? "Chief of Staff", subtitle: subtitle, live: (chat.staff?.workingAgents ?? 0) > 0)
+                    ChatTitle(name: chat.project?.name ?? "Chief of Staff", subtitle: subtitle, live: chat.isTyping || (chat.staff?.workingAgents ?? 0) > 0)
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Shows its workspaces and sessions")
@@ -146,9 +154,13 @@ struct ChiefChatView: View {
         }
     }
 
+    /// "typing…" while the chief works, as a chat app shows it, and how
+    /// many of its sessions work.
     private var subtitle: String {
         let working = chat.staff?.workingAgents ?? 0
-        if working > 0 { return working == 1 ? "1 session working…" : "\(working) sessions working…" }
+        let sessions = working == 1 ? "1 session working" : "\(working) sessions working"
+        if chat.isTyping { return working > 0 ? "typing… · \(sessions)" : "typing…" }
+        if working > 0 { return sessions + "…" }
         return chat.staff?.stateLabel ?? "Chief of Staff"
     }
 
@@ -244,25 +256,34 @@ struct ChatRowView: View {
     var chat: ChiefChat
     var row: ChatRow
     @State private var expanded = false
+    @State private var info: TranscriptMessage?
 
     var body: some View {
         switch row {
-        case .user(let message):
-            Bubble(outgoing: true, time: message.tsMs) {
+        case .user(let message, let receipt):
+            Bubble(outgoing: true, time: message.tsMs, receipt: receipt) {
                 Text(message.text)
                     .font(.body)
                     .foregroundStyle(Palette.ink)
-                    .textSelection(.enabled)
+            }
+            .contextMenu {
+                Button("Info", systemImage: "info.circle") { info = message }
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+            }
+            .sheet(item: $info) { message in
+                MessageInfo(message: message, times: chat.receiptTimes(for: message))
             }
         case .pending(let pending):
             VStack(alignment: .trailing, spacing: 4) {
-                Bubble(outgoing: true, time: nil) {
+                Bubble(outgoing: true, time: pending.createdMs, receipt: pending.receipt) {
                     Text(pending.text)
                         .font(.body)
                         .foregroundStyle(Palette.ink)
                 }
-                pendingFooter(pending)
-                    .padding(.trailing, 6)
+                if case .failed(let message) = pending.state {
+                    failedFooter(pending, message)
+                        .padding(.trailing, 6)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         case .reply(let message):
@@ -284,22 +305,15 @@ struct ChatRowView: View {
         }
     }
 
-    @ViewBuilder
-    private func pendingFooter(_ pending: PendingMessage) -> some View {
-        switch pending.state {
-        case .sending:
-            Label("Sending…", systemImage: "clock").labelStyle(.tight).font(.caption).foregroundStyle(Palette.ink3)
-        case .sent:
-            Label("Sent · waiting for the chief", systemImage: "checkmark").labelStyle(.tight).font(.caption).foregroundStyle(Palette.ink3)
-        case .failed(let message):
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(message).font(.caption).foregroundStyle(Palette.red).multilineTextAlignment(.trailing)
-                HStack(spacing: 12) {
-                    Button("Discard") { chat.discard(pending) }
-                    Button("Retry") { Task { await chat.retry(pending) } }.fontWeight(.semibold)
-                }
-                .font(.caption)
+    /// Why it failed, with Retry and Discard. Sending and sent are ticks.
+    private func failedFooter(_ pending: PendingMessage, _ message: String) -> some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text(message).font(.caption).foregroundStyle(Palette.red).multilineTextAlignment(.trailing)
+            HStack(spacing: 12) {
+                Button("Discard") { chat.discard(pending) }
+                Button("Retry") { Task { await chat.retry(pending) } }.fontWeight(.semibold)
             }
+            .font(.caption)
         }
     }
 
@@ -388,15 +402,29 @@ struct ChatRowView: View {
 struct Bubble<Content: View>: View {
     var outgoing: Bool
     var time: Int64?
+    /// The ticks on what you sent.
+    var receipt: Receipt?
     @ViewBuilder var content: Content
+
+    init(outgoing: Bool, time: Int64?, receipt: Receipt? = nil, @ViewBuilder content: () -> Content) {
+        self.outgoing = outgoing
+        self.time = time
+        self.receipt = receipt
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
             content
-            if let time, time > 0 {
-                Text(Date(unixMilliseconds: time).formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
-                    .foregroundStyle(Palette.ink3)
+            if (time ?? 0) > 0 || receipt != nil {
+                HStack(spacing: 3) {
+                    if let time, time > 0 {
+                        Text(Date(unixMilliseconds: time).formatted(date: .omitted, time: .shortened))
+                    }
+                    if let receipt { ReceiptTicks(receipt: receipt) }
+                }
+                .font(.caption2)
+                .foregroundStyle(Palette.ink3)
             }
         }
         .fixedSize(horizontal: false, vertical: true)

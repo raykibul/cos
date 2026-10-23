@@ -45,7 +45,7 @@ import Testing
         #expect(tasks.map(\.title) == ["Check the 0.2 milestone"])
         #expect(tasks.first?.durationMs == 94_000)
         #expect(!chat.rows.contains { row in
-            if case .user(let message) = row { message.text.contains("<task-notification>") } else { false }
+            if case .user(let message, _) = row { message.text.contains("<task-notification>") } else { false }
         })
     }
 
@@ -61,12 +61,62 @@ import Testing
 
         #expect(chat.draft.isEmpty)
         #expect(chat.pending.isEmpty)
-        guard case .user(let message) = chat.rows.last else {
+        guard case .user(let message, _) = chat.rows.last else {
             Issue.record("the last row is your message: \(String(describing: chat.rows.last))")
             return
         }
         #expect(message.text == "What's left before 0.2?")
         #expect(chat.rows.count == before + 1)
+    }
+
+    @Test func yourMessagesGetTicks() async {
+        let session = await liveSession(FakeCos(replyDelay: .milliseconds(300)))
+        defer { session.stop() }
+        let chat = ChiefChat(projectId: 1, session: session)
+        await chat.load()
+
+        // The chief answered everything you wrote before: two blue ticks.
+        let earlier = chat.rows.compactMap { row -> Receipt? in
+            if case .user(_, let receipt) = row { receipt } else { nil }
+        }
+        #expect(!earlier.isEmpty)
+        #expect(earlier.allSatisfy { $0 == .seen })
+
+        await chat.send("Status?")
+        // Claude has it and the chief is working on it: typing, and seen.
+        _ = await eventually { chat.isTyping }
+        #expect(chat.isTyping)
+        guard case .user(let message, .seen) = chat.rows.last else {
+            Issue.record("your message is seen while the chief works on it: \(String(describing: chat.rows.last))")
+            return
+        }
+
+        // Its reply comes in: no longer typing, and the info has each time.
+        let tick = session.transcriptTicks[40] ?? 0
+        _ = await eventually { (session.transcriptTicks[40] ?? 0) > tick + 1 && !chat.isTyping }
+        await chat.read()
+        #expect(!chat.isTyping)
+        let times = chat.receiptTimes(for: message)
+        #expect(times.receipt == .seen)
+        #expect(times.sentMs != nil)
+        #expect(times.seenMs != nil)
+        #expect(times.deliveredMs == message.tsMs)
+    }
+
+    @Test func aPendingMessageShowsItsTicks() {
+        var message = PendingMessage(id: 1, text: "Hi", afterN: 0, state: .sending)
+        #expect(message.receipt == .sending)
+        message.state = .sent
+        #expect(message.receipt == .sent)
+        message.state = .failed("no")
+        #expect(message.receipt == nil)
+    }
+
+    @Test func whatTheChiefIsDoingReadsAsOneLine() {
+        #expect(ChiefChat.describe(ToolCall(name: "Bash", summary: "cargo test -p cos")) == "cargo test -p cos")
+        #expect(ChiefChat.describe(ToolCall(name: "Read", summary: "src/app.ts")) == "Read src/app.ts")
+        #expect(ChiefChat.describe(ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix it")) == "Started an agent")
+        #expect(ChiefChat.describe(ToolCall(name: "TodoWrite")) == "TodoWrite")
     }
 
     @Test func theFirstMessageStartsTheChief() async {
