@@ -5,10 +5,11 @@ import Foundation
 /// trying the app without a Mac) and for the view-model tests. It mirrors
 /// the desktop's fake bridge (clients/desktop/src/bridge/fake):
 ///
-/// - two projects: atlas (lisbon, porto, madrid) and harbor (kyoto,
-///   nairobi); porto and kyoto have no title
+/// - three projects: atlas (lisbon, porto, madrid), harbor (kyoto,
+///   nairobi) and opal (oslo); porto and kyoto have no title
 /// - atlas's Chief of Staff (agent 40) has a conversation and started
-///   agents 7 and 8; harbor's hasn't started
+///   agents 7 and 8; harbor's hasn't started; opal's (agent 41) is idle
+///   with no conversation
 /// - an approval waiting for you (agent 8) and one with a run's chief
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - runs: 3 running (tasks in several states, with a question), 4 with a

@@ -10,8 +10,8 @@ import Testing
         defer { session.stop() }
 
         #expect(session.connection == .live)
-        #expect(session.projects.map(\.name) == ["atlas", "harbor"])
-        #expect(session.staffs.keys.sorted() == [1, 2])
+        #expect(session.projects.map(\.name) == ["atlas", "harbor", "opal"])
+        #expect(session.staffs.keys.sorted() == [1, 2, 3])
         // The chief's approval (decided_by route "chief") is not yours.
         #expect(session.waiting.map(\.id) == ["approval-12", "question-5", "plan-4", "trust-12", "login-11"])
         #expect(session.waitingCount == 5)
@@ -112,7 +112,7 @@ import Testing
         session.stop()
 
         #expect(!session.isFollowing)
-        #expect(session.projects.count == 2)
+        #expect(session.projects.count == 3)
         session.start()
         #expect(session.isFollowing)
         session.stop()

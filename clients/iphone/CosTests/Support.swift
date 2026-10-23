@@ -27,7 +27,11 @@ let quickBackoff = Backoff(initial: .milliseconds(20), maximum: .milliseconds(10
 func liveSession(
     _ fake: FakeCos = FakeCos(replyDelay: nil), notifications: any Notifications = NoNotifications()
 ) async -> HostSession {
-    let session = HostSession(host: testHost(), service: fake, notifications: notifications, backoff: quickBackoff)
+    let host = testHost()
+    let session = HostSession(
+        host: host, service: fake, notifications: notifications, backoff: quickBackoff,
+        readMarks: ReadMarks(hostId: host.id, defaults: scratchDefaults())
+    )
     session.start()
     _ = await eventually { session.connection.isLive && session.hasLoaded && !session.staffs.isEmpty }
     return session

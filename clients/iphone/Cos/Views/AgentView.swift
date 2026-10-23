@@ -7,12 +7,15 @@ struct AgentView: View {
     var session: HostSession
     var agentId: Int
     @State private var detail: AgentDetail
-    @State private var showScreen = false
+    @State private var showScreen: Bool
 
-    init(session: HostSession, agentId: Int) {
+    /// `showScreen` opens with its terminal snapshot loaded (the chief's
+    /// screen, from its chat's menu).
+    init(session: HostSession, agentId: Int, showScreen: Bool = false) {
         self.session = session
         self.agentId = agentId
         _detail = State(initialValue: AgentDetail(agentId: agentId, session: session))
+        _showScreen = State(initialValue: showScreen)
     }
 
     var body: some View {
@@ -125,6 +128,9 @@ struct AgentView: View {
             }
         }
         .toolbar(.hidden, for: .tabBar)
+        .task {
+            if showScreen { await detail.loadScreen() }
+        }
         .onChange(of: showScreen) { _, show in
             if show { Task { await detail.loadScreen() } }
         }

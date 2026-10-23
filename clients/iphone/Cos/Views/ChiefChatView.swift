@@ -1,13 +1,19 @@
 import CosKit
 import SwiftUI
 
-/// A project's Chief of Staff as a chat, read from its transcript: your
-/// messages as bubbles, its replies as markdown, tool calls as compact rows
-/// and agents' news as "N updates" rows. Live from `agent.transcript`.
+/// A project's Chief of Staff as a chat, like a messaging app: your
+/// messages in bubbles on the right, its replies (markdown) on the left,
+/// tool calls as slim rows, news from its sessions as an "N updates" chip,
+/// and what its sessions need from you as messages with buttons in them.
+/// The ⋯ menu leads to its workspaces, sessions and runs. Live from
+/// `agent.transcript`.
 struct ChiefChatView: View {
     var session: HostSession
     @State private var chat: ChiefChat
     @FocusState private var composing: Bool
+    @Environment(Navigator.self) private var navigator
+    @State private var confirmStop = false
+    @State private var error: String?
 
     init(session: HostSession, projectId: Int) {
         self.session = session
@@ -17,7 +23,7 @@ struct ChiefChatView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
                     if chat.rows.isEmpty && !chat.isLoading {
                         EmptyChief(project: chat.project?.name ?? "this project", started: chat.staff?.hasStarted ?? false) { suggestion in
                             chat.draft = suggestion
@@ -28,16 +34,20 @@ struct ChiefChatView: View {
                         ChatRowView(chat: chat, row: row)
                             .id(row.id)
                     }
+                    ForEach(chat.agentsWaiting, id: \.agent.id) { entry in
+                        WaitingMessage(session: session, agent: entry.agent, approval: entry.approval)
+                            .id("waiting-\(entry.agent.id)")
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            .background(Palette.page)
+            .background(ChatWallpaper())
             .refreshable { await chat.load() }
-            .onChange(of: chat.rows.count) { old, _ in
+            .onChange(of: chat.rows.count + chat.agentsWaiting.count) { old, _ in
                 if old == 0 {
                     // The first load jumps to the end, after layout.
                     Task { @MainActor in
@@ -50,47 +60,138 @@ struct ChiefChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                WaitingStrip(session: session, chat: chat)
-                Composer(chat: chat, focused: $composing)
-            }
-            .background(Palette.page.opacity(0.96).ignoresSafeArea(edges: .bottom))
+            Composer(chat: chat, focused: $composing)
+                .background(Palette.page.opacity(0.97).ignoresSafeArea(edges: .bottom))
         }
         .navigationBarTitleDisplayMode(.inline)
-        // An opaque bar: the two-line title is unreadable over scrolled text.
+        // An opaque bar, as a chat app has: the title is unreadable over bubbles.
         .toolbarBackground(Palette.page, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    HStack(spacing: 5) {
-                        ChiefStar(size: 12)
-                        Text("Chief of Staff").font(.headline)
-                    }
-                    Text([chat.project?.name, chat.staff?.stateLabel].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(Palette.ink3)
-                        .lineLimit(1)
+                Button {
+                    navigator.open(.chiefInfo(projectId: chat.projectId))
+                } label: {
+                    ChatTitle(name: chat.project?.name ?? "Chief of Staff", subtitle: subtitle, live: (chat.staff?.workingAgents ?? 0) > 0)
                 }
+                .buttonStyle(.plain)
+                .accessibilityHint("Shows its workspaces and sessions")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                if let model = chat.staff?.model {
-                    Text(model)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Palette.ink2)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Palette.subtle, in: Capsule())
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("Chief's screen", systemImage: "terminal") {
+                    if let id = chat.chiefAgentId { navigator.open(.screen(agentId: id)) }
                 }
+                .disabled(chat.chiefAgentId == nil)
+                menu
             }
         }
         .toolbar(.hidden, for: .tabBar)
+        .confirmationDialog("Stop the Chief of Staff?", isPresented: $confirmStop, titleVisibility: .visible) {
+            Button("Stop", role: .destructive) { stopChief() }
+        } message: {
+            Text("The sessions it started keep running. Your next message starts it again.")
+        }
+        .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(error ?? "")
+        }
         .task { await chat.load() }
+        .onAppear { markRead() }
+        .onDisappear { markRead() }
         .onChange(of: session.transcriptTicks[chat.chiefAgentId ?? -1]) {
+            markRead()
             Task { await chat.read() }
         }
         .onChange(of: chat.chiefAgentId) {
             Task { await chat.read() }
+        }
+    }
+
+    /// The three dots: where its workspaces, sessions and runs are.
+    private var menu: some View {
+        let projectId = chat.projectId
+        let sessions = session.agents(inProject: projectId)
+        let working = sessions.filter { $0.state == .working || $0.state == .starting }.count
+        let needYou = chat.agentsWaiting.count
+        let runs = session.runs(inProject: projectId)
+        return Menu {
+            Button {
+                navigator.open(.chiefInfo(projectId: projectId, tab: .workspaces))
+            } label: {
+                Label("Workspaces", systemImage: "arrow.triangle.branch")
+                Text(count(chat.project?.workspaces.count ?? 0, "workspace", "workspaces"))
+            }
+            Button {
+                navigator.open(.chiefInfo(projectId: projectId, tab: .sessions))
+            } label: {
+                Label("Sessions", systemImage: "person.2")
+                Text([count(working, "working", "working"), needYou > 0 ? "\(needYou) need you" : nil].compactMap { $0 }.joined(separator: " · "))
+            }
+            Button {
+                navigator.open(.chiefInfo(projectId: projectId, tab: .runs))
+            } label: {
+                Label("Runs", systemImage: "list.bullet.clipboard")
+                Text(count(runs.filter { !$0.state.isFinished }.count, "active", "active"))
+            }
+            if let id = chat.chiefAgentId {
+                Button("Chief's screen", systemImage: "terminal") { navigator.open(.screen(agentId: id)) }
+            }
+            if let agent = session.agent(id: chat.chiefAgentId), agent.state.isAlive {
+                Divider()
+                Button("Stop Chief of Staff", systemImage: "stop.circle", role: .destructive) { confirmStop = true }
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis.circle")
+        }
+    }
+
+    private var subtitle: String {
+        let working = chat.staff?.workingAgents ?? 0
+        if working > 0 { return working == 1 ? "1 session working…" : "\(working) sessions working…" }
+        return chat.staff?.stateLabel ?? "Chief of Staff"
+    }
+
+    private func count(_ n: Int, _ one: String, _ many: String) -> String {
+        "\(n) \(n == 1 ? one : many)"
+    }
+
+    private func markRead() {
+        session.readMarks.markRead(projectId: chat.projectId)
+    }
+
+    private func stopChief() {
+        guard let id = chat.chiefAgentId else { return }
+        Task {
+            do {
+                try await session.stopAgent(id: id)
+                session.refreshStaff()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// The chat's title: avatar, name, and what it's doing.
+struct ChatTitle: View {
+    var name: String
+    var subtitle: String
+    var live: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProjectAvatar(name: name, size: 32)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(name)
+                    .font(.headline)
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(live ? Palette.blue : Palette.ink3)
+                    .lineLimit(1)
+            }
         }
     }
 }
@@ -138,7 +239,7 @@ struct EmptyChief: View {
         }
     }
 }
-
+/// One row of the chat.
 struct ChatRowView: View {
     var chat: ChiefChat
     var row: ChatRow
@@ -147,13 +248,29 @@ struct ChatRowView: View {
     var body: some View {
         switch row {
         case .user(let message):
-            bubble(message.text, footer: nil)
+            Bubble(outgoing: true, time: message.tsMs) {
+                Text(message.text)
+                    .font(.body)
+                    .foregroundStyle(Palette.ink)
+                    .textSelection(.enabled)
+            }
         case .pending(let pending):
-            bubble(pending.text, footer: pendingFooter(pending))
+            VStack(alignment: .trailing, spacing: 4) {
+                Bubble(outgoing: true, time: nil) {
+                    Text(pending.text)
+                        .font(.body)
+                        .foregroundStyle(Palette.ink)
+                }
+                pendingFooter(pending)
+                    .padding(.trailing, 6)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         case .reply(let message):
-            MarkdownView(markdown: message.text)
-                .foregroundStyle(Palette.ink)
-                .textSelection(.enabled)
+            Bubble(outgoing: false, time: message.tsMs) {
+                MarkdownView(markdown: message.text)
+                    .foregroundStyle(Palette.ink)
+                    .textSelection(.enabled)
+            }
         case .tool(let message):
             toolRow(message.tool ?? ToolCall(name: "tool"))
         case .updates(let message, let count):
@@ -161,38 +278,22 @@ struct ChatRowView: View {
         }
     }
 
-    private func bubble(_ text: String, footer: AnyView?) -> some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            Text(text)
-                .font(.body)
-                .foregroundStyle(Palette.ink)
-                .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Palette.subtle, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            if let footer { footer }
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 48)
-    }
-
-    private func pendingFooter(_ pending: PendingMessage) -> AnyView {
+    @ViewBuilder
+    private func pendingFooter(_ pending: PendingMessage) -> some View {
         switch pending.state {
         case .sending:
-            AnyView(Text("Sending…").font(.caption).foregroundStyle(Palette.ink3))
+            Label("Sending…", systemImage: "clock").labelStyle(.tight).font(.caption).foregroundStyle(Palette.ink3)
         case .sent:
-            AnyView(Text("Sent · waiting for the chief").font(.caption).foregroundStyle(Palette.ink3))
+            Label("Sent · waiting for the chief", systemImage: "checkmark").labelStyle(.tight).font(.caption).foregroundStyle(Palette.ink3)
         case .failed(let message):
-            AnyView(
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(message).font(.caption).foregroundStyle(Palette.red).multilineTextAlignment(.trailing)
-                    HStack(spacing: 12) {
-                        Button("Discard") { chat.discard(pending) }
-                        Button("Retry") { Task { await chat.retry(pending) } }.fontWeight(.semibold)
-                    }
-                    .font(.caption)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(message).font(.caption).foregroundStyle(Palette.red).multilineTextAlignment(.trailing)
+                HStack(spacing: 12) {
+                    Button("Discard") { chat.discard(pending) }
+                    Button("Retry") { Task { await chat.retry(pending) } }.fontWeight(.semibold)
                 }
-            )
+                .font(.caption)
+            }
         }
     }
 
@@ -201,21 +302,19 @@ struct ChatRowView: View {
             withAnimation(.snappy) { expanded.toggle() }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     Image(systemName: tool.isCosTool ? "star" : symbol(for: tool.name))
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(tool.isCosTool ? Palette.amber : Palette.ink3)
-                        .frame(width: 16)
                     Text(tool.title)
-                        .font(.footnote.weight(.medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(tool.isError ? Palette.red : Palette.ink2)
                     if !tool.summary.isEmpty, !expanded {
                         Text(tool.summary)
-                            .font(.footnote.monospaced())
+                            .font(.caption.monospaced())
                             .foregroundStyle(Palette.ink3)
                             .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
                     if tool.isError {
                         Image(systemName: "exclamationmark.circle").font(.caption).foregroundStyle(Palette.red)
                     }
@@ -224,45 +323,45 @@ struct ChatRowView: View {
                     CodeBox(text: tool.summary)
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Palette.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.trailing, 48)
     }
 
     private func updatesRow(_ message: TranscriptMessage, count: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 8) {
             Button {
                 withAnimation(.snappy) { expanded.toggle() }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "tray.and.arrow.down")
-                        .font(.caption.weight(.semibold))
-                    Text(count == 1 ? "1 update from agents" : "\(count) updates from agents")
-                        .font(.footnote.weight(.medium))
-                    Spacer()
-                    Text(shortAgo(message.tsMs))
-                        .font(.caption)
-                        .foregroundStyle(Palette.ink3)
-                    Image(systemName: "chevron.right")
+                HStack(spacing: 6) {
+                    Text(count == 1 ? "1 update from sessions" : "\(count) updates from sessions")
+                    Text("· \(shortAgo(message.tsMs))").foregroundStyle(Palette.ink3)
+                    Image(systemName: "chevron.down")
                         .font(.caption2.weight(.bold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .foregroundStyle(Palette.ink3)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Palette.ink2)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(Palette.surface, in: Capsule())
-                .overlay(Capsule().stroke(Palette.line, lineWidth: 0.5))
+                .padding(.vertical, 6)
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .shadow(color: .black.opacity(0.06), radius: 0.5, y: 1)
             }
             .buttonStyle(.plain)
             if expanded {
                 MarkdownView(markdown: message.updateBody, font: .footnote)
                     .foregroundStyle(Palette.ink2)
                     .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
     }
 
     private func symbol(for tool: String) -> String {
@@ -278,100 +377,164 @@ struct ChatRowView: View {
     }
 }
 
-/// Agents the chief started that wait on you, above the composer.
-struct WaitingStrip: View {
+/// A chat bubble: yours on the right in the outgoing colour, the chief's on
+/// the left, with the time in its corner.
+struct Bubble<Content: View>: View {
+    var outgoing: Bool
+    var time: Int64?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            content
+            if let time, time > 0 {
+                Text(Date(unixMilliseconds: time).formatted(date: .omitted, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(Palette.ink3)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 11)
+        .padding(.top, 7)
+        .padding(.bottom, 5)
+        .background(outgoing ? Palette.outgoing : Palette.surface, in: shape)
+        .shadow(color: .black.opacity(0.08), radius: 0.5, y: 1)
+        .frame(maxWidth: 520, alignment: outgoing ? .trailing : .leading)
+        .padding(outgoing ? Edge.Set.leading : Edge.Set.trailing, 44)
+        .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
+    }
+
+    private var shape: UnevenRoundedRectangle {
+        outgoing
+            ? UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 4, style: .continuous)
+            : UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16, style: .continuous)
+    }
+}
+
+/// A session the chief started that waits on you, as a message with its
+/// buttons in it: Allow and Deny for an approval, Trust folder for the trust
+/// dialog, Open for a login.
+struct WaitingMessage: View {
     var session: HostSession
-    var chat: ChiefChat
+    var agent: Agent
+    var approval: Approval?
     @Environment(Navigator.self) private var navigator
+    @State private var busy = false
     @State private var error: String?
 
     var body: some View {
-        let waiting = chat.agentsWaiting
-        if !waiting.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(waiting.count == 1 ? "1 agent waiting on you" : "\(waiting.count) agents waiting on you")
-                    .font(.caption.weight(.semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text([agent.title, session.workspace(id: agent.workspaceId).map(\.displayName)].compactMap { $0 }.joined(separator: " · "))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(Palette.claude)
-                ForEach(waiting, id: \.agent.id) { entry in
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.agent.title)
-                                .font(.footnote.weight(.semibold))
-                                .lineLimit(1)
-                            Text(entry.approval?.detail ?? entry.agent.state.style.label)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(Palette.ink2)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 6)
-                        if let approval = entry.approval {
-                            Button("Deny") { decide(approval, .deny) }
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Palette.ink2)
-                            Button("Allow") { decide(approval, .allow) }
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Palette.claude)
-                        } else {
-                            Button("Open") { navigator.open(.agent(id: entry.agent.id)) }
-                                .font(.footnote.weight(.semibold))
-                        }
+                    .lineLimit(1)
+                if let approval {
+                    Text(approval.toolName == "Bash" ? "Can I run this?" : "Can I use \(approval.toolName)?")
+                        .font(.body)
+                        .foregroundStyle(Palette.ink)
+                    CodeBox(text: approval.detail, lineLimit: 6)
+                    if let reason = approval.reason, !reason.isEmpty {
+                        Text("cos asks you because \(reason)")
+                            .font(.footnote)
+                            .foregroundStyle(Palette.ink2)
                     }
+                } else if agent.state == .needsTrust {
+                    Text("Claude asks whether to trust this workspace's folder before it starts.")
+                        .font(.body)
+                        .foregroundStyle(Palette.ink)
+                } else {
+                    Text("It's on Claude's login screen. Log in on the host: `cos agent attach \(agent.id)`.")
+                        .font(.body)
+                        .foregroundStyle(Palette.ink)
                 }
                 if let error {
-                    Text(error).font(.caption).foregroundStyle(Palette.red)
+                    Text(error).font(.footnote).foregroundStyle(Palette.red)
                 }
             }
-            .padding(12)
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.claude.opacity(0.35), lineWidth: 1))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 6)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            if let approval {
+                action("Allow", bold: true) { try await session.decide(approval, .allow) }
+                action("Deny") { try await session.decide(approval, .deny) }
+            } else if agent.state == .needsTrust {
+                action("Trust folder", bold: true) { try await session.trust(agentId: agent.id) }
+            }
+            Divider()
+            Button {
+                navigator.open(.agent(id: agent.id))
+            } label: {
+                Text("Open session")
+                    .font(.body)
+                    .foregroundStyle(Palette.claude)
+                    .frame(maxWidth: .infinity, minHeight: 42)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
+        .background(Palette.surface, in: UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 16, bottomTrailingRadius: 16, topTrailingRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 0.5, y: 1)
+        .disabled(busy)
+        .padding(.trailing, 44)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func decide(_ approval: Approval, _ decision: ApprovalDecision) {
-        Task {
-            do {
-                try await session.decide(approval, decision)
-                error = nil
-            } catch {
-                self.error = error.localizedDescription
+    private func action(_ title: String, bold: Bool = false, _ work: @escaping @MainActor () async throws -> Void) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button {
+                busy = true
+                Task {
+                    defer { busy = false }
+                    do {
+                        try await work()
+                        error = nil
+                    } catch {
+                        self.error = error.localizedDescription
+                    }
+                }
+            } label: {
+                Text(title)
+                    .font(.body.weight(bold ? .semibold : .regular))
+                    .foregroundStyle(Palette.claude)
+                    .frame(maxWidth: .infinity, minHeight: 42)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
     }
 }
 
-/// "What should we work on?": sends to the chief, starting it if needed.
+/// The message box: a capsule field and a round send button.
 struct Composer: View {
     @Bindable var chat: ChiefChat
     var focused: FocusState<Bool>.Binding
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("What should we work on?", text: $chat.draft, axis: .vertical)
+            TextField("Message", text: $chat.draft, axis: .vertical)
                 .lineLimit(1...6)
                 .focused(focused)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.vertical, 8)
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Palette.line, lineWidth: 0.5))
             Button {
                 Task { await chat.send() }
             } label: {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 36, height: 36)
                     .background(canSend ? Palette.claude : Palette.ink3.opacity(0.5), in: Circle())
             }
             .disabled(!canSend)
-            .padding(.trailing, 6)
-            .padding(.bottom, 5)
             .accessibilityLabel("Send")
         }
-        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Palette.line, lineWidth: 1))
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 10)
+        .padding(.top, 7)
+        .padding(.bottom, 7)
+        .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 0.5) }
     }
 
     private var canSend: Bool {
