@@ -1,5 +1,6 @@
 import CosKit
 import Foundation
+import UIKit
 
 /// The invented data `FakeCos` starts with. Times are relative to `now`.
 struct FakeData {
@@ -131,7 +132,7 @@ struct FakeData {
         let after = "Good news from **lisbon**: the timeout was a unit mix-up (`SESSION_TTL` in minutes, read as hours). The fix is in and the full suite is running.\n\n**porto** is still waiting on your approval for `left-pad`."
         return [
             40: [
-                TranscriptMessage(n: 1, role: .user, kind: .text, text: ask, tsMs: ago(1_600)),
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: ask, tsMs: ago(1_600), attachments: firstAsk),
                 TranscriptMessage(n: 2, role: .assistant, kind: .text, text: "I'll check the workspaces, then start one agent on each.", tsMs: ago(1_590)),
                 TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__workspaces_list"), tsMs: ago(1_585)),
                 TranscriptMessage(n: 4, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix the session timeout", agentId: 7), tsMs: ago(1_500)),
@@ -167,6 +168,58 @@ struct FakeData {
     duration_ms: 94000</usage>
     </task-notification>
     """
+
+    // MARK: Attachments
+
+    /// What you attached to atlas's first ask: a screenshot and a log.
+    var files: [Int: [(name: String, contentType: String, data: Data)]] {
+        [1: [("login-expired.png", "image/png", Self.loginShot), ("auth.log", "text/plain", Self.authLog)]]
+    }
+
+    private var firstAsk: [AttachedFile] {
+        files[1, default: []].map { file in
+            AttachedFile(
+                name: file.name, path: "/Users/me/.cos/worktrees/project-1/chief/.cos/attachments/\(file.name)",
+                contentType: file.contentType, sizeLabel: Attachment.sizeLabel(file.data.count)
+            )
+        }
+    }
+
+    static let authLog = Data(String(repeating: "ERROR session expired after 300s\n", count: 40).utf8)
+
+    /// A drawn "Session expired" sign-in screen, so the fake needs no image files.
+    static let loginShot: Data = {
+        let size = CGSize(width: 480, height: 300)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor(red: 0.96, green: 0.95, blue: 0.92, alpha: 1).setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIColor(red: 0.90, green: 0.88, blue: 0.84, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 480, height: 34))
+            for (i, color) in [UIColor.systemRed, .systemYellow, .systemGreen].enumerated() {
+                color.setFill()
+                UIBezierPath(ovalIn: CGRect(x: 15 + CGFloat(i) * 18, y: 12, width: 10, height: 10)).fill()
+            }
+            UIColor.white.setFill()
+            UIBezierPath(roundedRect: CGRect(x: 140, y: 70, width: 200, height: 160), cornerRadius: 12).fill()
+            let title = NSAttributedString(string: "Sign in", attributes: [.font: UIFont.boldSystemFont(ofSize: 16), .foregroundColor: UIColor.darkText])
+            title.draw(at: CGPoint(x: 240 - title.size().width / 2, y: 88))
+            UIColor(red: 0.96, green: 0.95, blue: 0.92, alpha: 1).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 164, y: 120, width: 152, height: 24), cornerRadius: 6).fill()
+            UIBezierPath(roundedRect: CGRect(x: 164, y: 152, width: 152, height: 24), cornerRadius: 6).fill()
+            UIColor(red: 0.85, green: 0.47, blue: 0.34, alpha: 1).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 164, y: 188, width: 152, height: 28), cornerRadius: 7).fill()
+            UIColor(red: 0.98, green: 0.89, blue: 0.87, alpha: 1).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 110, y: 246, width: 260, height: 30), cornerRadius: 8).fill()
+            let warning = NSAttributedString(
+                string: "Session expired. Please sign in again.",
+                attributes: [.font: UIFont.systemFont(ofSize: 12), .foregroundColor: UIColor(red: 0.70, green: 0.23, blue: 0.18, alpha: 1)]
+            )
+            warning.draw(at: CGPoint(x: 240 - warning.size().width / 2, y: 254))
+        }
+        return image.pngData() ?? Data()
+    }()
 
     var inboxes: [Int: [StaffItem]] {
         [

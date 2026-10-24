@@ -37,6 +37,8 @@ actor FakeCos: CosService {
     private var staffs: [Int: Staff] = [:]
     private var transcripts: [Int: [TranscriptMessage]] = [:]
     private var inboxes: [Int: [StaffItem]] = [:]
+    /// Uploaded files with their bytes, by the folder they went into.
+    private var files: [String: [(attachment: Attachment, data: Data)]] = [:]
     private var log: [LoggedEvent] = []
     private var subscribers: [UUID: AsyncThrowingStream<LoggedEvent, Error>.Continuation] = [:]
     /// Open terminal streams, by agent.
@@ -67,6 +69,15 @@ actor FakeCos: CosService {
         staffs = data.staffs
         transcripts = data.transcripts
         inboxes = data.inboxes
+        for (projectId, seeded) in data.files {
+            let folder = Self.staffFolder(projectId)
+            files[folder] = seeded.map { file -> (attachment: Attachment, data: Data) in
+                let attachment = Attachment(
+                    name: file.name, path: "\(folder)/.cos/attachments/\(file.name)", size: file.data.count, contentType: file.contentType
+                )
+                return (attachment: attachment, data: file.data)
+            }
+        }
         log = [LoggedEvent(seq: 1, ts: Date(unixMilliseconds: self.now - 3_600_000), kind: "daemon.started", data: .object(["version": .string("0.1.2")]))]
     }
 
@@ -302,11 +313,24 @@ actor FakeCos: CosService {
     }
 
     func messageStaff(projectId: Int, text: String) async throws {
+        try await messageStaff(projectId: projectId, text: text, attachments: [])
+    }
+
+    func messageStaff(projectId: Int, text: String, attachments names: [String]) async throws {
         try check("POST /v1/projects/\(projectId)/staff/message")
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CosError.http(status: 400, message: "the message is empty") }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !names.isEmpty else {
+            throw CosError.http(status: 400, message: "the message is empty")
+        }
+        let folder = Self.staffFolder(projectId)
+        let attached = try names.map { name -> AttachedFile in
+            guard let file = files[folder]?.first(where: { $0.attachment.name == name || $0.attachment.path == name }) else {
+                throw CosError.http(status: 400, message: "there is no attachment \(name)")
+            }
+            return file.attachment.attached
+        }
         let staff = try ensureStaff(projectId)
         guard let agentId = staff.agentId else { return }
-        append(agentId, role: .user, kind: .text, text: text)
+        append(agentId, role: .user, kind: .text, text: text, attachments: attached)
         setStaffState(projectId, .working)
         if let replyDelay {
             // A tool call first, then the answer: the chat shows what it's doing in between.
@@ -324,9 +348,13 @@ actor FakeCos: CosService {
         setStaffState(projectId, .idle)
     }
 
-    private func append(_ agentId: Int, role: MessageRole, kind: MessageKind, text: String = "", tool: ToolCall? = nil) {
+    private func append(
+        _ agentId: Int, role: MessageRole, kind: MessageKind, text: String = "", tool: ToolCall? = nil, attachments: [AttachedFile] = []
+    ) {
         let n = (transcripts[agentId]?.last?.n ?? 0) + 1
-        transcripts[agentId, default: []].append(TranscriptMessage(n: n, role: role, kind: kind, text: text, tool: tool, tsMs: clock))
+        transcripts[agentId, default: []].append(
+            TranscriptMessage(n: n, role: role, kind: kind, text: text, tool: tool, tsMs: clock, attachments: attachments)
+        )
         emit("agent.transcript", ["agent_id": .number(Double(agentId)), "next": .number(Double(n))])
     }
 
@@ -345,6 +373,67 @@ actor FakeCos: CosService {
         try check("GET /v1/agents/\(agentId)/transcript?after=\(after)")
         let messages = transcripts[agentId] ?? []
         return Transcript(messages: messages.filter { $0.n > after }, next: messages.last?.n ?? 0)
+    }
+
+    // MARK: Attachments
+
+    func uploadAttachment(to target: AttachTarget, name: String, contentType: String, data: Data) async throws -> Attachment {
+        try check("POST \(target.path)")
+        guard data.count <= Attachment.maxBytes else { throw CosError.http(status: 413, message: "a file can be at most 32 MB") }
+        let folder: String
+        switch target {
+        case .staff(let projectId):
+            guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+            folder = Self.staffFolder(projectId)
+        case .agent(let id):
+            guard agentList.contains(where: { $0.id == id }) else { throw CosError.notFound("unknown agent \(id)") }
+            folder = agentFolder(id)
+        case .workspace(let id):
+            folder = "/Users/me/.cos/worktrees/workspace-\(id)"
+        }
+        return save(folder, name: name, contentType: contentType, data: data)
+    }
+
+    func attachmentData(agentId: Int, name: String) async throws -> Data {
+        try check("GET /v1/agents/\(agentId)/attachments/\(name)")
+        guard let file = files[agentFolder(agentId)]?.first(where: { $0.attachment.name == name }) else {
+            throw CosError.notFound("there is no attachment \(name)")
+        }
+        return file.data
+    }
+
+    /// Saves a file as the daemon does: a safe name, made unique in its folder.
+    private func save(_ folder: String, name: String, contentType: String, data: Data) -> Attachment {
+        let clean = Self.safeName(name)
+        let ext = (clean as NSString).pathExtension
+        let stem = (clean as NSString).deletingPathExtension
+        var candidate = clean
+        var n = 2
+        while files[folder]?.contains(where: { $0.attachment.name == candidate }) == true {
+            candidate = ext.isEmpty ? "\(stem)-\(n)" : "\(stem)-\(n).\(ext)"
+            n += 1
+        }
+        let attachment = Attachment(name: candidate, path: "\(folder)/.cos/attachments/\(candidate)", size: data.count, contentType: contentType)
+        files[folder, default: []].append((attachment: attachment, data: data))
+        return attachment
+    }
+
+    /// A chief's worktree, where its files go before and after it starts.
+    private static func staffFolder(_ projectId: Int) -> String {
+        "/Users/me/.cos/worktrees/project-\(projectId)/chief"
+    }
+
+    private func agentFolder(_ agentId: Int) -> String {
+        if let projectId = staffs.first(where: { $0.value.agentId == agentId })?.key { return Self.staffFolder(projectId) }
+        return "/Users/me/.cos/agents/\(agentId)"
+    }
+
+    private static func safeName(_ name: String) -> String {
+        let base = (name as NSString).lastPathComponent
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        var clean = String(String.UnicodeScalarView(base.unicodeScalars.map { allowed.contains($0) ? $0 : "-" }))
+        while clean.hasPrefix(".") || clean.hasPrefix("-") { clean.removeFirst() }
+        return clean.isEmpty ? "file" : String(clean.prefix(100))
     }
 
     // MARK: Environment
