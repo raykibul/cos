@@ -18,6 +18,8 @@ export function WaitingStrip({
   chiefAgentId: number | null;
 }) {
   if (requests.length === 0) return null;
+  // ⌘↩ and ⌘⌫ answer the first permission request in the strip.
+  const keyed = requests.find((r) => r.approval)?.approval?.id ?? null;
   return (
     <section
       aria-label="Agents waiting on you"
@@ -34,6 +36,7 @@ export function WaitingStrip({
             key={`${request.agent.id}-${request.approval?.id ?? request.agent.state}`}
             request={request}
             isChief={request.agent.id === chiefAgentId}
+            keys={request.approval !== undefined && request.approval.id === keyed}
           />
         ))}
       </ul>
@@ -41,7 +44,15 @@ export function WaitingStrip({
   );
 }
 
-function Request({ request, isChief }: { request: ChiefRequest; isChief: boolean }) {
+function Request({
+  request,
+  isChief,
+  keys,
+}: {
+  request: ChiefRequest;
+  isChief: boolean;
+  keys: boolean;
+}) {
   const { cos, ui } = useApp();
   const canChange = useCanChange();
   const [busy, setBusy] = useState(false);
@@ -84,7 +95,7 @@ function Request({ request, isChief }: { request: ChiefRequest; isChief: boolean
         </p>
       </div>
       {approval ? (
-        <ApprovalButtons approval={approval} size="sm" />
+        <ApprovalButtons approval={approval} size="sm" keys={keys} />
       ) : login ? (
         <Button
           size="sm"

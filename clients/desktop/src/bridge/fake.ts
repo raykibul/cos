@@ -705,6 +705,7 @@ export class FakeDaemon {
         if (!this.alive(agent)) throw new HttpError(409, "the agent has exited");
         const text = action === "input" ? `${String(b.text ?? "")}\r` : atob(String(b.data ?? ""));
         this.typed(agent, text);
+        if (action === "input") this.staffDesk.agentInput(agent, String(b.text ?? ""));
         return undefined;
       }
       case "resize": {

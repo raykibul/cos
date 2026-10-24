@@ -25,6 +25,8 @@ export type DialogState =
   | { kind: "renameWorkspace"; workspaceId: number }
   | { kind: "removeWorkspace"; workspaceId: number }
   | { kind: "newAgent"; workspaceId: number }
+  /** A new session: an agent in a new workspace, or one another session works in. */
+  | { kind: "newSession"; projectId: number }
   | { kind: "removeAgent"; agentId: number }
   /**
    * Adds or changes an environment variable, for all projects (`projectId`
@@ -71,6 +73,43 @@ export interface UiState {
   toasts: Toast[];
   /** Whether the chief page shows its agent's terminal in a split. */
   chiefTerminal: boolean;
+  /** Whether an agent's page shows its terminal beside the conversation. */
+  agentTerminal: boolean;
+  /**
+   * Whether the sidebar shows: `auto` hides it in a narrow window, and ⌘B
+   * (or the button in the tab bar) picks shown or hidden for good.
+   */
+  sidebar: SidebarMode;
+}
+
+export type SidebarMode = "auto" | "shown" | "hidden";
+
+/** Narrower than this, an `auto` sidebar hides so the page keeps its room. */
+export const SIDEBAR_AUTO_MIN_WIDTH = 1040;
+export const SIDEBAR_KEY = "cos.sidebar";
+
+/** The sidebar choice saved last; `auto` when there is none or storage refuses. */
+export function savedSidebar(): SidebarMode {
+  try {
+    const value = window.localStorage.getItem(SIDEBAR_KEY);
+    return value === "shown" || value === "hidden" ? value : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function saveSidebar(mode: SidebarMode): void {
+  try {
+    if (mode === "auto") window.localStorage.removeItem(SIDEBAR_KEY);
+    else window.localStorage.setItem(SIDEBAR_KEY, mode);
+  } catch {
+    // Not kept for next time; the toggle still works.
+  }
+}
+
+/** Whether the sidebar shows, for its mode and whether the window is narrow. */
+export function sidebarShown(mode: SidebarMode, narrow: boolean): boolean {
+  return mode === "auto" ? !narrow : mode === "shown";
 }
 
 export function samePage(a: Page, b: Page): boolean {
@@ -114,6 +153,8 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     dialog: null,
     toasts: [],
     chiefTerminal: false,
+    agentTerminal: false,
+    sidebar: "auto" as SidebarMode,
     project: null,
     switcher: false,
     opened: 0,
@@ -158,6 +199,15 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     },
     toggleChiefTerminal(open?: boolean) {
       store.setState((s) => ({ chiefTerminal: open ?? !s.chiefTerminal }));
+    },
+    toggleAgentTerminal(open?: boolean) {
+      store.setState((s) => ({ agentTerminal: open ?? !s.agentTerminal }));
+    },
+    /** Shows the sidebar if it's hidden (given how narrow the window is), else hides it; the choice is kept. */
+    toggleSidebar(narrow: boolean) {
+      const mode: SidebarMode = sidebarShown(store.getState().sidebar, narrow) ? "hidden" : "shown";
+      saveSidebar(mode);
+      store.setState({ sidebar: mode });
     },
     toast(title: string, message: string) {
       const id = ++toastId;

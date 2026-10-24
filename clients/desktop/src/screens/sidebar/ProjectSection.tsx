@@ -1,27 +1,27 @@
 // The project the sidebar shows (the rail picks it): its name and menu, a
-// `★ Chief of Staff` row that opens the chief, and its workspaces, newest
-// first, each with your agents under it.
+// `★ Chief of Staff` row that opens the chief, and its sessions, one row
+// each, newest first. Workspaces stay out of sight; sessions that share one
+// folder sit together, joined by a bracket in that folder's colour.
 
 import { GitBranch, LayoutGrid, MoreHorizontal, Plus, Variable } from "lucide-react";
+import { useMemo } from "react";
 import { envHint } from "../../api/env";
-import { type Agent, type Project, type Workspace, workspaceName } from "../../api/models";
+import { type Agent, type Project, workspaceName } from "../../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
 import { samePage } from "../../app/ui";
-import { agentLabel } from "../../domain/labels";
+import { agentLabel, attentionWord } from "../../domain/labels";
 import { staffLabel } from "../../pages/chief/staffState";
 import {
   type Activity,
-  activityOf,
+  type SessionGroup,
   projectEnvNames,
+  sessionGroups,
   spawnedAgents,
   staffState,
-  userAgents,
-  workspaceAgents,
-  workspaceOfPage,
-  workspacesNewestFirst,
 } from "../../store/selectors";
 import { cx } from "../../ui/cx";
 import { StateDot } from "../../ui/kit";
+import { StateIcon } from "../../ui/StateIcon";
 import { type MenuItem, Menu } from "../../ui/Menu";
 import { folderItems } from "../common";
 
@@ -29,12 +29,20 @@ export function ProjectPanel({ project }: { project: Project }) {
   const { cos, ui } = useApp();
   const canChange = useCanChange();
   const env = envHint(useCos((s) => projectEnvNames(s, project.id)));
-  const workspaces = workspacesNewestFirst(project);
+  const agents = useCos((s) => s.agents);
+  const agentsSupported = useCos((s) => s.agentsSupported);
+  const groups = useMemo(() => sessionGroups(agents, project), [agents, project]);
 
   const menu: MenuItem[] = [
     {
-      label: "New workspace…",
+      label: "New session…",
       icon: Plus,
+      disabled: !canChange || !agentsSupported,
+      onSelect: () => ui.open({ kind: "newSession", projectId: project.id }),
+    },
+    {
+      label: "New workspace…",
+      icon: GitBranch,
       disabled: !canChange,
       onSelect: () => ui.open({ kind: "newWorkspace", projectId: project.id }),
     },
@@ -96,14 +104,14 @@ export function ProjectPanel({ project }: { project: Project }) {
 
       <div className="mt-4 flex items-center px-4 pb-1">
         <span className="text-[11.5px] font-semibold tracking-wide text-ink-3 uppercase">
-          Workspaces
+          Sessions
         </span>
         <button
           type="button"
-          aria-label={`New workspace in ${project.name}`}
-          title="New workspace"
-          disabled={!canChange}
-          onClick={() => ui.open({ kind: "newWorkspace", projectId: project.id })}
+          aria-label={`New session in ${project.name}`}
+          title="New session"
+          disabled={!canChange || !agentsSupported}
+          onClick={() => ui.open({ kind: "newSession", projectId: project.id })}
           className="ml-auto flex size-6 items-center justify-center rounded-md text-ink-3 hover:bg-subtle-2/70 hover:text-ink disabled:opacity-40"
         >
           <Plus className="size-3.5" strokeWidth={2} />
@@ -111,19 +119,123 @@ export function ProjectPanel({ project }: { project: Project }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
-        {workspaces.length === 0 ? (
+        {groups.length === 0 ? (
           <p className="px-2 py-1.5 text-[12.5px] leading-snug text-ink-3">
-            No workspaces yet. Ask the chief, or add one with +.
+            No sessions yet. Ask the chief, or start one with +.
           </p>
         ) : (
-          <ul role="tree" aria-label="Workspaces" className="flex flex-col gap-px">
-            {workspaces.map((workspace) => (
-              <WorkspaceRow key={workspace.id} workspace={workspace} />
-            ))}
+          <ul role="tree" aria-label="Sessions" className="flex flex-col gap-px">
+            {groups.map((group, index) =>
+              group.agents.length === 1 ? (
+                <SessionRow key={group.agents[0]!.id} agent={group.agents[0]!} group={group} />
+              ) : (
+                <SharedFolder
+                  key={`w${group.workspace.id}`}
+                  group={group}
+                  tint={folderTints[sharedIndex(groups, index) % folderTints.length]!}
+                />
+              ),
+            )}
           </ul>
         )}
       </div>
     </div>
+  );
+}
+
+/** Colours for folders that more than one session shares, in turn. */
+const folderTints = [
+  "border-tone-purple/80",
+  "border-tone-teal/80",
+  "border-tone-blue/80",
+  "border-tone-green/80",
+  "border-tone-amber/80",
+];
+
+/** Which shared folder this is, counting only the groups with more than one session. */
+function sharedIndex(groups: SessionGroup[], index: number): number {
+  return groups.slice(0, index).filter((g) => g.agents.length > 1).length;
+}
+
+/** Sessions working in the same folder, joined by a bracket; its tooltip names the folder. */
+function SharedFolder({ group, tint }: { group: SessionGroup; tint: string }) {
+  const name = workspaceName(group.workspace);
+  return (
+    <li role="none" className="relative my-0.5">
+      <span
+        aria-hidden
+        title={`${group.agents.length} sessions share ${name}\n${group.workspace.path}\nTheir edits land in the same files.`}
+        className="absolute top-2 bottom-2 left-0.5 w-3 cursor-default"
+      >
+        <span
+          className={cx("absolute inset-y-0 left-1 w-[7px] rounded-l-md border-2 border-r-0", tint)}
+        />
+      </span>
+      <ul
+        role="group"
+        aria-label={`${group.agents.length} sessions in ${name}`}
+        className="flex flex-col gap-px"
+      >
+        {group.agents.map((agent) => (
+          <SessionRow key={agent.id} agent={agent} group={group} indent />
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+function SessionRow({
+  agent,
+  group,
+  indent = false,
+}: {
+  agent: Agent;
+  group: SessionGroup;
+  indent?: boolean;
+}) {
+  const { ui } = useApp();
+  const selected = useUi((s) => samePage(s.page, { kind: "agent", id: agent.id }));
+  const label = agentLabel(agent.state);
+  const word = attentionWord(agent.state);
+  const name = workspaceName(group.workspace);
+  const others = group.agents.filter((a) => a.id !== agent.id).map((a) => a.title);
+  const tooltip = [
+    agent.title,
+    `${label.title} · ${agent.model ?? "default model"}`,
+    agent.spawnedBy !== null ? "Started by the Chief of Staff" : null,
+    others.length > 0 ? `Shares ${name} with ${others.join(", ")}` : `In ${name}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <li role="none">
+      <button
+        type="button"
+        role="treeitem"
+        aria-selected={selected}
+        aria-label={`${agent.title}, ${label.title}`}
+        title={tooltip}
+        onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
+        className={cx(
+          "flex h-8 w-full items-center gap-2 rounded-lg pr-2 text-left text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+          indent ? "pl-[22px]" : "pl-2.5",
+          selected ? "bg-subtle-2 text-ink" : "text-ink-2 hover:bg-subtle hover:text-ink",
+          agent.state === "exited" && !selected && "text-ink-3",
+        )}
+      >
+        <StateIcon state={agent.state} />
+        <span className={cx("min-w-0 flex-1 truncate", word && "text-ink")}>{agent.title}</span>
+        {word ? (
+          <span className="shrink-0 rounded-full bg-accent/14 px-1.5 py-px text-[10.5px] font-semibold text-accent-ink">
+            {word}
+          </span>
+        ) : agent.state === "interrupted" ? (
+          <span className="shrink-0 text-[11px] text-tone-amber">stopped</span>
+        ) : agent.state === "exited" ? (
+          <span className="shrink-0 text-[11px] text-ink-3">exited</span>
+        ) : null}
+      </button>
+    </li>
   );
 }
 
@@ -162,116 +274,6 @@ function ChiefRow({ project }: { project: Project }) {
         </span>
       </span>
     </button>
-  );
-}
-
-function WorkspaceRow({ workspace }: { workspace: Workspace }) {
-  const { cos, ui } = useApp();
-  const canChange = useCanChange();
-  const page = useUi((s) => s.page);
-  const selected = useCos((s) => workspaceOfPage(s, page) === workspace.id);
-  const exact = samePage(page, { kind: "workspace", id: workspace.id });
-  const activity = useCos((s) => activityOf(s, workspaceAgents(s, workspace.id)));
-  const agents = useCos((s) => userAgents(s, workspace.id));
-  const agentsSupported = useCos((s) => s.agentsSupported);
-  const name = workspaceName(workspace);
-
-  const menu: MenuItem[] = [
-    {
-      label: "New agent…",
-      disabled: !canChange || !agentsSupported,
-      onSelect: () => ui.open({ kind: "newAgent", workspaceId: workspace.id }),
-    },
-    {
-      label: "Rename…",
-      disabled: !canChange,
-      onSelect: () => ui.open({ kind: "renameWorkspace", workspaceId: workspace.id }),
-    },
-    "separator",
-    ...folderItems(cos, workspace.path),
-    "separator",
-    {
-      label: "Remove workspace…",
-      danger: true,
-      disabled: !canChange,
-      onSelect: () => ui.open({ kind: "removeWorkspace", workspaceId: workspace.id }),
-    },
-  ];
-
-  return (
-    <li role="none">
-      <div
-        role="treeitem"
-        aria-selected={selected}
-        aria-expanded={agents.length > 0 ? true : undefined}
-        className={cx(
-          "group relative flex h-8 items-center rounded-lg pr-1 transition-colors",
-          exact ? "bg-subtle-2 text-ink" : "text-ink-2 hover:bg-subtle hover:text-ink",
-        )}
-      >
-        <button
-          type="button"
-          onClick={() => ui.navigate({ kind: "workspace", id: workspace.id })}
-          title={`${workspace.branch}\n${workspace.path}`}
-          aria-current={exact ? "page" : undefined}
-          className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg pr-1 pl-2 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-        >
-          <GitBranch className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.9} aria-hidden />
-          <span className={cx("truncate", selected && "font-medium text-ink")}>{name}</span>
-          <span className="ml-auto flex shrink-0 items-center pl-1">
-            <ActivityDot activity={activity} />
-          </span>
-        </button>
-        <Menu
-          items={menu}
-          align="start"
-          trigger={(props) => (
-            <button
-              type="button"
-              aria-label={`More for ${name}`}
-              {...props}
-              className={cx(
-                "flex h-6 w-0 shrink-0 items-center justify-center overflow-hidden rounded-md text-ink-3 hover:bg-subtle-2 hover:text-ink",
-                "opacity-0 group-hover:w-6 group-hover:opacity-100 focus-visible:w-6 focus-visible:opacity-100 aria-expanded:w-6 aria-expanded:opacity-100",
-              )}
-            >
-              <MoreHorizontal className="size-4 shrink-0" strokeWidth={1.8} />
-            </button>
-          )}
-        />
-      </div>
-      {agents.length > 0 ? (
-        <ul role="group" className="mb-1 flex flex-col">
-          {agents.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} />
-          ))}
-        </ul>
-      ) : null}
-    </li>
-  );
-}
-
-function AgentRow({ agent }: { agent: Agent }) {
-  const { ui } = useApp();
-  const selected = useUi((s) => samePage(s.page, { kind: "agent", id: agent.id }));
-  const label = agentLabel(agent.state);
-  return (
-    <li role="none">
-      <button
-        type="button"
-        role="treeitem"
-        aria-selected={selected}
-        title={`${agent.title}\n${label.title}`}
-        onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
-        className={cx(
-          "flex h-7 w-full items-center gap-2 rounded-lg pr-2 pl-[30px] text-left text-[12.5px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
-          selected ? "bg-subtle-2 text-ink" : "text-ink-2 hover:bg-subtle hover:text-ink",
-        )}
-      >
-        <StateDot label={label} className="size-1.5" />
-        <span className="truncate">{agent.title}</span>
-      </button>
-    </li>
   );
 }
 

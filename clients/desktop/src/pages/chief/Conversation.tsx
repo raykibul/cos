@@ -34,6 +34,24 @@ import { ChiefMark } from "../../screens/sidebar/ProjectSection";
 
 const column = "mx-auto w-full max-w-[740px] px-8";
 
+/** Who answers in a conversation: the chief, or an agent's Claude. */
+export interface Speaker {
+  name: string;
+  /** The small mark beside its name. */
+  mark: React.ReactNode;
+  /** Classes for its name in the byline. */
+  nameClass: string;
+  /** Classes for the "Working…" dots. */
+  dotClass: string;
+}
+
+const chief: Speaker = {
+  name: "Chief of Staff",
+  mark: <ChiefMark />,
+  nameClass: "text-tone-amber",
+  dotClass: "bg-tone-amber",
+};
+
 /**
  * Keeps a scroller pinned to its bottom while the content grows, unless
  * the reader scrolled up; then a button jumps back down.
@@ -84,6 +102,7 @@ export function Conversation({
   onRetry,
   onDiscard,
   agentId = null,
+  speaker = chief,
 }: {
   items: ConversationItem[];
   /** The chief's agent, whose attachments the bubbles show. */
@@ -97,6 +116,8 @@ export function Conversation({
   empty: React.ReactNode;
   onRetry: (pending: PendingMessage) => void;
   onDiscard: (pending: PendingMessage) => void;
+  /** Who answers; the chief unless given. */
+  speaker?: Speaker;
 }) {
   const last = items[items.length - 1];
   const { scroller, content, away, pin, onScroll, jump } = useFollowBottom();
@@ -110,9 +131,10 @@ export function Conversation({
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="min-h-0 flex-1 overflow-y-auto"
+        // Text fades out under the header instead of being cut by it.
+        className="min-h-0 flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_24px)]"
         role="log"
-        aria-label="Conversation with the Chief of Staff"
+        aria-label={`Conversation with ${speaker.name === chief.name ? "the Chief of Staff" : speaker.name}`}
       >
         <div ref={content} className={cx(column, "pt-6 pb-8")}>
           {items.length === 0 ? empty : null}
@@ -129,6 +151,12 @@ export function Conversation({
                     files={item.message.attachments}
                     agentId={agentId}
                   >
+                    {item.fromChief ? (
+                      <>
+                        <span className="text-tone-amber">★</span> From the Chief of Staff
+                        {item.message.tsMs ? " · " : ""}
+                      </>
+                    ) : null}
                     {item.message.tsMs ? clockTime(item.message.tsMs).slice(0, 5) : null}
                   </UserBubble>
                 );
@@ -144,7 +172,9 @@ export function Conversation({
                   />
                 );
               case "turn":
-                return <Turn key={item.key} className={gap} messages={item.messages} />;
+                return (
+                  <Turn key={item.key} className={gap} messages={item.messages} speaker={speaker} />
+                );
               case "update":
                 return (
                   <UpdateRow
@@ -157,7 +187,7 @@ export function Conversation({
                 );
             }
           })}
-          {working ? <Working afterTurn={last?.type === "turn"} /> : null}
+          {working ? <Working afterTurn={last?.type === "turn"} speaker={speaker} /> : null}
         </div>
       </div>
       {away ? (
@@ -265,11 +295,11 @@ function PendingBubble({
   );
 }
 
-function ChiefByline({ tsMs }: { tsMs: number }) {
+function Byline({ tsMs, speaker }: { tsMs: number; speaker: Speaker }) {
   return (
     <div className="mb-2 flex items-center gap-2 text-[12px] text-ink-3">
-      <ChiefMark />
-      <span className="font-semibold text-tone-amber">Chief of Staff</span>
+      {speaker.mark}
+      <span className={cx("font-semibold", speaker.nameClass)}>{speaker.name}</span>
       {tsMs ? (
         <time dateTime={new Date(tsMs).toISOString()}>{clockTime(tsMs).slice(0, 5)}</time>
       ) : null}
@@ -277,18 +307,23 @@ function ChiefByline({ tsMs }: { tsMs: number }) {
   );
 }
 
-/** One turn of the chief's: what it said, and its tool calls as rows. */
+/** One turn of the chief's or an agent's: what it said, and its tool calls as rows. */
 const Turn = memo(function Turn({
   messages,
   className,
+  speaker,
 }: {
   messages: TranscriptMessage[];
   className?: string;
+  speaker: Speaker;
 }) {
   const first = messages[0];
   return (
-    <article className={className} aria-label="The Chief of Staff">
-      <ChiefByline tsMs={first?.tsMs ?? 0} />
+    <article
+      className={className}
+      aria-label={speaker === chief ? "The Chief of Staff" : speaker.name}
+    >
+      <Byline tsMs={first?.tsMs ?? 0} speaker={speaker} />
       <div className="flex flex-col">
         {messages.map((message, index) => {
           const previous = messages[index - 1];
@@ -418,7 +453,7 @@ function UpdateRow({
   );
 }
 
-function Working({ afterTurn }: { afterTurn: boolean }) {
+function Working({ afterTurn, speaker }: { afterTurn: boolean; speaker: Speaker }) {
   return (
     <div
       className={cx(
@@ -427,11 +462,21 @@ function Working({ afterTurn }: { afterTurn: boolean }) {
       )}
       role="status"
     >
-      {afterTurn ? null : <ChiefMark />}
+      {afterTurn ? null : speaker.mark}
       <span className="flex gap-1" aria-hidden>
-        <span className="size-1.5 animate-breathe rounded-full bg-tone-amber" />
-        <span className="size-1.5 animate-breathe rounded-full bg-tone-amber [animation-delay:200ms]" />
-        <span className="size-1.5 animate-breathe rounded-full bg-tone-amber [animation-delay:400ms]" />
+        <span className={cx("size-1.5 animate-breathe rounded-full", speaker.dotClass)} />
+        <span
+          className={cx(
+            "size-1.5 animate-breathe rounded-full [animation-delay:200ms]",
+            speaker.dotClass,
+          )}
+        />
+        <span
+          className={cx(
+            "size-1.5 animate-breathe rounded-full [animation-delay:400ms]",
+            speaker.dotClass,
+          )}
+        />
       </span>
       Working…
     </div>

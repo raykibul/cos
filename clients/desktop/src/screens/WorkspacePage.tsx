@@ -8,7 +8,7 @@ import { Crumb, CrumbSep, PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { folderItems } from "./common";
 import { Composer } from "./Composer";
 import { toNewAgent } from "./composerValue";
-import { AgentTabs } from "../pages/workspace/AgentTabs";
+import { AgentCards } from "../pages/workspace/AgentCards";
 
 export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
   const { cos, ui } = useApp();
@@ -17,7 +17,6 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
   const project = useCos((s) => (workspace ? projectOf(s, workspace.projectId) : undefined));
   const loaded = useCos((s) => s.projectsLoaded);
   const agents = useCos((s) => userAgents(s, workspaceId));
-  const approvals = useCos((s) => s.approvals);
   const agentsSupported = useCos((s) => s.agentsSupported);
   const agentsError = useCos((s) => s.agentsError);
 
@@ -98,7 +97,7 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
         </PageTitle>
 
         <section className="mb-9">
-          <SectionTitle>Agents</SectionTitle>
+          <SectionTitle>Sessions</SectionTitle>
           {agentsError ? <p className="mb-2 text-[12.5px] text-tone-red">{agentsError}</p> : null}
           {agents.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-line-strong">
@@ -107,12 +106,12 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
               </EmptyState>
             </div>
           ) : (
-            <AgentTabs agents={agents} path={workspace.path} approvals={approvals} />
+            <AgentCards agents={agents} path={workspace.path} />
           )}
         </section>
 
         <section className="mb-9">
-          <SectionTitle>New agent</SectionTitle>
+          <SectionTitle>New session here</SectionTitle>
           <Composer
             focusOnOpen
             attachTo={{ kind: "workspace", workspaceId }}
@@ -130,7 +129,7 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
             }
           />
           <p className="mt-2 px-1 text-[12px] text-ink-3">
-            Starts Claude Code in this worktree. Return sends, Shift-Return adds a line.
+            Starts Claude Code in this worktree, beside the sessions above.
           </p>
         </section>
       </PageBody>

@@ -8,10 +8,12 @@ import { useApp, useCanChange, useCos, useUi } from "../app/context";
 import type { DialogState } from "../app/ui";
 import { Composer } from "../screens/Composer";
 import { toNewAgent } from "../screens/composerValue";
+import { pluralize } from "../domain/labels";
 import {
   agent as agentOf,
   project as projectOf,
   workspace as workspaceOf,
+  workspacesNewestFirst,
 } from "../store/selectors";
 import { cx } from "../ui/cx";
 import { Dialog, ErrorText } from "../ui/Dialog";
@@ -39,6 +41,8 @@ function DialogFor({ dialog }: { dialog: DialogState }) {
       return <RemoveWorkspace workspaceId={dialog.workspaceId} />;
     case "newAgent":
       return <NewAgentSheet workspaceId={dialog.workspaceId} />;
+    case "newSession":
+      return <NewSessionSheet projectId={dialog.projectId} />;
     case "removeAgent":
       return <RemoveAgent agentId={dialog.agentId} />;
     case "envVar":
@@ -361,6 +365,70 @@ function RemoveWorkspace({ workspaceId }: { workspaceId: number }) {
 }
 
 // MARK: Agents
+
+/**
+ * A new session from the sidebar's +: Claude Code in a folder of its own (a
+ * new workspace), or in one another session already works in.
+ */
+function NewSessionSheet({ projectId }: { projectId: number }) {
+  const { cos, ui } = useApp();
+  const project = useCos((s) => projectOf(s, projectId));
+  const agents = useCos((s) => s.agents);
+  const canChange = useCanChange();
+  const [folder, setFolder] = useState<"new" | number>("new");
+  const [error, setError] = useState<string | null>(null);
+  if (!project) return null;
+  const base = project.hasOrigin ? "origin" : "head";
+  const workspaces = workspacesNewestFirst(project);
+  const count = (id: number) => agents.filter((a) => a.workspaceId === id).length;
+  return (
+    <Dialog
+      width="lg"
+      title={`New session in ${project.name}`}
+      description="Claude Code starts in a folder of its own, on its own branch, unless you pick one another session works in."
+      onClose={ui.close}
+    >
+      <Field label="Folder" htmlFor="session-folder">
+        <select
+          id="session-folder"
+          className={inputClass}
+          value={String(folder)}
+          onChange={(event) =>
+            setFolder(event.target.value === "new" ? "new" : Number(event.target.value))
+          }
+        >
+          <option value="new">
+            A new folder, from {base === "origin" ? `origin/${project.baseBranch}` : "your HEAD"}
+          </option>
+          {workspaces.map((w) => (
+            <option key={w.id} value={w.id}>
+              {workspaceName(w)}
+              {count(w.id) > 0 ? ` · shared with ${pluralize(count(w.id), "session")}` : ""}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Composer
+        autoFocus
+        attachTo={folder === "new" ? null : { kind: "workspace", workspaceId: folder }}
+        disabled={!canChange}
+        onSend={async (value) => {
+          try {
+            const workspaceId =
+              folder === "new" ? (await cos.createWorkspace(projectId, base)).id : folder;
+            const agent = await cos.createAgent(workspaceId, toNewAgent(value));
+            ui.close();
+            ui.navigate({ kind: "agent", id: agent.id });
+          } catch (failure: unknown) {
+            setError(messageOf(failure));
+            throw failure;
+          }
+        }}
+      />
+      <ErrorText>{error}</ErrorText>
+    </Dialog>
+  );
+}
 
 function NewAgentSheet({ workspaceId }: { workspaceId: number }) {
   const { cos, ui } = useApp();

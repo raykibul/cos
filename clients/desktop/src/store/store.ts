@@ -107,6 +107,8 @@ export interface DaemonState {
   transcripts: Record<number, TranscriptState>;
   /** What you sent each project's chief that its transcript doesn't show yet. */
   pending: Record<number, PendingMessage[]>;
+  /** What you sent each agent (by agent id) that its transcript doesn't show yet. */
+  agentPending: Record<number, PendingMessage[]>;
   /** The environment variables every project's agents get; null until loaded. */
   globalEnv: EnvVars | null;
   /** Each project's own variables, with the global ones and the merge, by project id. */
@@ -165,6 +167,7 @@ export function initialState(): DaemonState {
     inboxes: {},
     transcripts: {},
     pending: {},
+    agentPending: {},
     globalEnv: null,
     projectEnvs: {},
     envSupported: true,
@@ -683,7 +686,12 @@ export class CosStore {
         const left = reconcilePending(pending[id], messages);
         if (left !== pending[id]) pending = { ...pending, [id]: left };
       }
-      return { transcripts, pending };
+      let agentPending = s.agentPending;
+      if (agentPending[agentId]?.length) {
+        const left = reconcilePending(agentPending[agentId], messages);
+        if (left !== agentPending[agentId]) agentPending = { ...agentPending, [agentId]: left };
+      }
+      return { transcripts, pending, agentPending };
     });
   }
 
@@ -810,6 +818,79 @@ export class CosStore {
     this.refreshStaff(projectId);
     const agentId = this.get().staffs[projectId]?.agentId;
     if (agentId != null) this.transcriptWatches.get(agentId)?.refresh.request();
+  }
+
+  /**
+   * Sends an agent a message, typed into its terminal. It shows at once as
+   * pending, and leaves when the transcript has it; a failure stays, to retry
+   * or discard.
+   */
+  async messageAgent(
+    agentId: number,
+    text: string,
+    attachments: SentAttachment[] = [],
+  ): Promise<void> {
+    const item: PendingMessage = {
+      id: this.nextPendingId++,
+      text,
+      sentMs: Date.now(),
+      afterN: this.get().transcripts[agentId]?.next ?? 0,
+      state: "sending",
+      attachments,
+    };
+    this.set((s) => ({
+      agentPending: {
+        ...s.agentPending,
+        [agentId]: [...(s.agentPending[agentId] ?? []), item],
+      },
+    }));
+    await this.deliverToAgent(agentId, item);
+  }
+
+  private async deliverToAgent(agentId: number, item: PendingMessage): Promise<void> {
+    const update = (change: Partial<PendingMessage>) =>
+      this.set((s) => ({
+        agentPending: {
+          ...s.agentPending,
+          [agentId]: (s.agentPending[agentId] ?? []).map((p) =>
+            p.id === item.id ? { ...p, ...change } : p,
+          ),
+        },
+      }));
+    try {
+      await this.client.sendInput(
+        agentId,
+        item.text,
+        (item.attachments ?? []).map((a) => a.name),
+      );
+      update({ state: "sent", error: undefined });
+    } catch (error) {
+      update({ state: "failed", error: message(error) });
+      return;
+    }
+    this.transcriptWatches.get(agentId)?.refresh.request();
+  }
+
+  retryAgentPending(agentId: number, id: number): Promise<void> {
+    const item = this.get().agentPending[agentId]?.find((p) => p.id === id);
+    if (!item) return Promise.resolve();
+    const retried: PendingMessage = { ...item, state: "sending", error: undefined };
+    this.set((s) => ({
+      agentPending: {
+        ...s.agentPending,
+        [agentId]: (s.agentPending[agentId] ?? []).map((p) => (p.id === id ? retried : p)),
+      },
+    }));
+    return this.deliverToAgent(agentId, retried);
+  }
+
+  discardAgentPending(agentId: number, id: number): void {
+    this.set((s) => ({
+      agentPending: {
+        ...s.agentPending,
+        [agentId]: (s.agentPending[agentId] ?? []).filter((p) => p.id !== id),
+      },
+    }));
   }
 
   /** Uploads a file for a message to the chief or an agent; see `DaemonClient.uploadAttachment`. */

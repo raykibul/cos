@@ -4,14 +4,14 @@ import { clampWidth, defaultWidth, saveWidth, savedWidth } from "./split";
 const KEY_STEP = 24;
 
 /**
- * The divider between the chief's conversation and its terminal: it sizes
+ * The divider between a conversation (the chief's or an agent's) and its terminal: it sizes
  * the element right after it. Dragging sets that width straight on the
  * element, so nothing re-renders while it moves; the width is saved when the
  * drag ends. Double-click goes back to the default, and the arrow keys move
  * it too. The pane is found in the DOM, which is in place before any layout
  * effect runs (a sibling's ref may not be yet).
  */
-export function SplitDivider() {
+export function SplitDivider({ label = "Resize the chief's terminal" }: { label?: string }) {
   const handle = useRef<HTMLDivElement>(null);
   /** The width asked for (null: the default); the shown one is it clamped to the window. */
   const wanted = useRef<number | null>(null);
@@ -59,7 +59,7 @@ export function SplitDivider() {
       ref={handle}
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize the chief's terminal"
+      aria-label={label}
       tabIndex={0}
       title="Drag to resize · Double-click to reset"
       onPointerDown={(event) => {

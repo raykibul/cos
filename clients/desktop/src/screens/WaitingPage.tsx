@@ -5,7 +5,7 @@ import {
   SquareTerminal,
   TerminalSquare,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { type Agent, type Approval, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useNow } from "../app/context";
 import { approvalDetail, approvalHeadline, routeExplanation } from "../domain/approvals";
@@ -19,7 +19,9 @@ import {
   waitingCount,
   workspace as workspaceOf,
 } from "../store/selectors";
+import { cx } from "../ui/cx";
 import { relativeTime } from "../ui/format";
+import { keysAreFree } from "../ui/keys";
 import { Button, EmptyState, PathText, SectionTitle } from "../ui/kit";
 import { PageBody, PageHeader, PageTitle } from "../ui/Page";
 import { LoginHint } from "./AgentPage";
@@ -36,6 +38,7 @@ export function WaitingPage() {
   const logins = useCos(loginAgents);
   const devices = useCos(pendingDevices);
   const count = useCos(waitingCount);
+  const [chosen, choose] = useChosen(approvals);
 
   return (
     <>
@@ -67,9 +70,22 @@ export function WaitingPage() {
             <SectionTitle>Permission requests</SectionTitle>
             <div className="flex flex-col gap-3">
               {approvals.map((approval) => (
-                <ApprovalCard key={approval.id} approval={approval} />
+                <ApprovalCard
+                  key={approval.id}
+                  approval={approval}
+                  chosen={approval.id === chosen}
+                  marked={approvals.length > 1 && approval.id === chosen}
+                  onChoose={() => choose(approval.id)}
+                />
               ))}
             </div>
+            {approvals.length > 1 ? (
+              <p className="mt-2.5 text-[12px] text-ink-3">
+                <kbd className="font-sans">↑</kbd> <kbd className="font-sans">↓</kbd> choose a
+                request, <kbd className="font-sans">⌘↩</kbd> allow it,{" "}
+                <kbd className="font-sans">⌘⌫</kbd> deny it.
+              </p>
+            ) : null}
           </section>
         ) : null}
 
@@ -110,6 +126,48 @@ export function WaitingPage() {
   );
 }
 
+/**
+ * The request ⌘↩ and ⌘⌫ answer: the first one until you pick another with ↑
+ * and ↓ or a click. When it's answered, the next one takes its place.
+ */
+function useChosen(approvals: Approval[]): [number | null, (id: number) => void] {
+  // The pick and its place in the list, so the next request takes an answered one's place.
+  const [picked, setPicked] = useState<{ id: number; at: number } | null>(null);
+  const chosen =
+    approvals.find((a) => a.id === picked?.id)?.id ??
+    approvals[Math.min(picked?.at ?? 0, approvals.length - 1)]?.id ??
+    null;
+  const choose = useCallback(
+    (id: number) => setPicked({ id, at: approvals.findIndex((a) => a.id === id) }),
+    [approvals],
+  );
+
+  useEffect(() => {
+    if (approvals.length < 2) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      if (event.defaultPrevented || !keysAreFree(event.target)) return;
+      const from = Math.max(
+        0,
+        approvals.findIndex((a) => a.id === chosen),
+      );
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const next = approvals[Math.min(approvals.length - 1, Math.max(0, from + step))];
+      if (!next) return;
+      event.preventDefault();
+      choose(next.id);
+      document
+        .querySelector(`[data-approval="${next.id}"]`)
+        ?.scrollIntoView?.({ block: "nearest" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [approvals, chosen, choose]);
+
+  return [chosen, choose];
+}
+
 function Meta({
   agent,
   workspaceId,
@@ -140,11 +198,31 @@ function Meta({
   );
 }
 
-export function ApprovalCard({ approval }: { approval: Approval }) {
+export function ApprovalCard({
+  approval,
+  chosen = false,
+  marked = false,
+  onChoose,
+}: {
+  approval: Approval;
+  /** ⌘↩ and ⌘⌫ answer it. */
+  chosen?: boolean;
+  /** Ringed, to tell it from the others. */
+  marked?: boolean;
+  onChoose?: () => void;
+}) {
   const agent = useCos((s) => agentOf(s, approval.agentId));
   const why = routeExplanation(approval);
   return (
-    <article className="rounded-xl border border-line bg-surface p-4 shadow-card">
+    <article
+      data-approval={approval.id}
+      aria-current={marked ? "true" : undefined}
+      onMouseDown={onChoose}
+      className={cx(
+        "rounded-xl border bg-surface p-4 shadow-card transition-shadow",
+        marked ? "border-accent/45 ring-2 ring-accent/20" : "border-line",
+      )}
+    >
       <Meta agent={agent} workspaceId={approval.workspaceId} since={approval.createdMs} />
       <div className="mt-2.5 flex items-start gap-4">
         <div className="min-w-0 flex-1">
@@ -159,7 +237,7 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
         </div>
       </div>
       <div className="mt-3 flex justify-end">
-        <ApprovalButtons approval={approval} />
+        <ApprovalButtons approval={approval} keys={chosen} />
       </div>
     </article>
   );

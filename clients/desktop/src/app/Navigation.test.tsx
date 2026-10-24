@@ -177,10 +177,25 @@ describe("focus on open", () => {
   });
 
   it("puts the cursor in a workspace's new agent box", async () => {
-    const { user } = await renderApp();
-    await user.click(sidebar().getByRole("button", { name: /^porto/ }));
+    const { ui } = await renderApp();
+    act(() => ui.navigate({ kind: "workspace", id: 4 }));
     await act(() => settle());
     expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveFocus();
+  });
+
+  it("puts the cursor in a session's message box", async () => {
+    const { user } = await renderApp();
+    await user.click(sidebar().getByRole("treeitem", { name: /^Write the release notes/ }));
+    await act(() => settle());
+    expect(screen.getByRole("textbox", { name: "Message Write the release notes" })).toHaveFocus();
+  });
+
+  it("hides and shows the sidebar with ⌘B and its button", async () => {
+    const { user } = await renderApp({ kind: "chief", id: 1 });
+    await user.keyboard("{Meta>}b{/Meta}");
+    expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show the sidebar" }));
+    expect(screen.getByRole("complementary", { name: "Sidebar" })).toBeInTheDocument();
   });
 });
 

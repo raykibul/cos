@@ -37,10 +37,12 @@ const sidebar = () => within(screen.getByRole("complementary", { name: "Sidebar"
 const rail = () => within(screen.getByRole("navigation", { name: "Projects" }));
 const main = () => within(screen.getByRole("main"));
 
-/** The workspace rows of the sidebar's tree, without the agents under them. */
-function workspaceNames(): string[] {
-  const tree = sidebar().getByRole("tree", { name: "Workspaces" });
-  return [...tree.querySelectorAll(":scope > li > [role=treeitem]")].map((row) => row.textContent);
+/** The session rows of the sidebar, in order. */
+function sessionNames(): string[] {
+  const tree = sidebar().getByRole("tree", { name: "Sessions" });
+  return within(tree)
+    .getAllByRole("treeitem")
+    .map((row) => row.getAttribute("aria-label")!.split(",")[0]!);
 }
 
 describe("project rail", () => {
@@ -78,27 +80,29 @@ describe("project rail", () => {
 });
 
 describe("sidebar", () => {
-  it("shows the project's workspaces newest first, with your agents under them", async () => {
+  it("shows the project's sessions, one row each, with no workspace rows", async () => {
     await renderApp({ kind: "chief", id: 1 });
     expect(sidebar().getByRole("heading", { name: "cos" })).toBeInTheDocument();
-    expect(workspaceNames()).toEqual([
-      "React 19",
-      "Dashboard speed",
-      "porto",
-      "Fix the login flow",
+    expect(sessionNames()).toEqual([
+      "Check the docs for broken links",
+      "Try the new parser",
+      "Write the release notes",
+      "Bump dependencies",
+      "Add left-pad to the formatter",
+      "Fix login bug",
     ]);
-    // Your own agents, not a run's.
-    expect(sidebar().getByRole("treeitem", { name: /Fix login bug/ })).toBeInTheDocument();
+    expect(sidebar().queryByRole("button", { name: /^porto/ })).toBeNull();
     expect(sidebar().queryByText("opal-app")).not.toBeInTheDocument();
   });
 
-  it("shows a workspace's city without a title, with its branch and path in the tooltip", async () => {
-    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
-    const porto = sidebar().getByRole("button", { name: /^porto/ });
-    expect(porto).toHaveAttribute("title", "cos/porto\n/Users/me/.cos/worktrees/cos-1/porto");
-    await user.click(porto);
-    expect(ui.store.getState().page).toEqual({ kind: "workspace", id: 4 });
-    expect(main().getByRole("heading", { name: "porto", level: 1 })).toBeInTheDocument();
+  it("joins sessions that share a folder, and names it in the tooltip", async () => {
+    await renderApp({ kind: "chief", id: 1 });
+    const lisbon = sidebar().getByRole("group", { name: "2 sessions in Fix the login flow" });
+    expect(within(lisbon).getAllByRole("treeitem")).toHaveLength(2);
+    expect(sidebar().getByRole("treeitem", { name: /^Fix login bug/ })).toHaveAttribute(
+      "title",
+      expect.stringContaining("Shares Fix the login flow with Add left-pad to the formatter"),
+    );
   });
 
   it("shows the project of the page you're on, and keeps it on pages outside one", async () => {
@@ -110,13 +114,17 @@ describe("sidebar", () => {
     expect(sidebar().getByRole("heading", { name: "cos" })).toBeInTheDocument();
   });
 
-  it("marks a workspace with an agent waiting on you", async () => {
+  it("says what a session needs from you", async () => {
     await renderApp({ kind: "chief", id: 1 });
-    const lisbon = sidebar().getByRole("button", { name: /^Fix the login flow/ });
-    expect(within(lisbon).getByRole("img", { name: "Waiting on you" })).toBeInTheDocument();
+    expect(
+      sidebar().getByRole("treeitem", { name: "Add left-pad to the formatter, Needs approval" }),
+    ).toHaveTextContent("Approve");
+    expect(
+      sidebar().getByRole("treeitem", { name: "Try the new parser, Needs trust" }),
+    ).toHaveTextContent("Trust");
   });
 
-  it("opens an agent from under its workspace", async () => {
+  it("opens a session from the sidebar", async () => {
     const { user, ui } = await renderApp({ kind: "chief", id: 1 });
     await user.click(sidebar().getByRole("treeitem", { name: /Fix login bug/ }));
     expect(ui.store.getState().page.kind).toBe("agent");
@@ -281,6 +289,28 @@ describe("chief page", () => {
     expect(screen.queryByRole("region", { name: "Agents waiting on you" })).not.toBeInTheDocument();
   });
 
+  it("denies the first request with ⌘⌫, but not while you're typing", async () => {
+    const { user, daemon } = await renderApp({ kind: "chief", id: 1 });
+    const strip = within(screen.getByRole("region", { name: "Agents waiting on you" }));
+    expect(strip.getByRole("button", { name: "Deny" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Meta+Backspace",
+    );
+    const box = screen.getByRole("textbox", { name: "Message the Chief of Staff" });
+    await user.type(box, "hold on");
+    await user.keyboard("{Meta>}{Backspace}{/Meta}");
+    await act(() => settle());
+    expect(daemon.requests.some((r) => r.path === "/v1/approvals/12")).toBe(false);
+    await user.clear(box);
+    await user.keyboard("{Meta>}{Backspace}{/Meta}");
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/approvals/12",
+      body: { decision: "deny" },
+    });
+  });
+
   it("opens its terminal in a split and changes its model", async () => {
     const { user, daemon } = await renderApp({ kind: "chief", id: 1 });
     await user.click(screen.getByRole("button", { name: "Show the chief's terminal" }));
@@ -392,18 +422,18 @@ describe("the terminal split", () => {
 });
 
 describe("workspace page", () => {
-  it("shows its agents as tabs, the one waiting on you first, with the chief's mark", async () => {
-    const { user } = await renderApp({ kind: "workspace", id: 3 });
-    const tabs = within(screen.getByRole("tablist", { name: "Agents" }));
-    const selected = tabs.getByRole("tab", { selected: true });
-    expect(selected).toHaveTextContent("Add left-pad to the formatter");
-    expect(
-      within(selected).getByRole("img", { name: "Started by the Chief of Staff" }),
-    ).toBeVisible();
-    expect(screen.getByText("Claude wants to run")).toBeInTheDocument();
-    await user.click(tabs.getByRole("tab", { name: /Fix login bug/ }));
-    expect(tabs.getByRole("tab", { selected: true })).toHaveTextContent("Fix login bug");
-    expect(screen.getByRole("tabpanel", { name: "Fix login bug" })).toBeInTheDocument();
+  it("shows its sessions as cards, the one waiting on you first, with the chief's mark", async () => {
+    const { user, ui } = await renderApp({ kind: "workspace", id: 3 });
+    const cards = within(main().getByRole("list", { name: "Sessions" })).getAllByRole("article");
+    const first = cards[0]!;
+    expect(first).toHaveAccessibleName("Add left-pad to the formatter");
+    expect(within(first).getByRole("img", { name: "Started by the Chief of Staff" })).toBeVisible();
+    expect(within(first).getByText("Claude wants to run")).toBeInTheDocument();
+    expect(within(first).getByRole("button", { name: /Allow/ })).toBeInTheDocument();
+    const login = cards.find((c) => c.getAttribute("aria-label") === "Fix login bug")!;
+    await user.click(within(login).getByRole("button", { name: "Fix login bug" }));
+    const page = ui.store.getState().page;
+    expect(page.kind).toBe("agent");
   });
 
   it("creates a workspace without a title", async () => {

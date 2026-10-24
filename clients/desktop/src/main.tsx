@@ -6,7 +6,7 @@ import "./styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
-import { type DialogState, type Page, createUiStore } from "./app/ui";
+import { type DialogState, type Page, createUiStore, savedSidebar } from "./app/ui";
 import { createBridge, inTauri } from "./bridge";
 import { followAttention } from "./store/attention";
 import { CosStore } from "./store/store";
@@ -57,6 +57,7 @@ function parseDialog(value: string | null): DialogState | null {
     case "removeHost":
       return id ? { kind, hostId: id } : null;
     case "newWorkspace":
+    case "newSession":
     case "removeProject":
       return { kind, projectId: n };
     case "newAgent":
@@ -97,6 +98,8 @@ async function main() {
     page: parsePage(params.get("page")) ?? { kind: "waiting" },
     dialog: parseDialog(params.get("dialog")),
     chiefTerminal: params.has("terminal"),
+    agentTerminal: params.has("terminal"),
+    sidebar: params.has("nosidebar") ? "hidden" : savedSidebar(),
   });
   followAttention(cos);
   void cos.start();
