@@ -449,6 +449,79 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
 }
 
 #[tokio::test]
+async fn an_agent_follows_its_terminal_into_a_new_session_after_clear() {
+    use crate::daemon::transcript::{MessageKind, Speaker};
+
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+    let agent = fixture.start_agent("hello").await;
+    let agent = fixture.until_idle_with(agent.id, "echo: hello").await;
+    let old_path = agent.transcript_path.clone().expect("a transcript path");
+
+    client.say(agent.id, "/clear".into()).await.unwrap();
+    let new_session = format!("{}-cleared", agent.session_id);
+    let cleared =
+        until("the agent to move to the new session", || async {
+            client.agent(agent.id).await.ok().filter(|seen| {
+                seen.session_id == new_session && seen.transcript_path.as_ref() != Some(&old_path)
+            })
+        })
+        .await;
+    assert!(
+        cleared
+            .transcript_path
+            .as_ref()
+            .is_some_and(|path| path.ends_with(format!("{new_session}.jsonl"))),
+        "{:?}",
+        cleared.transcript_path
+    );
+    // The apps are told to read the transcript from the top, and it's empty.
+    until("agent.transcript back to 0", || async {
+        fixture.log.after(0, 1000).unwrap().into_iter().find(|event| {
+            event.kind == kind::AGENT_TRANSCRIPT && event.data == json!({ "agent_id": agent.id, "next": 0 })
+        })
+    })
+    .await;
+    assert_eq!(client.transcript(agent.id, 0).await.unwrap().messages.len(), 0);
+
+    // The new session's hooks reach the agent: its state, its transcript…
+    client.say(agent.id, "after".into()).await.unwrap();
+    fixture.until_idle_with(agent.id, "echo: after").await;
+    let transcript = client.transcript(agent.id, 0).await.unwrap();
+    let rows: Vec<(Speaker, MessageKind, Option<&str>)> = transcript
+        .messages
+        .iter()
+        .map(|message| (message.role, message.kind, message.text.as_deref()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (Speaker::User, MessageKind::Text, Some("after")),
+            (Speaker::Assistant, MessageKind::Text, Some("echo: after")),
+        ]
+    );
+
+    // …and its permission requests.
+    client.say(agent.id, "needs permission".into()).await.unwrap();
+    let approval = fixture.pending_approval(agent.id).await;
+    client.answer_approval(approval.id, true, None).await.unwrap();
+    fixture.until_idle_with(agent.id, "allowed by hook").await;
+
+    // A resume continues the new session.
+    client.stop_agent(agent.id).await.unwrap();
+    fixture.until_state(agent.id, AgentState::Exited).await;
+    let resumed = client.resume_agent(agent.id).await.unwrap();
+    assert_eq!(resumed.session_id, new_session);
+    fixture.until_state(agent.id, AgentState::Idle).await;
+    let screen = client.screen(agent.id).await.unwrap();
+    assert!(
+        screen.text.contains(&format!("session {new_session} (resume)")),
+        "{}",
+        screen.text
+    );
+}
+
+#[tokio::test]
 async fn approvals_are_answered_through_cos() {
     let fixture = Fixture::start().await;
     let client = &fixture.client;

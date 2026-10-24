@@ -759,7 +759,9 @@ impl Inner {
         options.rows = agent.rows;
         options.cols = agent.cols;
         options.hooks = Some(HookTarget {
-            command: self.config.hook_command.clone(),
+            // The agent id goes with every hook, so a new session in the
+            // same terminal (`/clear`) is still known to be this agent's.
+            command: format!("{} --agent {}", self.config.hook_command, agent.id),
             socket: self.config.hook_socket.clone(),
         });
 

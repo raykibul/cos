@@ -27,6 +27,11 @@ use crate::Decision;
 
 /// The environment variable that tells the relay where the hook socket is.
 pub const SOCKET_ENV: &str = "COS_HOOK_SOCKET";
+/// The field the relay adds to a hook's input when it was started with
+/// `--agent <id>`. A session id changes when Claude starts a new session in
+/// the same terminal (`/clear`), so this says which agent a hook is from
+/// whatever its session.
+pub const AGENT_FIELD: &str = "cos_agent_id";
 
 /// The hook events cos listens to.
 pub const EVENTS: [&str; 8] = [
@@ -71,22 +76,38 @@ fn is_tool_event(event: &str) -> bool {
 }
 
 /// Runs inside a hook: forwards the hook input on `input` to the socket and
-/// writes cos's answer, if any, to `output`.
+/// writes cos's answer, if any, to `output`. With `agent`, the input gains
+/// [`AGENT_FIELD`].
 ///
 /// Never fails. Whatever goes wrong, the hook prints nothing and exits 0 so
 /// Claude behaves as if cos weren't there.
-pub fn relay(socket: Option<&Path>, input: &mut impl Read, output: &mut impl Write) {
-    let _ = try_relay(socket, input, output);
+pub fn relay(socket: Option<&Path>, agent: Option<i64>, input: &mut impl Read, output: &mut impl Write) {
+    let _ = try_relay(socket, agent, input, output);
 }
 
-fn try_relay(socket: Option<&Path>, input: &mut impl Read, output: &mut impl Write) -> std::io::Result<()> {
+/// The agent id in a relay's arguments: `--agent <id>`, if given.
+pub fn agent_arg(args: &[String]) -> Option<i64> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--agent")
+        .and_then(|pair| pair[1].parse().ok())
+}
+
+fn try_relay(
+    socket: Option<&Path>,
+    agent: Option<i64>,
+    input: &mut impl Read,
+    output: &mut impl Write,
+) -> std::io::Result<()> {
     let mut text = String::new();
     input.read_to_string(&mut text)?;
     let Some(socket) = socket else { return Ok(()) };
     // Re-encode so the request is exactly one line.
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+    let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
         return Ok(());
     };
+    if let (Some(agent), Some(fields)) = (agent, value.as_object_mut()) {
+        fields.insert(AGENT_FIELD.to_owned(), json!(agent));
+    }
 
     let mut stream = UnixStream::connect(socket)?;
     writeln!(stream, "{value}")?;
@@ -110,6 +131,8 @@ pub struct Hook {
     /// `SessionStart`, `PreToolUse`, `Stop` and so on.
     pub event: String,
     pub session_id: Option<String>,
+    /// The agent the relay was started for (`--agent`), if any.
+    pub agent_id: Option<i64>,
     /// Everything Claude passed to the hook.
     pub input: Value,
     reply: Option<oneshot::Sender<Value>>,
@@ -122,6 +145,7 @@ impl Hook {
             id,
             event: field("hook_event_name").unwrap_or_default(),
             session_id: field("session_id"),
+            agent_id: input.get(AGENT_FIELD).and_then(Value::as_i64),
             input,
             reply: None,
         }
@@ -280,13 +304,40 @@ mod tests {
     #[test]
     fn relay_without_cos_prints_nothing() {
         let mut output = Vec::new();
-        relay(None, &mut &b"{}"[..], &mut output);
+        relay(None, None, &mut &b"{}"[..], &mut output);
         relay(
             Some(Path::new("/nonexistent/cos.sock")),
+            Some(1),
             &mut &b"{}"[..],
             &mut output,
         );
         assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_relay_names_its_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.sock");
+        let (_server, mut events) = HookServer::bind(&path).unwrap();
+
+        let input = br#"{"hook_event_name":"SessionStart","session_id":"new"}"#;
+        let relayed = tokio::task::spawn_blocking(move || {
+            relay(Some(&path), Some(7), &mut &input[..], &mut Vec::new());
+        });
+        let Some(HookEvent::Fired(hook)) = events.recv().await else {
+            panic!("no hook");
+        };
+        relayed.await.unwrap();
+
+        assert_eq!(
+            (hook.session_id.as_deref(), hook.agent_id),
+            (Some("new"), Some(7))
+        );
+        assert_eq!(
+            agent_arg(&["hook".into(), "--agent".into(), "12".into()]),
+            Some(12)
+        );
+        assert_eq!(agent_arg(&["hook".into()]), None);
     }
 
     #[tokio::test]

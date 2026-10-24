@@ -167,8 +167,16 @@ final class ChiefChat {
         }
         do {
             let page = try await session.service.transcript(agentId: chief, after: next)
-            messages = Transcript.merge(messages, page.messages)
-            next = max(next, page.next)
+            if page.next < next {
+                // A shorter transcript started over (a new session, as after
+                // /clear): read it from the top.
+                let fresh = try await session.service.transcript(agentId: chief, after: 0)
+                messages = fresh.messages
+                next = fresh.next
+            } else {
+                messages = Transcript.merge(messages, page.messages)
+                next = max(next, page.next)
+            }
             reconcile()
             error = nil
         } catch {

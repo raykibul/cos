@@ -311,6 +311,17 @@ impl Agents {
         Ok(())
     }
 
+    /// Records the Claude session the agent is in now: Claude starts a new
+    /// one in the same terminal on `/clear`, and the next resume continues
+    /// that one. Logs nothing.
+    pub fn set_session_id(&self, id: i64, session_id: &str) -> Result<(), StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET session_id = ?2 WHERE id = ?1",
+            params![id, session_id],
+        )?;
+        Ok(())
+    }
+
     /// Logs `agent.transcript`: the transcript grew to `next` messages.
     pub fn log_transcript(&self, id: i64, next: usize) -> Result<(), StoreError> {
         self.log.append(

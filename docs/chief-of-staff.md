@@ -90,6 +90,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 - **Missing file:** while there's no transcript file, the result is `{messages: [], next: 0, context: null}`.
 - **Context:** `context: {used_tokens, window_tokens}` says how full the conversation is, for the whole file whatever `after` is: `used_tokens` is the newest reply's `usage` (input, cache-read and cache-creation tokens; subagents' and Claude's `<synthetic>` replies don't count), and `window_tokens` the model's window when cos knows it: 1M for a model launched or named with `[1m]` and for those whose window is 1M by default (Opus and Sonnet from 4.6, Haiku from 5, Fable), 200K for older Claude models, else null. It is null before the first reply.
 - **Reading:** the daemon keeps each file parsed, keyed by its length and modification time, and parses only the appended lines when it grew; a file that shrank or was rewritten is parsed from the top.
+- **`/clear`:** Claude starts a new session, with a new transcript file, in the same terminal. The agent follows it (see "One hook socket" in [agents-api.md](agents-api.md)), and `agent.transcript` is logged with `next: 0`. A `next` lower than the one an app has means the transcript started over: read it again from `after=0`.
 - **Events:** `agent.transcript` with `{agent_id, next}` is logged at most once a second per agent, when the file grows. Each `Stop` and `UserPromptSubmit` hook is enough of a signal; the daemon doesn't need to watch the file.
 
 ### Routes
