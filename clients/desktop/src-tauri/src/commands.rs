@@ -7,7 +7,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use cos_bridge::{Bridge, BridgeError, DaemonInfo, EventMessage, Response, StreamHandle, TerminalMessage};
+use cos_bridge::{
+    Bridge, BridgeError, DaemonInfo, EventMessage, FileResponse, Response, StreamHandle, TerminalMessage,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::ipc::Channel;
@@ -208,6 +210,30 @@ pub(crate) async fn daemon_request(
 ) -> CommandResult<Response> {
     let (_, bridge) = state.bridge();
     bridge.request(&method, &path, body).await
+}
+
+/// Uploads a file (an attachment): `POST path` with `data`, base64, as the
+/// body. Any status is a normal result, as for `daemon_request`.
+#[tauri::command]
+pub(crate) async fn daemon_upload(
+    state: State<'_, AppState>,
+    path: String,
+    content_type: String,
+    data: String,
+) -> CommandResult<Response> {
+    let (_, bridge) = state.bridge();
+    bridge.upload(&path, &content_type, &data).await
+}
+
+/// Fetches a file, such as an attachment to show: `{status, contentType,
+/// data}` with the bytes as base64. A non-2xx answer is an error.
+#[tauri::command]
+pub(crate) async fn daemon_fetch_bytes(
+    state: State<'_, AppState>,
+    path: String,
+) -> CommandResult<FileResponse> {
+    let (_, bridge) = state.bridge();
+    bridge.fetch_bytes(&path).await
 }
 
 // The stream commands are async so they run on Tauri's Tokio runtime, which

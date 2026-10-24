@@ -23,6 +23,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::daemon_info,
             commands::daemon_request,
+            commands::daemon_upload,
+            commands::daemon_fetch_bytes,
             commands::follow_events,
             commands::attach_terminal,
             commands::close_stream,

@@ -13,7 +13,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpStream, UnixStream};
 use tokio::task::AbortHandle;
 
-use crate::{Bridge, BridgeError, Response, Target};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+
+use crate::{Bridge, BridgeError, FileResponse, Response, Target};
 
 /// A connection to the daemon, whichever way it was made.
 trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -52,7 +55,8 @@ impl Bridge {
             }
             None => None,
         };
-        let (response, _connection) = self.send(method, path, body).await?;
+        let content_type = body.as_ref().map(|_| "application/json");
+        let (response, _connection) = self.send_typed(method, path, content_type, body).await?;
         let status = response.status().as_u16();
         let bytes = response
             .into_body()
@@ -66,12 +70,73 @@ impl Bridge {
         })
     }
 
+    /// Uploads a file: `POST path` with the bytes `data` (base64) as the
+    /// body, of `content_type`. Returns the daemon's answer, whatever the
+    /// status, as [`Self::request`] does. See "Attachments" in
+    /// `docs/agents-api.md`.
+    pub async fn upload(&self, path: &str, content_type: &str, data: &str) -> Result<Response, BridgeError> {
+        check_path(path)?;
+        let bytes = BASE64
+            .decode(data.trim())
+            .map_err(|error| BridgeError::bad_request(format!("`data` isn't valid base64: {error}")))?;
+        let content_type = if content_type.trim().is_empty() {
+            "application/octet-stream"
+        } else {
+            content_type
+        };
+        let (response, _connection) = self
+            .send_typed(Method::POST, path, Some(content_type), Some(bytes))
+            .await?;
+        let status = response.status().as_u16();
+        let bytes = read_all(response).await?;
+        Ok(Response {
+            status,
+            body: parse_body(&bytes),
+        })
+    }
+
+    /// `GET path` for a file, such as an attachment to show: its bytes as
+    /// base64 and its type. A non-2xx answer is an error with the daemon's
+    /// message.
+    pub async fn fetch_bytes(&self, path: &str) -> Result<FileResponse, BridgeError> {
+        check_path(path)?;
+        let (response, _connection) = self.send(Method::GET, path, None).await?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(hyper::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let bytes = read_all(response).await?;
+        if !(200..300).contains(&status) {
+            return Err(answer_error(status, &bytes));
+        }
+        Ok(FileResponse {
+            status,
+            content_type,
+            data: BASE64.encode(&bytes),
+        })
+    }
+
     /// Opens a connection and sends one request. The caller keeps the
     /// [`Connection`] for as long as it reads the body.
     pub(crate) async fn send(
         &self,
         method: Method,
         path: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(hyper::Response<Incoming>, Connection), BridgeError> {
+        let content_type = body.as_ref().map(|_| "application/json");
+        self.send_typed(method, path, content_type, body).await
+    }
+
+    /// [`Self::send`] with the body's type given.
+    async fn send_typed(
+        &self,
+        method: Method,
+        path: &str,
+        content_type: Option<&str>,
         body: Option<Vec<u8>>,
     ) -> Result<(hyper::Response<Incoming>, Connection), BridgeError> {
         let stream = self.connect().await?;
@@ -89,8 +154,8 @@ impl Bridge {
             .method(method)
             .uri(path)
             .header(hyper::header::HOST, self.target.host_header());
-        if body.is_some() {
-            request = request.header(hyper::header::CONTENT_TYPE, "application/json");
+        if let Some(content_type) = content_type {
+            request = request.header(hyper::header::CONTENT_TYPE, content_type);
         }
         let request = request
             .body(Full::new(Bytes::from(body.unwrap_or_default())))
@@ -137,6 +202,15 @@ impl Bridge {
             }
         }
     }
+}
+
+async fn read_all(response: hyper::Response<Incoming>) -> Result<Bytes, BridgeError> {
+    Ok(response
+        .into_body()
+        .collect()
+        .await
+        .map_err(|error| BridgeError::io(format!("the daemon's answer was cut off: {error}")))?
+        .to_bytes())
 }
 
 fn parse_method(method: &str) -> Result<Method, BridgeError> {

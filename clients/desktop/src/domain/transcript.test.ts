@@ -18,6 +18,7 @@ const user = (n: number, text: string, tsMs = n * 1000): TranscriptMessage => ({
   text,
   tool: null,
   tsMs,
+  attachments: [],
 });
 const said = (n: number, text: string): TranscriptMessage => ({
   n,
@@ -26,6 +27,7 @@ const said = (n: number, text: string): TranscriptMessage => ({
   text,
   tool: null,
   tsMs: n * 1000,
+  attachments: [],
 });
 const tool = (n: number, name: string, summary = ""): TranscriptMessage => ({
   n,
@@ -34,6 +36,7 @@ const tool = (n: number, name: string, summary = ""): TranscriptMessage => ({
   text: "",
   tool: { name, summary, isError: false },
   tsMs: n * 1000,
+  attachments: [],
 });
 const update = (n: number, text: string, tsMs = n * 1000): TranscriptMessage => ({
   n,
@@ -42,6 +45,7 @@ const update = (n: number, text: string, tsMs = n * 1000): TranscriptMessage => 
   text,
   tool: null,
   tsMs,
+  attachments: [],
 });
 const pending = (id: number, text: string, afterN: number): PendingMessage => ({
   id,

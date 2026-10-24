@@ -4,6 +4,7 @@
 // the daemon's answer at once and then refresh.
 
 import { createStore, type StoreApi } from "zustand/vanilla";
+import type { AttachTarget, Attachment, SentAttachment } from "../api/attachments";
 import { DaemonClient, type Decision, type NewAgent } from "../api/client";
 import { CosError, isConflict, isNotFound } from "../api/errors";
 import {
@@ -236,6 +237,8 @@ export class CosStore {
   private readonly transcriptResets = new Set<number>();
   private readonly inboxWatches = new Map<number, Watch<InboxItem[]>>();
   private nextPendingId = 1;
+  /** Attachments fetched to show, by `agentId/name`. */
+  private readonly attachmentUrls = new Map<string, Promise<string>>();
 
   constructor(
     readonly bridge: Bridge,
@@ -761,7 +764,11 @@ export class CosStore {
    * Sends the chief a message. It shows at once as pending, and leaves when
    * the transcript has it. A failure stays, to retry or discard.
    */
-  async messageStaff(projectId: number, text: string): Promise<void> {
+  async messageStaff(
+    projectId: number,
+    text: string,
+    attachments: SentAttachment[] = [],
+  ): Promise<void> {
     const staff = this.get().staffs[projectId];
     const afterN = staff?.agentId != null ? (this.get().transcripts[staff.agentId]?.next ?? 0) : 0;
     const item: PendingMessage = {
@@ -770,6 +777,7 @@ export class CosStore {
       sentMs: Date.now(),
       afterN,
       state: "sending",
+      attachments,
     };
     this.set((s) => ({
       pending: { ...s.pending, [projectId]: [...(s.pending[projectId] ?? []), item] },
@@ -788,7 +796,11 @@ export class CosStore {
         },
       }));
     try {
-      await this.client.messageStaff(projectId, item.text);
+      await this.client.messageStaff(
+        projectId,
+        item.text,
+        (item.attachments ?? []).map((a) => a.name),
+      );
       update({ state: "sent", error: undefined });
     } catch (error) {
       update({ state: "failed", error: message(error) });
@@ -798,6 +810,23 @@ export class CosStore {
     this.refreshStaff(projectId);
     const agentId = this.get().staffs[projectId]?.agentId;
     if (agentId != null) this.transcriptWatches.get(agentId)?.refresh.request();
+  }
+
+  /** Uploads a file for a message to the chief or an agent; see `DaemonClient.uploadAttachment`. */
+  uploadAttachment(target: AttachTarget, file: Blob & { name?: string }): Promise<Attachment> {
+    return this.client.uploadAttachment(target, file);
+  }
+
+  /** An attachment of an agent's, as a `data:` URL to show; cached. */
+  attachmentUrl(agentId: number, name: string): Promise<string> {
+    const key = `${agentId}/${name}`;
+    let url = this.attachmentUrls.get(key);
+    if (!url) {
+      url = this.client.attachmentUrl(agentId, name);
+      url.catch(() => this.attachmentUrls.delete(key));
+      this.attachmentUrls.set(key, url);
+    }
+    return url;
   }
 
   retryPending(projectId: number, id: number): Promise<void> {

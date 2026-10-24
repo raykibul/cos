@@ -2,6 +2,9 @@ import { ArrowUp, ChevronDown, ShieldCheck, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
 import { useFocusOnOpen } from "../app/focus";
 import { models, permissionModes } from "../domain/labels";
+import type { AttachTarget } from "../api/attachments";
+import { AttachButton, DraftChips, DropOverlay } from "../ui/attachments";
+import { useDraftFiles, useFileDrop } from "../ui/draftFiles";
 import { cx } from "../ui/cx";
 import { AutoTextarea, Spinner } from "../ui/kit";
 import { Menu } from "../ui/Menu";
@@ -19,6 +22,7 @@ export function Composer({
   autoFocus,
   focusOnOpen = false,
   allowEmpty = true,
+  attachTo = null,
 }: {
   onSend: (value: ComposerValue) => Promise<unknown>;
   disabled?: boolean;
@@ -28,6 +32,8 @@ export function Composer({
   focusOnOpen?: boolean;
   /** An empty prompt starts Claude idle, waiting in its own input. */
   allowEmpty?: boolean;
+  /** Where attached files go; without it, nothing can be attached. */
+  attachTo?: AttachTarget | null;
 }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState("");
@@ -35,15 +41,23 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   useFocusOnOpen(input, focusOnOpen);
-  const canSend = !disabled && !sending && (allowEmpty || prompt.trim().length > 0);
+  const files = useDraftFiles(attachTo);
+  const drop = useFileDrop((picked) => files.add(picked), Boolean(attachTo) && !disabled);
+  const canSend =
+    !disabled &&
+    !sending &&
+    !files.uploading &&
+    (allowEmpty || prompt.trim().length > 0 || files.ready.length > 0);
 
   const send = () => {
     if (!canSend) return;
     setSending(true);
-    onSend({ prompt, model, permissionMode }).then(
+    const attachments = files.ready.map((a) => a.name);
+    onSend({ prompt, model, permissionMode, attachments }).then(
       () => {
         setSending(false);
         setPrompt("");
+        files.clear();
       },
       () => setSending(false),
     );
@@ -54,12 +68,15 @@ export function Composer({
 
   return (
     <div
+      {...drop.handlers}
       className={cx(
-        "rounded-[20px] border border-line-strong bg-raised shadow-composer transition-[border-color,box-shadow]",
+        "relative rounded-[20px] border border-line-strong bg-raised shadow-composer transition-[border-color,box-shadow]",
         "focus-within:border-ink-3/50",
         disabled && "opacity-60",
       )}
     >
+      <DropOverlay show={drop.dragging} />
+      <DraftChips draft={files} />
       <AutoTextarea
         ref={input}
         aria-label="Prompt"
@@ -80,6 +97,9 @@ export function Composer({
         className="block w-full bg-transparent px-4 pt-3.5 pb-1 text-[15px] leading-[1.55] text-ink outline-none placeholder:text-ink-3"
       />
       <div className="flex items-center gap-1 px-2.5 pb-2.5">
+        {attachTo ? (
+          <AttachButton onFiles={(picked) => files.add(picked)} disabled={disabled} />
+        ) : null}
         <Menu
           width={250}
           items={permissionModes.map((m) => ({

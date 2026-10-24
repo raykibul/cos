@@ -115,6 +115,7 @@ export function WorkspacePage({ workspaceId }: { workspaceId: number }) {
           <SectionTitle>New agent</SectionTitle>
           <Composer
             focusOnOpen
+            attachTo={{ kind: "workspace", workspaceId }}
             disabled={!canChange || !agentsSupported}
             placeholder={
               agentsSupported

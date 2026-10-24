@@ -16,6 +16,7 @@ import {
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { type AttachedFile, sizeLabel } from "../../api/attachments";
 import type { InboxItem, TranscriptMessage } from "../../api/staff";
 import {
   type ConversationItem,
@@ -27,6 +28,7 @@ import {
 } from "../../domain/transcript";
 import { cx } from "../../ui/cx";
 import { clockTime } from "../../ui/format";
+import { SentFiles } from "../../ui/attachments";
 import { Spinner } from "../../ui/kit";
 import { ChiefMark } from "../../screens/sidebar/ProjectSection";
 
@@ -81,8 +83,11 @@ export function Conversation({
   empty,
   onRetry,
   onDiscard,
+  agentId = null,
 }: {
   items: ConversationItem[];
+  /** The chief's agent, whose attachments the bubbles show. */
+  agentId?: number | null;
   inbox: InboxItem[];
   /** Show that the chief is at work, under its last turn. */
   working: boolean;
@@ -117,7 +122,13 @@ export function Conversation({
             switch (item.type) {
               case "user":
                 return (
-                  <UserBubble key={item.key} className={gap} text={item.message.text}>
+                  <UserBubble
+                    key={item.key}
+                    className={gap}
+                    text={item.message.text}
+                    files={item.message.attachments}
+                    agentId={agentId}
+                  >
                     {item.message.tsMs ? clockTime(item.message.tsMs).slice(0, 5) : null}
                   </UserBubble>
                 );
@@ -167,16 +178,25 @@ function UserBubble({
   text,
   className,
   children,
+  files = [],
+  agentId = null,
+  previews,
 }: {
   text: string;
   className?: string;
   children?: React.ReactNode;
+  files?: AttachedFile[];
+  agentId?: number | null;
+  previews?: Record<string, string | null>;
 }) {
   return (
     <div className={cx("flex flex-col items-end", className)}>
-      <div className="max-w-[82%] rounded-[18px] rounded-br-md bg-subtle-2/80 px-4 py-2.5 text-[14.5px] leading-[1.55] whitespace-pre-wrap text-ink select-text">
-        {text}
-      </div>
+      <SentFiles files={files} agentId={agentId} previews={previews} />
+      {text ? (
+        <div className="max-w-[82%] rounded-[18px] rounded-br-md bg-subtle-2/80 px-4 py-2.5 text-[14.5px] leading-[1.55] whitespace-pre-wrap text-ink select-text">
+          {text}
+        </div>
+      ) : null}
       {children ? <div className="mt-1 px-1 text-[11px] text-ink-3">{children}</div> : null}
     </div>
   );
@@ -197,7 +217,18 @@ function PendingBubble({
 }) {
   return (
     <div className={cx(pending.state === "sending" && "opacity-75", className)}>
-      <UserBubble text={pending.text}>
+      <UserBubble
+        text={pending.text}
+        files={(pending.attachments ?? []).map((a) => ({
+          name: a.name,
+          path: a.path,
+          contentType: a.contentType,
+          sizeLabel: sizeLabel(a.size),
+        }))}
+        previews={Object.fromEntries(
+          (pending.attachments ?? []).map((a) => [a.name, a.previewUrl ?? null]),
+        )}
+      >
         {pending.state === "sending" ? (
           <span className="flex items-center gap-1" role="status">
             <Spinner className="size-3" />

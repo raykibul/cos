@@ -15,6 +15,7 @@ import {
   str,
   time,
 } from "./decode";
+import { type AttachedFile, decodeAttachedFiles } from "./attachments";
 import type { AgentState } from "./models";
 
 export interface Staff {
@@ -87,6 +88,8 @@ export interface TranscriptMessage {
   text: string;
   tool: ToolCall | null;
   tsMs: number;
+  /** Files you attached, which `text` leaves out. */
+  attachments: AttachedFile[];
 }
 
 export interface Transcript {
@@ -119,6 +122,7 @@ export function decodeMessage(value: unknown): TranscriptMessage {
     text,
     tool,
     tsMs: num(o.ts_ms, 0) || time(o.ts),
+    attachments: decodeAttachedFiles(o.attachments),
   };
 }
 

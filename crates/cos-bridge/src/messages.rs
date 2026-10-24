@@ -23,6 +23,16 @@ pub struct Response {
     pub body: Option<Value>,
 }
 
+/// A file from [`crate::Bridge::fetch_bytes`], such as an attachment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileResponse {
+    pub status: u16,
+    pub content_type: String,
+    /// The bytes, as base64.
+    pub data: String,
+}
+
 /// One message of [`crate::Bridge::follow_events`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

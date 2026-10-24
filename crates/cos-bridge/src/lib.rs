@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use error::{BridgeError, ErrorKind};
-pub use messages::{DaemonInfo, EventMessage, Response, TerminalMessage};
+pub use messages::{DaemonInfo, EventMessage, FileResponse, Response, TerminalMessage};
 pub use stream::{Sink, StreamHandle};
 pub use target::{DEFAULT_PORT, Target, parse_address};
 
