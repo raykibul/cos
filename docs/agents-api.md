@@ -74,8 +74,11 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 |---|---|---|
 | `GET /v1/agents?workspace_id=&state=` | | `{"agents": [Agent]}`, newest first |
 | `GET /v1/agents/{id}` | | Agent |
-| `POST /v1/workspaces/{id}/agents` | `{"prompt"?, "title"?, "model"?, "permission_mode"?, "user_settings"?, "rows"?, "cols"?}` | 201 Agent (role `user`). A missing `title` becomes the first 60 characters of the prompt, else "Agent N". |
-| `POST /v1/agents/{id}/input` | `{"text": "…"}` | 204. Types the text and presses Return. 409 if exited. |
+| `POST /v1/workspaces/{id}/agents` | `{"prompt"?, "title"?, "model"?, "permission_mode"?, "user_settings"?, "rows"?, "cols"?, "attachments"?}` | 201 Agent (role `user`). A missing `title` becomes the first 60 characters of the prompt, else the first attachment's name, else "Agent N". `attachments` name files uploaded to the workspace (below). |
+| `POST /v1/agents/{id}/input` | `{"text": "…", "attachments"?: ["name"]}` | 204. Types the text and presses Return; with attachments, as one paste with their paths at the end. The text may be empty when there are attachments. 409 if exited. |
+| `POST /v1/agents/{id}/attachments?name=` | the file's bytes | 201 Attachment (below) |
+| `POST /v1/workspaces/{id}/attachments?name=` | the file's bytes | 201 Attachment, for an agent you're about to start there |
+| `GET /v1/agents/{id}/attachments/{name}` | | The file, with its content type |
 | `POST /v1/agents/{id}/keys` | `{"data": "<base64>"}` | 204. Raw keystrokes, exactly as typed (Esc, arrows, Ctrl-C…). |
 | `POST /v1/agents/{id}/resize` | `{"rows": 40, "cols": 120}` | 204 |
 | `POST /v1/agents/{id}/trust` | | 204. Answers the trust dialog with yes. 409 unless `needs_trust`. |
@@ -159,6 +162,8 @@ data: {"exit_code":0}
 {"n": 12, "role": "user" | "assistant", "kind": "text" | "tool" | "update",
  "text": "markdown…",                                                  // text and update
  "tool": {"name": "Bash", "summary": "npm test", "is_error": false},   // tool
+ "attachments": [{"name": "shot.png", "path": "/…/.cos/attachments/shot.png",
+                  "content_type": "image/png", "size_label": "245 KB"}], // your text messages, when they name files
  "ts_ms": 1792611174811}
 ```
 
@@ -168,7 +173,28 @@ data: {"exit_code":0}
 - **Tool calls:** one message per call, with `summary` its main argument on one line (Bash's command, a file tool's path, a search's pattern, else its input as JSON, cut to 160 characters) and `is_error` from its result. `ToolSearch` (Claude loading deferred tools) is left out.
 - **`update`:** a user turn that starts with `[cos ·`, a Chief of Staff's inbox wakeup.
 - **Left out:** thinking, system and meta entries, subagents (sidechains), bookkeeping entries, local command echoes (`<command-…>`) and "[Request interrupted…]" markers. A bracketed paste is shown as the text you pasted. A line that isn't JSON, or isn't finished yet, is skipped.
+- **`attachments`:** on a user `text` message that ends with cos's "Attached files" block (below), the block is taken out of `text` and its files listed here. Left out when there are none.
 - **No file yet:** `{"messages": [], "next": 0}`.
+
+## Attachments
+
+Files you send with a message, from any device: the Mac app, the iPhone, or `cos --host … --file`. A file is uploaded first, then a message names it.
+
+- **Upload:** `POST …/attachments?name=<file name>` with the file's bytes as the body and its `Content-Type`. Routes: an agent's folder (`/v1/agents/{id}/attachments`), a workspace for an agent about to start (`/v1/workspaces/{id}/attachments`), and a Chief of Staff's worktree (`/v1/projects/{id}/staff/attachments`, see [chief-of-staff.md](chief-of-staff.md#routes)), which is made if needed without starting the chief. Over the tailnet too, for approved devices.
+- **Answer:** 201 `{"name": "shot.png", "path": "/abs/…/.cos/attachments/shot.png", "size": 250880, "content_type": "image/png"}`. Use the answer's `name`: it's made safe (the last path segment; letters, digits, `.`, `-` and `_`; no leading dot; at most 100 characters; an extension from the content type when it has none) and unique in the folder (`shot-2.png`).
+- **Where files go:** `<agent's folder>/.cos/attachments/`, inside the worktree, so Claude reads them without asking to leave it. The folder holds a `.gitignore` of `*`, so they never show in `git status` or get committed. A `.cos` or `attachments` that is a symlink is refused.
+- **Limits:** 32 MB a file (413 over it), 20 files a message (400).
+- **Naming them:** `attachments` on `POST /v1/agents/{id}/input`, `POST /v1/workspaces/{id}/agents` and the staff message takes names, or absolute paths, of files in that agent's folder; an unknown one is 400. cos adds a block at the end of the text, and types it as one paste:
+
+  ```
+  <your text>
+
+  Attached files (saved by cos; read them with the Read tool):
+  - /abs/…/.cos/attachments/shot.png (image/png, 245 KB)
+  ```
+
+- **Download:** `GET /v1/agents/{id}/attachments/{name}` gives the file with its content type, `Cache-Control: private, max-age=86400` (names never get reused) and `nosniff`. 404 for anything else in the folder.
+- **Between agents:** a Chief of Staff passes files on with `attachments` on `agent_spawn` and `agent_send` (see [chief-of-staff.md](chief-of-staff.md#staff-mcp-tools-server-cos)); cos copies them into the target's folder, reusing an identical copy already there.
 
 ## Events
 
@@ -183,6 +209,7 @@ These go in the event log, so apps get them over `/v1/events/stream`. `data` hol
 | `approval.requested` | `{approval_id, agent_id, summary, tier}` |
 | `approval.decided` | `{approval_id, state, decided_by}` |
 | `agent.transcript` | `{agent_id, next}`: the transcript grew. At most once a second per agent. |
+| `attachment.added` | `{workspace_id, name, size, content_type}`: a file was uploaded. |
 
 Terminal output is never in the event log; it's too much data.
 
@@ -190,10 +217,10 @@ Terminal output is never in the event log; it's too much data.
 
 | Command | What it does |
 |---|---|
-| `cos agent new <workspace> ["prompt"] [--title …] [--model …] [--permission-mode …] [--project-settings]` | Start an agent in a workspace. `--project-settings` sets `user_settings` to false. |
+| `cos agent new <workspace> ["prompt"] [--title …] [--model …] [--permission-mode …] [--project-settings] [--file PATH]…` | Start an agent in a workspace. `--project-settings` sets `user_settings` to false. `--file` uploads a file and names it in the prompt; repeat it for more. |
 | `cos agents [--workspace …]` | List agents. |
 | `cos agent stop` / `resume` / `rm <id>` | Stop, resume or forget an agent. |
-| `cos agent say <id> "text"` | Type a message into an agent. |
+| `cos agent say <id> "text" [--file PATH]…` | Type a message into an agent, with files. |
 | `cos agent screen <id>` | Print an agent's screen. |
 | `cos agent trust <id>` | Answer the trust dialog with yes. |
 | `cos agent attach <id>` | Your terminal becomes the agent's terminal: raw mode, keys in, output out, Ctrl-] to detach. |
