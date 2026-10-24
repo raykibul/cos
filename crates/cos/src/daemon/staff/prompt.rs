@@ -1,11 +1,11 @@
-//! What the Chief of Staff is told: its standing instructions and brief
-//! (`--append-system-prompt`), its MCP server, the line agents it starts
+//! What the Chief of Staff is told: its standing instructions, brief and
+//! list of memory notes (`--append-system-prompt`), its MCP server, the line agents it starts
 //! get, and the wakeups the daemon types into it.
 
 use std::fmt::Write;
 use std::path::Path;
 
-use cos_core::StaffItem;
+use cos_core::{StaffItem, StaffNote};
 use cos_harness::ClaudeOptions;
 use serde_json::json;
 
@@ -16,10 +16,19 @@ pub(crate) const SERVER: &str = "cos";
 /// The allow rule for every tool of its `cos` server: cos checks each call.
 pub(crate) const ALLOW_TOOLS: &str = "mcp__cos__*";
 
-/// The standing instructions, then the brief.
-pub(crate) fn system_prompt(project: &str, brief: &str) -> String {
+/// The standing instructions, then the brief and the list of notes.
+pub(crate) fn system_prompt(project: &str, brief: &str, notes: &[StaffNote]) -> String {
     let brief = brief.trim();
     let brief = if brief.is_empty() { "(empty)" } else { brief };
+    let index: Vec<String> = notes
+        .iter()
+        .map(|note| format!("- {}: {}", note.name, note.description))
+        .collect();
+    let index = if index.is_empty() {
+        "(none yet)".to_owned()
+    } else {
+        index.join("\n")
+    };
     format!(
         "You are the Chief of Staff for the project {project}. cos, a daemon on the user's Mac, runs coding \
          agents for them, each in a workspace: a git worktree of the project on its own branch. You coordinate \
@@ -36,11 +45,19 @@ user, so give them only a useful summary, result, blocker or question.
 Read them yourself, and pass the paths in attachments to agent_spawn or agent_send when an agent needs them.
 - Don't poll in a loop: news comes to you. End your turn when there's nothing left to do now.
 - Don't claim success without evidence: read the agent's last message (agent_read) or check the branch.
-- Keep a short brief with brief_update: what you're working on, for whom, and what's open. It is under 4 KiB \
-and is all you keep when you restart.
+- Keep a short brief with brief_update: what you're working on now, for whom, and what's open. It is under 4 \
+KiB.
+- Keep what lasts in memory notes (memory_write): what the user prefers, decisions and why, how the project \
+works, where things are. One subject per note. Update a note rather than add a near copy, and delete one that \
+turned out wrong. Don't save what the repo or its history already says, or secrets.
+- The notes are listed below by name and description. Read one with memory_read before you rely on it.
+- Your brief and notes are all you keep: you may be restarted in a new session at any time.
 
 Your brief:
-{brief}"
+{brief}
+
+Your memory notes:
+{index}"
     )
 }
 

@@ -22,5 +22,5 @@ pub use env::{EnvError, Environment, GlobalEnv, ProjectEnv, Variables};
 pub use events::{EventLog, LoggedEvent, Subscription};
 pub use judge::{DecisionPoint, Judgments, NewDecision, PointStats, ProjectSwitch};
 pub use projects::{Base, Project, ProjectError, Projects, Workspace};
-pub use staff::{StaffBooks, StaffError, StaffItem, StaffItemKind, StaffRecord};
+pub use staff::{StaffBooks, StaffError, StaffItem, StaffItemKind, StaffNote, StaffRecord};
 pub use store::{Store, StoreError};

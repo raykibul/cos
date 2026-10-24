@@ -1,5 +1,5 @@
 //! The Chief of Staff's books: one row per project (its agent, model and
-//! brief) and its inbox. The daemon decides when to wake the chief and types
+//! brief), its memory notes and its inbox. The daemon decides when to wake the chief and types
 //! the wakeup; this module keeps what waits and what was delivered, and sets
 //! the caps on batching. The contract is `docs/chief-of-staff.md`.
 
@@ -25,6 +25,15 @@ pub const MAX_WAKEUP_BYTES: usize = 24 * 1024;
 pub const MAX_WAKEUPS_PER_HOUR: usize = 30;
 /// One item's text is cut to this many bytes, so any item fits in a wakeup.
 pub const MAX_ITEM_BYTES: usize = 4 * 1024;
+/// The most memory notes a project's chief keeps. Every note's name and
+/// description go in its system prompt, so this bounds that list.
+pub const MAX_NOTES: usize = 50;
+/// The most characters in a note's name.
+pub const MAX_NOTE_NAME_CHARS: usize = 64;
+/// The most characters in a note's description.
+pub const MAX_NOTE_DESCRIPTION_CHARS: usize = 200;
+/// The most bytes in a note's body.
+pub const MAX_NOTE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StaffError {
@@ -52,6 +61,19 @@ pub struct StaffRecord {
     /// You stopped it, so a daemon restart doesn't bring it back.
     #[serde(default)]
     pub stopped: bool,
+}
+
+/// One of a chief's memory notes. Its name and description are listed in
+/// the chief's system prompt; it reads the body with `memory_read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaffNote {
+    /// Lowercase letters, digits and `-`, unique in the project.
+    pub name: String,
+    /// One line: what the note holds, so the chief knows when to read it.
+    pub description: String,
+    pub body: String,
+    pub created_ms: i64,
+    pub updated_ms: i64,
 }
 
 /// What an inbox item is.
@@ -183,6 +205,114 @@ impl StaffBooks {
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    // ---- Memory notes ----
+
+    /// The project's notes, by name.
+    pub fn notes(&self, project_id: i64) -> Result<Vec<StaffNote>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {NOTE_COLUMNS} FROM staff_notes WHERE project_id = ?1 ORDER BY name"
+            ))?
+            .query_map([project_id], read_note)?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// One note, if the project has it.
+    pub fn note(&self, project_id: i64, name: &str) -> Result<Option<StaffNote>, StoreError> {
+        let conn = self.store.lock();
+        Ok(conn
+            .prepare_cached(&format!(
+                "SELECT {NOTE_COLUMNS} FROM staff_notes WHERE project_id = ?1 AND name = ?2"
+            ))?
+            .query_row(params![project_id, name.trim()], read_note)
+            .optional()?)
+    }
+
+    /// Creates the note, or replaces the one with that name. The name, the
+    /// description and the body are trimmed and checked against the caps;
+    /// a new note is refused once the project has [`MAX_NOTES`].
+    pub fn write_note(
+        &self,
+        project_id: i64,
+        name: &str,
+        description: &str,
+        body: &str,
+    ) -> Result<StaffNote, StaffError> {
+        let name = check_note_name(name)?;
+        let description = description.trim();
+        if description.is_empty()
+            || description.contains('\n')
+            || description.chars().count() > MAX_NOTE_DESCRIPTION_CHARS
+        {
+            return Err(StaffError::Invalid(format!(
+                "a note's description is one line of 1 to {MAX_NOTE_DESCRIPTION_CHARS} characters"
+            )));
+        }
+        let body = body.trim();
+        if body.is_empty() {
+            return Err(StaffError::Invalid(
+                "the note is empty; use memory_delete to forget it".into(),
+            ));
+        }
+        if body.len() > MAX_NOTE_BYTES {
+            return Err(StaffError::Invalid(format!(
+                "the note is {} bytes; keep it under {MAX_NOTE_BYTES}, or split it into notes on narrower subjects",
+                body.len()
+            )));
+        }
+        let mut conn = self.store.lock();
+        let tx = conn.transaction().map_err(StoreError::from)?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM staff_notes WHERE project_id = ?1 AND name = ?2)",
+                params![project_id, name],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::from)?;
+        if !exists {
+            let count: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM staff_notes WHERE project_id = ?1",
+                    [project_id],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::from)?;
+            if count as usize >= MAX_NOTES {
+                return Err(StaffError::Invalid(format!(
+                    "there are already {MAX_NOTES} notes; merge or delete some first"
+                )));
+            }
+        }
+        let now = now_ms();
+        tx.execute(
+            "INSERT INTO staff_notes (project_id, name, description, body, created_ms, updated_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT (project_id, name) DO UPDATE SET
+                 description = excluded.description, body = excluded.body, updated_ms = excluded.updated_ms",
+            params![project_id, name, description, body, now],
+        )
+        .map_err(StoreError::from)?;
+        let note = tx
+            .query_row(
+                &format!("SELECT {NOTE_COLUMNS} FROM staff_notes WHERE project_id = ?1 AND name = ?2"),
+                params![project_id, name],
+                read_note,
+            )
+            .map_err(StoreError::from)?;
+        tx.commit().map_err(StoreError::from)?;
+        Ok(note)
+    }
+
+    /// Forgets a note. Returns whether there was one.
+    pub fn delete_note(&self, project_id: i64, name: &str) -> Result<bool, StoreError> {
+        let deleted = self.store.lock().execute(
+            "DELETE FROM staff_notes WHERE project_id = ?1 AND name = ?2",
+            params![project_id, name.trim()],
+        )?;
+        Ok(deleted > 0)
     }
 
     fn update(&self, project_id: i64, column: &str, value: &dyn rusqlite::ToSql) -> Result<(), StoreError> {
@@ -356,6 +486,37 @@ fn read_record(row: &Row<'_>) -> rusqlite::Result<StaffRecord> {
     })
 }
 
+const NOTE_COLUMNS: &str = "name, description, body, created_ms, updated_ms";
+
+fn read_note(row: &Row<'_>) -> rusqlite::Result<StaffNote> {
+    Ok(StaffNote {
+        name: row.get(0)?,
+        description: row.get(1)?,
+        body: row.get(2)?,
+        created_ms: row.get(3)?,
+        updated_ms: row.get(4)?,
+    })
+}
+
+/// A note's name, trimmed: 1 to [`MAX_NOTE_NAME_CHARS`] lowercase letters,
+/// digits and `-`, starting and ending with a letter or digit.
+pub fn check_note_name(name: &str) -> Result<&str, StaffError> {
+    let name = name.trim();
+    let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+    let valid = !name.is_empty()
+        && name.len() <= MAX_NOTE_NAME_CHARS
+        && name.chars().all(allowed)
+        && !name.starts_with('-')
+        && !name.ends_with('-');
+    if valid {
+        Ok(name)
+    } else {
+        Err(StaffError::Invalid(format!(
+            "a note's name is 1 to {MAX_NOTE_NAME_CHARS} lowercase letters, digits and dashes, such as \"release-process\""
+        )))
+    }
+}
+
 const ITEM_COLUMNS: &str = "id, project_id, kind, agent_id, text, created_ms, delivered_ms";
 
 fn read_item(row: &Row<'_>) -> rusqlite::Result<StaffItem> {
@@ -474,6 +635,85 @@ mod tests {
 
         assert!(matches!(error, StaffError::Invalid(_)), "{error}");
         assert!(books.set_brief(project, &"x".repeat(MAX_BRIEF_BYTES)).is_ok());
+    }
+
+    #[test]
+    fn notes_are_kept_by_name_and_replaced_in_place() {
+        let (books, _, project) = books();
+        assert!(books.notes(project).unwrap().is_empty());
+
+        let first = books
+            .write_note(
+                project,
+                " release ",
+                "How we ship",
+                "  Tag v*, then wait for CI. ",
+            )
+            .unwrap();
+        assert_eq!(first.name, "release");
+        assert_eq!(first.body, "Tag v*, then wait for CI.");
+        books
+            .write_note(project, "people", "Who owns what", "Rakibul owns the apps.")
+            .unwrap();
+        let replaced = books
+            .write_note(project, "release", "How we ship cos", "Tag v*.")
+            .unwrap();
+
+        assert_eq!(replaced.created_ms, first.created_ms);
+        assert_eq!(
+            books
+                .notes(project)
+                .unwrap()
+                .iter()
+                .map(|note| (note.name.as_str(), note.description.as_str()))
+                .collect::<Vec<_>>(),
+            [("people", "Who owns what"), ("release", "How we ship cos")],
+            "by name"
+        );
+        assert_eq!(books.note(project, "release").unwrap().unwrap().body, "Tag v*.");
+        assert!(books.delete_note(project, "release").unwrap());
+        assert!(!books.delete_note(project, "release").unwrap());
+        assert_eq!(books.note(project, "release").unwrap(), None);
+    }
+
+    #[test]
+    fn notes_keep_to_their_caps() {
+        let (books, _, project) = books();
+        let invalid = |result: Result<StaffNote, StaffError>| matches!(result, Err(StaffError::Invalid(_)));
+
+        for name in [
+            "",
+            "Release",
+            "two words",
+            "-x",
+            "x-",
+            &"x".repeat(MAX_NOTE_NAME_CHARS + 1),
+        ] {
+            assert!(invalid(books.write_note(project, name, "d", "b")), "{name:?}");
+        }
+        assert!(invalid(books.write_note(project, "n", "", "b")));
+        assert!(invalid(books.write_note(project, "n", "two\nlines", "b")));
+        assert!(invalid(books.write_note(project, "n", "d", "  ")));
+        assert!(invalid(books.write_note(
+            project,
+            "n",
+            "d",
+            &"x".repeat(MAX_NOTE_BYTES + 1)
+        )));
+        assert!(
+            books
+                .write_note(project, "n", "d", &"x".repeat(MAX_NOTE_BYTES))
+                .is_ok()
+        );
+
+        for index in 1..MAX_NOTES {
+            books.write_note(project, &format!("n{index}"), "d", "b").unwrap();
+        }
+        assert!(invalid(books.write_note(project, "one-too-many", "d", "b")));
+        assert!(
+            books.write_note(project, "n1", "d", "replacing is fine").is_ok(),
+            "a full project can still replace a note"
+        );
     }
 
     #[test]

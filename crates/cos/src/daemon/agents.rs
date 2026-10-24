@@ -438,22 +438,30 @@ impl AgentManager {
         self.relaunch(id, true)
     }
 
+    /// Starts an exited or interrupted agent in a new Claude session: the
+    /// same agent, with whatever system prompt it has now, but none of its
+    /// old conversation. Its transcript starts over (`agent.transcript`
+    /// with `next: 0`).
+    pub(crate) fn new_session(&self, id: i64) -> Result<Agent, AgentError> {
+        let inner = &self.inner;
+        let (_, cwd) = inner.stopped_agent(id)?;
+        let session_id = ClaudeOptions::new(&cwd).session_id;
+        {
+            let mut live = inner.live();
+            live.by_session.retain(|_, agent| *agent != id);
+            live.transcripts.remove(&id);
+        }
+        inner.agents.set_new_session(id, &session_id)?;
+        inner.agents.log_transcript(id, 0)?;
+        let agent = inner.agents.restart(id)?;
+        inner.launch(&agent, &cwd, None, false).inspect_err(|_| {
+            let _ = inner.agents.finish(id, AgentState::Exited, None);
+        })
+    }
+
     fn relaunch(&self, id: i64, fresh_if_unsaved: bool) -> Result<Agent, AgentError> {
         let inner = &self.inner;
-        let agent = inner.agent(id)?;
-        if agent.state.is_running() {
-            return Err(AgentError::Conflict(format!(
-                "agent {id} is still running; only an exited or interrupted agent can be resumed"
-            )));
-        }
-        let workspace = inner.projects.workspace(agent.workspace_id)?;
-        let cwd = agent.cwd.clone().unwrap_or(workspace.path);
-        if !cwd.is_dir() {
-            return Err(AgentError::Conflict(format!(
-                "agent {id}'s folder {} is gone, so it can't be resumed",
-                cwd.display()
-            )));
-        }
+        let (agent, cwd) = inner.stopped_agent(id)?;
         let saved = agent.transcript_path.as_deref().is_some_and(Path::is_file);
         let resume = saved || !fresh_if_unsaved;
         let agent = inner.agents.restart(id)?;
@@ -719,6 +727,26 @@ impl Inner {
             .terminals
             .get(&id)
             .map(|running| running.terminal.clone())
+    }
+
+    /// An agent that can be launched again, and the folder it works in: 409
+    /// while it runs or once its folder is gone.
+    fn stopped_agent(&self, id: i64) -> Result<(Agent, PathBuf), AgentError> {
+        let agent = self.agent(id)?;
+        if agent.state.is_running() {
+            return Err(AgentError::Conflict(format!(
+                "agent {id} is still running; only an exited or interrupted agent can be resumed"
+            )));
+        }
+        let workspace = self.projects.workspace(agent.workspace_id)?;
+        let cwd = agent.cwd.clone().unwrap_or(workspace.path);
+        if !cwd.is_dir() {
+            return Err(AgentError::Conflict(format!(
+                "agent {id}'s folder {} is gone, so it can't be resumed",
+                cwd.display()
+            )));
+        }
+        Ok((agent, cwd))
     }
 
     /// The terminal of a running agent, and its state. 409 once it exited.

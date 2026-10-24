@@ -233,6 +233,10 @@ public struct ToolCall: Codable, Equatable, Sendable {
         "agent_read": "Checked on an agent",
         "agent_stop": "Stopped an agent",
         "brief_update": "Updated its brief",
+        "memory_list": "Looked at its notes",
+        "memory_read": "Read a note",
+        "memory_write": "Saved a note",
+        "memory_delete": "Deleted a note",
     ]
 }
 

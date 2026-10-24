@@ -340,6 +340,14 @@ export class DaemonClient {
     return this.send("POST", `/v1/projects/${projectId}/staff/start`, undefined, decodeStaff);
   }
 
+  /**
+   * Drops its Claude session and starts it in a new one, with its brief and
+   * memory notes. It stays the same agent; a running chief is stopped first.
+   */
+  newStaffSession(projectId: number): Promise<Staff> {
+    return this.send("POST", `/v1/projects/${projectId}/staff/new-session`, undefined, decodeStaff);
+  }
+
   /** Starts it if needed and types the text in. While it works, the text waits in its inbox. */
   async messageStaff(projectId: number, text: string, attachments: string[] = []): Promise<void> {
     await this.request("POST", `/v1/projects/${projectId}/staff/message`, {

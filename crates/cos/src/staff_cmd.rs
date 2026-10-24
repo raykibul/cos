@@ -1,6 +1,7 @@
 //! `cos staff [project]`, `cos staff say [project] "text"`,
-//! `cos staff attach [project]` and `cos staff pause|resume [project]`: a
-//! project's Chief of Staff. The project defaults to the one you're in, or
+//! `cos staff attach [project]`, `cos staff pause|resume [project]`,
+//! `cos staff new [project]` and `cos staff memory [project]`: a project's
+//! Chief of Staff. The project defaults to the one you're in, or
 //! the only one.
 
 use std::process::ExitCode;
@@ -51,6 +52,17 @@ enum StaffCommand {
         /// Project id or name.
         project: Option<String>,
     },
+    /// Drop its Claude session and start a new one, with its brief and memory
+    /// notes. The agents it started stay its own.
+    New {
+        /// Project id or name.
+        project: Option<String>,
+    },
+    /// Print its memory notes.
+    Memory {
+        /// Project id or name.
+        project: Option<String>,
+    },
 }
 
 pub(crate) async fn staff(home: &CosHome, args: StaffArgs) -> anyhow::Result<ExitCode> {
@@ -89,6 +101,30 @@ pub(crate) async fn staff(home: &CosHome, args: StaffArgs) -> anyhow::Result<Exi
         }
         Some(StaffCommand::Pause { project: key }) => pause(&client, key.as_deref(), true).await,
         Some(StaffCommand::Resume { project: key }) => pause(&client, key.as_deref(), false).await,
+        Some(StaffCommand::New { project: key }) => {
+            let project = project(&client, key.as_deref()).await?;
+            client.new_staff_session(project.id).await?;
+            println!(
+                "Started the Chief of Staff of {} in a new session. Follow it with `cos staff attach {}`.",
+                project.name, project.name
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(StaffCommand::Memory { project: key }) => {
+            let project = project(&client, key.as_deref()).await?;
+            let notes = client.staff_memory(project.id).await?;
+            if notes.is_empty() {
+                println!("The Chief of Staff of {} has no memory notes yet.", project.name);
+            }
+            for (index, note) in notes.iter().enumerate() {
+                if index > 0 {
+                    println!();
+                }
+                println!("## {}: {}", note.name, note.description);
+                println!("{}", note.body);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 

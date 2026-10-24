@@ -751,6 +751,14 @@ export class CosStore {
     return staff;
   }
 
+  /** A new Claude session for the chief: its chat starts over. */
+  async newStaffSession(projectId: number): Promise<Staff> {
+    const staff = await this.client.newStaffSession(projectId);
+    this.storeStaff(staff);
+    this.agentsRefresh.request();
+    return staff;
+  }
+
   /** `null` for the default model. It applies from the chief's next start. */
   async setStaffModel(projectId: number, model: string | null): Promise<Staff> {
     const staff = await this.client.setStaff(projectId, { model });

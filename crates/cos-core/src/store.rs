@@ -400,6 +400,19 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     DROP TABLE tasks;
     DROP TABLE runs;
 ",
+    "
+    -- A Chief of Staff's memory notes: named, with a one-line description
+    -- that goes in its system prompt, and a body it reads when it needs it.
+    CREATE TABLE staff_notes (
+        project_id  INTEGER NOT NULL REFERENCES projects (id),
+        name        TEXT    NOT NULL,
+        description TEXT    NOT NULL,
+        body        TEXT    NOT NULL,
+        created_ms  INTEGER NOT NULL,
+        updated_ms  INTEGER NOT NULL,
+        PRIMARY KEY (project_id, name)
+    );
+",
 ];
 
 #[derive(Debug, thiserror::Error)]

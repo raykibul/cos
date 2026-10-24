@@ -593,6 +593,7 @@ impl Store {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM staff_inbox WHERE project_id = ?1", [id])?;
         tx.execute("DELETE FROM staff_wakeups WHERE project_id = ?1", [id])?;
+        tx.execute("DELETE FROM staff_notes WHERE project_id = ?1", [id])?;
         tx.execute("DELETE FROM staff WHERE project_id = ?1", [id])?;
         tx.execute("DELETE FROM projects WHERE id = ?1", [id])?;
         tx.commit()?;

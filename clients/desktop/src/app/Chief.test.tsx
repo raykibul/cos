@@ -365,6 +365,22 @@ describe("chief page", () => {
     expect(screen.queryByRole("region", { name: "Coordination paused" })).toBeNull();
   });
 
+  it("starts a new session from the menu, and the chat starts over", async () => {
+    const { user, daemon, cos } = await renderApp({ kind: "chief", id: 1 });
+    const before = cos.get().agents.find((a) => a.id === 40)?.sessionId;
+    expect(screen.getByText(/Logins expire after five minutes/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Chief of Staff actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /^New session/ }));
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/projects/1/staff/new-session",
+      body: null,
+    });
+    expect(cos.get().agents.find((a) => a.id === 40)?.sessionId).not.toBe(before);
+    expect(screen.queryByText(/Logins expire after five minutes/)).toBeNull();
+  });
+
   it("counts the updates waiting while paused, and they go once it resumes", async () => {
     const { user, cos } = await renderApp({ kind: "chief", id: 1 }, { staffPaused: true });
     const strip = screen.getByRole("region", { name: "Coordination paused" });
