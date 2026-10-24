@@ -5,7 +5,8 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use cos_core::{Agent, AgentState, Base, Role, Workspace};
+use cos_core::staff::MAX_NOTES;
+use cos_core::{Agent, AgentState, Base, Role, StaffNote, Workspace};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -79,6 +80,21 @@ struct BriefUpdate {
     brief: String,
 }
 
+/// `memory_read` and `memory_delete`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryRead {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryWrite {
+    name: String,
+    description: String,
+    body: String,
+}
+
 impl Staff {
     /// Runs one tool for the Chief of Staff `agent_id` and returns the text
     /// it reads. Errors are meant for it too.
@@ -116,10 +132,11 @@ impl Staff {
             }
             "agent_read" => self.agent_read(project_id, parse(name, arguments)?).await,
             "agent_stop" => self.agent_stop(project_id, parse(name, arguments)?),
-            "brief_update" => {
-                self.brief_update(project_id, agent_id, parse(name, arguments)?)
-                    .await
-            }
+            "brief_update" => self.brief_update(project_id, parse(name, arguments)?).await,
+            "memory_list" => self.memory_list(project_id),
+            "memory_read" => self.memory_read(project_id, parse(name, arguments)?),
+            "memory_write" => self.memory_write(project_id, parse(name, arguments)?).await,
+            "memory_delete" => self.memory_delete(project_id, parse(name, arguments)?).await,
             _ => Err(ApiError::not_found(&format!("there is no tool {name}"))),
         }
     }
@@ -308,25 +325,83 @@ impl Staff {
         Ok(format!("Stopping agent {}.", agent.id))
     }
 
-    async fn brief_update(
-        &self,
-        project_id: i64,
-        staff_id: i64,
-        update: BriefUpdate,
-    ) -> Result<String, ApiError> {
-        let inner = &self.inner;
-        let brief = inner.books.set_brief(project_id, &update.brief)?;
-        inner.log_changed(project_id)?;
-        // The next start appends the new brief.
-        let project = inner.projects.get(project_id).await?;
-        let record = inner.books.record(project_id)?;
-        let system_prompt = prompt::system_prompt(&project.name, &brief);
-        inner.agents.set_next_launch(
-            staff_id,
-            Some(&system_prompt),
-            inner.model(record.model.as_deref()).as_deref(),
-        )?;
+    async fn brief_update(&self, project_id: i64, update: BriefUpdate) -> Result<String, ApiError> {
+        let brief = self.inner.books.set_brief(project_id, &update.brief)?;
+        self.inner.brief_or_notes_changed(project_id).await?;
         Ok(format!("Brief saved ({} bytes).", brief.len()))
+    }
+
+    fn memory_list(&self, project_id: i64) -> Result<String, ApiError> {
+        let notes: Vec<Value> = self
+            .inner
+            .books
+            .notes(project_id)?
+            .iter()
+            .map(|note| {
+                json!({
+                    "name": note.name,
+                    "description": note.description,
+                    "bytes": note.body.len(),
+                    "updated": updated(note.updated_ms),
+                })
+            })
+            .collect();
+        Ok(pretty(&json!({ "notes": notes, "max_notes": MAX_NOTES })))
+    }
+
+    fn memory_read(&self, project_id: i64, read: MemoryRead) -> Result<String, ApiError> {
+        let note = self.note(project_id, &read.name)?;
+        Ok(pretty(&json!({
+            "name": note.name,
+            "description": note.description,
+            "updated": updated(note.updated_ms),
+            "body": note.body,
+        })))
+    }
+
+    async fn memory_write(&self, project_id: i64, write: MemoryWrite) -> Result<String, ApiError> {
+        let existed = self.inner.books.note(project_id, &write.name)?.is_some();
+        let note = self
+            .inner
+            .books
+            .write_note(project_id, &write.name, &write.description, &write.body)?;
+        self.inner.brief_or_notes_changed(project_id).await?;
+        let verb = if existed { "Replaced" } else { "Saved" };
+        Ok(format!(
+            "{verb} the note {} ({} bytes).",
+            note.name,
+            note.body.len()
+        ))
+    }
+
+    async fn memory_delete(&self, project_id: i64, delete: MemoryRead) -> Result<String, ApiError> {
+        let note = self.note(project_id, &delete.name)?;
+        self.inner.books.delete_note(project_id, &note.name)?;
+        self.inner.brief_or_notes_changed(project_id).await?;
+        Ok(format!("Deleted the note {}.", note.name))
+    }
+
+    /// One of the project's notes, or a 404 that lists the names there are.
+    fn note(&self, project_id: i64, name: &str) -> Result<StaffNote, ApiError> {
+        if let Some(note) = self.inner.books.note(project_id, name)? {
+            return Ok(note);
+        }
+        let names: Vec<String> = self
+            .inner
+            .books
+            .notes(project_id)?
+            .into_iter()
+            .map(|note| note.name)
+            .collect();
+        let known = if names.is_empty() {
+            "there are no notes yet".to_owned()
+        } else {
+            format!("the notes are: {}", names.join(", "))
+        };
+        Err(ApiError::not_found(&format!(
+            "there is no note {:?}; {known}",
+            name.trim()
+        )))
     }
 
     /// Copies files from the chief's attachments into `folder`, where an
@@ -371,6 +446,13 @@ impl Staff {
         }
         Ok(workspace)
     }
+}
+
+/// When a note last changed, as an RFC 3339 time the chief can read.
+fn updated(ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|at| at.round(jiff::Unit::Second).unwrap_or(at).to_string())
+        .unwrap_or_default()
 }
 
 fn pretty(value: &impl serde::Serialize) -> String {

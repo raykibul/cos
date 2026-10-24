@@ -31,7 +31,8 @@ pub(crate) struct McpArgs {
 }
 
 const INSTRUCTIONS: &str = "Tools for a project's Chief of Staff in cos: list and create workspaces, start agents \
-in them, talk to them, read what they said, stop them, and keep your brief. Every call acts on your own project only.";
+in them, talk to them, read what they said, stop them, and keep your brief and memory notes. Every call acts on your \
+own project only.";
 
 pub(crate) async fn run(home: &CosHome, args: McpArgs) -> anyhow::Result<ExitCode> {
     let bridge = Bridge {
@@ -186,12 +187,60 @@ pub(crate) fn tools() -> Vec<Tool> {
         ),
         tool(
             "brief_update",
-            "Save your brief, replacing the old one: what you're working on, for whom, and what's open. At most 4 KiB. \
-             It is appended to your instructions whenever you restart, so it is all you keep.",
+            "Save your brief, replacing the old one: what you're working on now, for whom, and what's open. At most \
+             4 KiB. It is appended to your instructions whenever you restart. Keep lasting knowledge in memory notes \
+             instead.",
             json!({
                 "type": "object",
                 "properties": {"brief": {"type": "string"}},
                 "required": ["brief"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+        tool(
+            "memory_list",
+            "List your memory notes: name, description, size and when each last changed. Your instructions already \
+             list the notes as of your start.",
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            true,
+        ),
+        tool(
+            "memory_read",
+            "Read one of your memory notes in full: its description, when it last changed, and its body.",
+            json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+            true,
+        ),
+        tool(
+            "memory_write",
+            "Save a memory note, or replace the one with that name. A note holds one subject that stays true: what \
+             the user prefers, a decision and why, how something in the project works, where something is. Its name \
+             and description are listed in your instructions on every start, so make the description say when the \
+             note is worth reading. At most 50 notes of 8 KiB each.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Lowercase letters, digits and dashes, such as \"release-process\"."},
+                    "description": {"type": "string", "description": "One line, at most 200 characters."},
+                    "body": {"type": "string", "description": "The note, in markdown. At most 8 KiB."}
+                },
+                "required": ["name", "description", "body"],
+                "additionalProperties": false
+            }),
+            false,
+        ),
+        tool(
+            "memory_delete",
+            "Delete a memory note that is wrong or no longer useful.",
+            json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
                 "additionalProperties": false
             }),
             false,

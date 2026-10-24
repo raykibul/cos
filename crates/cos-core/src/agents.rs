@@ -322,6 +322,17 @@ impl Agents {
         Ok(())
     }
 
+    /// Moves the agent to a new Claude session that hasn't started yet: its
+    /// next launch starts `session_id` afresh, and it has no transcript
+    /// until that session's first hook. Logs nothing.
+    pub fn set_new_session(&self, id: i64, session_id: &str) -> Result<(), StoreError> {
+        self.store.lock().execute(
+            "UPDATE agents SET session_id = ?2, transcript_path = NULL WHERE id = ?1",
+            params![id, session_id],
+        )?;
+        Ok(())
+    }
+
     /// Logs `agent.transcript`: the transcript grew to `next` messages.
     pub fn log_transcript(&self, id: i64, next: usize) -> Result<(), StoreError> {
         self.log.append(

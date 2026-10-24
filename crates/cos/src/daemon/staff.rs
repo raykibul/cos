@@ -35,7 +35,7 @@ use cos_core::events::kind;
 use cos_core::staff::{MAX_WAKEUPS_PER_HOUR, next_batch};
 use cos_core::{
     Agent, AgentState, EventLog, Launch, LoggedEvent, Projects, Role, StaffBooks, StaffItem, StaffItemKind,
-    Store, Subscription, Workspace,
+    StaffNote, StaffRecord, Store, Subscription, Workspace,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -157,6 +157,21 @@ pub(crate) struct StaffMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct StaffInbox {
     pub items: Vec<StaffItem>,
+}
+
+/// `GET /v1/projects/{id}/staff/memory`.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct StaffMemory {
+    /// By name.
+    pub notes: Vec<StaffNote>,
+}
+
+/// Body of `PUT /v1/projects/{id}/staff/memory/{name}`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NoteWrite {
+    pub description: String,
+    pub body: String,
 }
 
 /// Runs the Chiefs of Staff. Cheap to clone.
@@ -382,6 +397,50 @@ impl Staff {
         Ok(self.inner.books.recent(project.id, INBOX_PAGE)?)
     }
 
+    /// The chief's memory notes, by name.
+    pub(crate) async fn memory(&self, project_id: i64) -> Result<Vec<StaffNote>, ApiError> {
+        let project = self.inner.projects.get(project_id).await?;
+        Ok(self.inner.books.notes(project.id)?)
+    }
+
+    /// Writes one of the chief's notes for you: it reads the new text on its
+    /// next start or new session.
+    pub(crate) async fn write_note(
+        &self,
+        project_id: i64,
+        name: &str,
+        note: &NoteWrite,
+    ) -> Result<StaffNote, ApiError> {
+        let project = self.inner.projects.get(project_id).await?;
+        let note = self
+            .inner
+            .books
+            .write_note(project.id, name, &note.description, &note.body)?;
+        self.inner.brief_or_notes_changed(project.id).await?;
+        Ok(note)
+    }
+
+    /// Deletes one of the chief's notes for you. 404 if there is none.
+    pub(crate) async fn delete_note(&self, project_id: i64, name: &str) -> Result<(), ApiError> {
+        let project = self.inner.projects.get(project_id).await?;
+        if !self.inner.books.delete_note(project.id, name)? {
+            return Err(ApiError::not_found(&format!(
+                "there is no note {:?}",
+                name.trim()
+            )));
+        }
+        self.inner.brief_or_notes_changed(project.id).await
+    }
+
+    /// Drops the chief's Claude session and starts it in a new one, with its
+    /// brief and notes as they are now. It stays the same agent, so the
+    /// agents it started are still its own. A running chief is stopped
+    /// first; one that never started just starts.
+    pub(crate) async fn new_session(&self, project_id: i64) -> Result<StaffView, ApiError> {
+        self.inner.new_session(project_id).await?;
+        self.view(project_id).await
+    }
+
     /// Before a project is removed: its Chief of Staff and worktree go too,
     /// unless the chief is running. Workspaces people see must be removed
     /// first, as before.
@@ -419,7 +478,7 @@ impl Inner {
         if record.stopped {
             self.books.set_stopped(project.id, false)?;
         }
-        let system_prompt = prompt::system_prompt(&project.name, &record.brief);
+        let system_prompt = self.system_prompt(&project.name, &record)?;
         let model = self.model(record.model.as_deref());
         let agent = match existing {
             Some(agent) => {
@@ -452,6 +511,86 @@ impl Inner {
             json!({ "project_id": project.id, "agent_id": agent.id }),
         )?;
         Ok(agent)
+    }
+
+    /// Its standing instructions, with its brief and notes as they are now.
+    fn system_prompt(&self, project: &str, record: &StaffRecord) -> Result<String, ApiError> {
+        let notes = self.books.notes(record.project_id)?;
+        Ok(prompt::system_prompt(project, &record.brief, &notes))
+    }
+
+    /// After its brief or notes changed: the chief gets them on its next
+    /// start or new session. A running chief keeps what it has until then,
+    /// and already knows what it wrote. Logs `staff.changed`.
+    async fn brief_or_notes_changed(&self, project_id: i64) -> Result<(), ApiError> {
+        self.log_changed(project_id)?;
+        let record = self.books.record(project_id)?;
+        let Some(agent_id) = record.agent_id else {
+            return Ok(());
+        };
+        if self.agents.get(agent_id).is_err() {
+            return Ok(());
+        }
+        let project = self.projects.get(project_id).await?;
+        let system_prompt = self.system_prompt(&project.name, &record)?;
+        self.agents.set_next_launch(
+            agent_id,
+            Some(&system_prompt),
+            self.model(record.model.as_deref()).as_deref(),
+        )?;
+        Ok(())
+    }
+
+    async fn new_session(&self, project_id: i64) -> Result<Agent, ApiError> {
+        let one_at_a_time = self.starting.lock().await;
+        let project = self.projects.get(project_id).await?;
+        let record = self.books.record(project.id)?;
+        let Some(agent) = record.agent_id.and_then(|id| self.agents.get(id).ok()) else {
+            drop(one_at_a_time);
+            return self.ensure_running(project.id).await;
+        };
+        if agent.state.is_running() {
+            self.agents.stop(agent.id)?;
+            self.until_stopped(agent.id).await?;
+        }
+        self.woken
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&agent.id);
+        if record.stopped {
+            self.books.set_stopped(project.id, false)?;
+        }
+        let system_prompt = self.system_prompt(&project.name, &record)?;
+        let model = self.model(record.model.as_deref());
+        self.agents
+            .set_next_launch(agent.id, Some(&system_prompt), model.as_deref())?;
+        let agent = self.agents.new_session(agent.id)?;
+        tracing::info!(
+            project = project.id,
+            agent = agent.id,
+            "the Chief of Staff started a new session"
+        );
+        self.log.append(
+            kind::STAFF_STARTED,
+            None,
+            json!({ "project_id": project.id, "agent_id": agent.id }),
+        )?;
+        Ok(agent)
+    }
+
+    /// Waits for a stopping agent's process to end.
+    async fn until_stopped(&self, agent_id: i64) -> Result<(), ApiError> {
+        let deadline = tokio::time::Instant::now() + self.config.ready_wait;
+        while self.agents.get(agent_id)?.state.is_running() {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    format!("agent {agent_id} didn't stop in time; try again"),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok(())
     }
 
     /// Projects whose chief the daemon stopped or lost (`interrupted`) and
@@ -510,7 +649,7 @@ impl Inner {
         }
     }
 
-    /// Logs `staff.changed`: its model, brief or pause changed.
+    /// Logs `staff.changed`: its model, brief, notes or pause changed.
     fn log_changed(&self, project_id: i64) -> Result<(), ApiError> {
         self.log
             .append(kind::STAFF_CHANGED, None, json!({ "project_id": project_id }))?;

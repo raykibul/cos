@@ -6,6 +6,10 @@
 //! - `POST /v1/projects/{id}/staff/start` → [`StaffView`]
 //! - `POST /v1/projects/{id}/staff/message` with [`StaffMessage`] → 202
 //! - `GET /v1/projects/{id}/staff/inbox` → [`StaffInbox`], newest first
+//! - `POST /v1/projects/{id}/staff/new-session` → [`StaffView`]
+//! - `GET /v1/projects/{id}/staff/memory` → [`StaffMemory`]
+//! - `PUT /v1/projects/{id}/staff/memory/{name}` with [`NoteWrite`] →
+//!   [`StaffNote`]; `DELETE` → 204
 //! - `POST /v1/agents/{id}/tools/{name}`: a Chief of Staff's tool call, from
 //!   `cos mcp`. The body is the tool's arguments; the answer is
 //!   [`ToolResult`]. Unix socket only ([`is_tool_route`]).
@@ -13,13 +17,15 @@
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::api::{ApiError, AppState};
-use super::staff::{StaffInbox, StaffMessage, StaffSettings, StaffView};
+use super::staff::{NoteWrite, StaffInbox, StaffMemory, StaffMessage, StaffSettings, StaffView};
+#[cfg(doc)]
+use cos_core::StaffNote;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -27,6 +33,12 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/v1/projects/{id}/staff/start", post(start))
         .route("/v1/projects/{id}/staff/message", post(message))
         .route("/v1/projects/{id}/staff/inbox", get(inbox))
+        .route("/v1/projects/{id}/staff/new-session", post(new_session))
+        .route("/v1/projects/{id}/staff/memory", get(memory))
+        .route(
+            "/v1/projects/{id}/staff/memory/{name}",
+            put(write_note).delete(delete_note),
+        )
         .route("/v1/agents/{id}/tools/{name}", post(call_tool))
 }
 
@@ -94,6 +106,39 @@ async fn inbox(State(state): State<AppState>, id: Id) -> Result<Json<StaffInbox>
     Ok(Json(StaffInbox {
         items: state.staff.inbox(project_id(id)?).await?,
     }))
+}
+
+async fn new_session(State(state): State<AppState>, id: Id) -> Result<Json<StaffView>, ApiError> {
+    Ok(Json(state.staff.new_session(project_id(id)?).await?))
+}
+
+async fn memory(State(state): State<AppState>, id: Id) -> Result<Json<StaffMemory>, ApiError> {
+    Ok(Json(StaffMemory {
+        notes: state.staff.memory(project_id(id)?).await?,
+    }))
+}
+
+type NoteId = Result<Path<(i64, String)>, PathRejection>;
+
+fn note_id(id: NoteId) -> Result<(i64, String), ApiError> {
+    id.map(|Path(id)| id)
+        .map_err(|_| ApiError::not_found("there is no such note"))
+}
+
+async fn write_note(
+    State(state): State<AppState>,
+    id: NoteId,
+    body: Result<Json<NoteWrite>, JsonRejection>,
+) -> Result<Json<cos_core::StaffNote>, ApiError> {
+    let (id, name) = note_id(id)?;
+    let Json(body) = body?;
+    Ok(Json(state.staff.write_note(id, &name, &body).await?))
+}
+
+async fn delete_note(State(state): State<AppState>, id: NoteId) -> Result<StatusCode, ApiError> {
+    let (id, name) = note_id(id)?;
+    state.staff.delete_note(id, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

@@ -145,7 +145,11 @@ async fn initialize_list_and_call_round_trip() {
             "agent_send",
             "agent_read",
             "agent_stop",
-            "brief_update"
+            "brief_update",
+            "memory_list",
+            "memory_read",
+            "memory_write",
+            "memory_delete"
         ]
     );
 

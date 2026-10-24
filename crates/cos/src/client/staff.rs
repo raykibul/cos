@@ -1,12 +1,14 @@
 //! The Chief of Staff's routes from the client side. See
 //! `docs/chief-of-staff.md`.
 
-use cos_core::StaffItem;
+use cos_core::{StaffItem, StaffNote};
 use hyper::Method;
 use serde_json::Value;
 
 use super::{Client, read_json};
-use crate::daemon::staff::{StaffInbox, StaffMessage, StaffSettings, StaffView};
+#[cfg(test)]
+use crate::daemon::staff::NoteWrite;
+use crate::daemon::staff::{StaffInbox, StaffMemory, StaffMessage, StaffSettings, StaffView};
 use crate::daemon::staff_api::ToolResult;
 
 impl Client {
@@ -80,6 +82,40 @@ impl Client {
         let path = format!("/v1/projects/{project_id}/staff/message");
         self.send(Method::POST, &path, Some(&StaffMessage { text, attachments }))
             .await?;
+        Ok(())
+    }
+
+    /// Drops the chief's Claude session and starts it in a new one.
+    pub(crate) async fn new_staff_session(&self, project_id: i64) -> anyhow::Result<StaffView> {
+        let path = format!("/v1/projects/{project_id}/staff/new-session");
+        read_json(self.send::<()>(Method::POST, &path, None).await?).await
+    }
+
+    /// The chief's memory notes, by name.
+    pub(crate) async fn staff_memory(&self, project_id: i64) -> anyhow::Result<Vec<StaffNote>> {
+        let memory: StaffMemory = self
+            .get_json(&format!("/v1/projects/{project_id}/staff/memory"))
+            .await?;
+        Ok(memory.notes)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn write_staff_note(
+        &self,
+        project_id: i64,
+        name: &str,
+        note: &NoteWrite,
+    ) -> anyhow::Result<StaffNote> {
+        let name = cos_core::staff::check_note_name(name)?;
+        let path = format!("/v1/projects/{project_id}/staff/memory/{name}");
+        read_json(self.send(Method::PUT, &path, Some(note)).await?).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn delete_staff_note(&self, project_id: i64, name: &str) -> anyhow::Result<()> {
+        let name = cos_core::staff::check_note_name(name)?;
+        let path = format!("/v1/projects/{project_id}/staff/memory/{name}");
+        self.send::<()>(Method::DELETE, &path, None).await?;
         Ok(())
     }
 

@@ -358,7 +358,10 @@ async fn the_brief_and_instructions_go_in_the_system_prompt() {
         "{prompt}"
     );
     assert!(prompt.contains("[cos · N updates]"), "{prompt}");
-    assert!(prompt.ends_with("Your brief:\n(empty)"), "{prompt}");
+    assert!(
+        prompt.ends_with("Your brief:\n(empty)\n\nYour memory notes:\n(none yet)"),
+        "{prompt}"
+    );
 
     let saved = fixture
         .tool(
@@ -373,7 +376,7 @@ async fn the_brief_and_instructions_go_in_the_system_prompt() {
         fixture.client.staff(fixture.project_id).await.unwrap().brief,
         "Ship the README."
     );
-    assert!(stored_prompt(staff.id).ends_with("Your brief:\nShip the README."));
+    assert!(stored_prompt(staff.id).contains("Your brief:\nShip the README.\n"));
 
     let too_long = fixture
         .tool(staff.id, "brief_update", json!({ "brief": "x".repeat(4097) }))
@@ -383,6 +386,209 @@ async fn the_brief_and_instructions_go_in_the_system_prompt() {
         too_long.to_string().contains("keep it under 4096"),
         "{too_long:#}"
     );
+}
+
+#[tokio::test]
+async fn memory_notes_are_listed_in_its_prompt_and_you_can_edit_them_too() {
+    let fixture = Fixture::start().await;
+    let staff = fixture.idle_staff().await;
+    let stored_prompt = || {
+        fixture
+            .records
+            .get(staff.id)
+            .unwrap()
+            .and_then(|agent| agent.system_prompt)
+            .unwrap_or_default()
+    };
+    let changed = || fixture.events(kind::STAFF_CHANGED).len();
+
+    let note = json!({
+        "name": "release",
+        "description": "How cos ships",
+        "body": "Tag v*, then wait for CI.",
+    });
+    let saved = fixture.tool(staff.id, "memory_write", note).await.unwrap();
+    assert_eq!(saved, "Saved the note release (25 bytes).");
+    assert_eq!(changed(), 1);
+    assert!(
+        stored_prompt().ends_with("Your memory notes:\n- release: How cos ships"),
+        "{}",
+        stored_prompt()
+    );
+
+    // You write one from an app; the chief reads it.
+    let yours = cos_core::StaffNote {
+        name: "people".into(),
+        description: "Who to ask about what".into(),
+        body: "Rakibul owns the apps.".into(),
+        created_ms: 0,
+        updated_ms: 0,
+    };
+    let written = fixture
+        .client
+        .write_staff_note(
+            fixture.project_id,
+            &yours.name,
+            &super::NoteWrite {
+                description: yours.description.clone(),
+                body: yours.body.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (written.name.as_str(), written.body.as_str()),
+        ("people", "Rakibul owns the apps.")
+    );
+    assert!(stored_prompt().contains("- people: Who to ask about what\n- release: How cos ships"));
+    let list = fixture.tool_json(staff.id, "memory_list", json!({})).await;
+    assert_eq!(list["notes"][0]["name"], json!("people"), "{list}");
+    assert_eq!(list["notes"][1]["bytes"], json!(25), "{list}");
+    let read = fixture
+        .tool_json(staff.id, "memory_read", json!({ "name": "people" }))
+        .await;
+    assert_eq!(read["body"], json!("Rakibul owns the apps."), "{read}");
+
+    // Replacing keeps one note under the name.
+    let replaced = fixture
+        .tool(
+            staff.id,
+            "memory_write",
+            json!({ "name": "release", "description": "How cos ships", "body": "Tag v*." }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replaced, "Replaced the note release (7 bytes).");
+    let notes = fixture.client.staff_memory(fixture.project_id).await.unwrap();
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[1].body, "Tag v*.");
+
+    // A wrong name says which notes there are; bad notes are refused.
+    let missing = fixture
+        .tool(staff.id, "memory_read", json!({ "name": "relase" }))
+        .await
+        .unwrap_err();
+    assert!(
+        missing.to_string().contains("the notes are: people, release"),
+        "{missing:#}"
+    );
+    let bad = fixture
+        .tool(
+            staff.id,
+            "memory_write",
+            json!({ "name": "Two Words", "description": "d", "body": "b" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(bad.to_string().contains("lowercase letters"), "{bad:#}");
+
+    // Deleting, by the chief or by you, takes it out of the prompt.
+    let deleted = fixture
+        .tool(staff.id, "memory_delete", json!({ "name": "release" }))
+        .await
+        .unwrap();
+    assert_eq!(deleted, "Deleted the note release.");
+    fixture
+        .client
+        .delete_staff_note(fixture.project_id, "people")
+        .await
+        .unwrap();
+    assert!(stored_prompt().ends_with("Your memory notes:\n(none yet)"));
+    assert_eq!(
+        status(
+            fixture
+                .client
+                .delete_staff_note(fixture.project_id, "people")
+                .await
+                .unwrap_err()
+        ),
+        404
+    );
+    assert_eq!(changed(), 5);
+}
+
+#[tokio::test]
+async fn a_new_session_keeps_the_chief_its_agents_and_its_memory() {
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+
+    // Before it ever started, a new session just starts it.
+    let view = client.new_staff_session(fixture.project_id).await.unwrap();
+    let staff = fixture
+        .until_state(view.agent_id.unwrap(), AgentState::Idle)
+        .await;
+    assert_eq!(fixture.events(kind::STAFF_STARTED).len(), 1);
+
+    assert_eq!(fixture.say(staff.id, "remember me").await, "echo: remember me");
+    let spawned = fixture
+        .tool_json(
+            staff.id,
+            "agent_spawn",
+            json!({ "prompt": "say hi", "workspace_id": fixture.workspace_id }),
+        )
+        .await;
+    let agent_id = spawned["agent_id"].as_i64().unwrap();
+    fixture
+        .tool(
+            staff.id,
+            "memory_write",
+            json!({ "name": "release", "description": "How cos ships", "body": "Tag v*." }),
+        )
+        .await
+        .unwrap();
+    let transcripts_before = fixture.events(kind::AGENT_TRANSCRIPT).len();
+
+    // While it runs: it is stopped, then started in a new Claude session.
+    let view = client.new_staff_session(fixture.project_id).await.unwrap();
+    assert_eq!(view.agent_id, Some(staff.id), "the same chief");
+    let fresh = fixture.until_state(staff.id, AgentState::Idle).await;
+    assert_ne!(fresh.session_id, staff.session_id);
+    let screen = client.screen(staff.id).await.unwrap();
+    assert!(
+        screen
+            .text
+            .contains(&format!("session {} (startup)", fresh.session_id)),
+        "{}",
+        screen.text
+    );
+    let prompt = fixture
+        .records
+        .get(staff.id)
+        .unwrap()
+        .and_then(|agent| agent.system_prompt)
+        .unwrap_or_default();
+    assert!(prompt.ends_with("- release: How cos ships"), "{prompt}");
+    assert_eq!(fixture.events(kind::STAFF_STARTED).len(), 2);
+
+    // Its chat starts over, and apps are told to read it from the top.
+    let reset = fixture.events(kind::AGENT_TRANSCRIPT)[transcripts_before..]
+        .iter()
+        .any(|event| event.data == json!({ "agent_id": staff.id, "next": 0 }));
+    assert!(reset, "agent.transcript with next 0");
+    assert_eq!(fixture.say(staff.id, "who am i").await, "echo: who am i");
+    let texts: Vec<String> = client
+        .transcript(staff.id, 0)
+        .await
+        .unwrap()
+        .messages
+        .iter()
+        .filter_map(|message| message.text.clone())
+        .collect();
+    assert_eq!(texts, ["who am i", "echo: who am i"]);
+
+    // The agent it started is still its own.
+    assert_eq!(client.agent(agent_id).await.unwrap().spawned_by, Some(staff.id));
+    let read = fixture
+        .tool_json(staff.id, "agent_read", json!({ "agent_id": agent_id }))
+        .await;
+    assert!(read["state"].is_string(), "{read}");
+
+    // A restart after that resumes the new session, not the old one.
+    client.stop_agent(staff.id).await.unwrap();
+    fixture.until_state(staff.id, AgentState::Exited).await;
+    client.start_staff(fixture.project_id).await.unwrap();
+    let resumed = fixture.until_state(staff.id, AgentState::Idle).await;
+    assert_eq!(resumed.session_id, fresh.session_id);
 }
 
 #[tokio::test]
@@ -567,7 +773,8 @@ async fn a_spawned_agents_news_wakes_the_chief_through_its_inbox() {
     let tools = fixture.say(staff.id, "mcp tools").await;
     assert_eq!(
         tools,
-        "workspaces_list,workspace_create,agent_spawn,agent_send,agent_read,agent_stop,brief_update"
+        "workspaces_list,workspace_create,agent_spawn,agent_send,agent_read,agent_stop,brief_update,memory_list,\
+         memory_read,memory_write,memory_delete"
     );
     let spawn = json!({ "prompt": "say hi", "workspace_id": fixture.workspace_id });
     let spawned = fixture.say(staff.id, &format!("mcp agent_spawn {spawn}")).await;

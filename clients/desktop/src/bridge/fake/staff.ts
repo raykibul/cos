@@ -306,7 +306,7 @@ export class FakeStaffDesk {
         context: this.contexts[id] ?? null,
       });
     }
-    p = path.match(/^\/v1\/projects\/(\d+)\/staff(?:\/([a-z]+))?$/);
+    p = path.match(/^\/v1\/projects\/(\d+)\/staff(?:\/([a-z-]+))?$/);
     if (!p) return null;
     const projectId = Number(p[1]);
     const action = p[2];
@@ -327,6 +327,10 @@ export class FakeStaffDesk {
     }
     if (action === "start" && method === "POST") {
       this.start(staff);
+      return ok(this.json(staff));
+    }
+    if (action === "new-session" && method === "POST") {
+      this.newSession(staff);
       return ok(this.json(staff));
     }
     if (action === "message" && method === "POST") {
@@ -462,6 +466,21 @@ export class FakeStaffDesk {
         text: "Done. I made that change and the tests still pass.",
       }),
     );
+  }
+
+  /** Drops its session: a new session id, an empty transcript, then a start. */
+  private newSession(staff: Raw): void {
+    const agent = this.agent(staff);
+    if (agent) {
+      Object.assign(agent, {
+        state: "exited",
+        session_id: `staff-${staff.project_id as number}-${this.host.id()}`,
+        transcript_path: null,
+      });
+      this.transcripts[agent.id] = [];
+      this.host.log("agent.transcript", { agent_id: agent.id, next: 0 });
+    }
+    this.start(staff);
   }
 
   private append(agent: FakeAgent, message: Raw): void {

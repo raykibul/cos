@@ -102,6 +102,14 @@ describe("DaemonClient routes", () => {
       undefined,
     ],
     [
+      "newStaffSession",
+      (c) => c.newStaffSession(1),
+      { project_id: 1, agent_id: 14 },
+      "POST",
+      "/v1/projects/1/staff/new-session",
+      undefined,
+    ],
+    [
       "messageStaff",
       (c) => c.messageStaff(1, "Plan it"),
       null,

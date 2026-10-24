@@ -9,6 +9,7 @@ import {
   FolderGit2,
   LayoutGrid,
   MoreHorizontal,
+  MessageSquarePlus,
   Pause,
   Play,
   RotateCcw,
@@ -174,6 +175,14 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
           onSelect: () =>
             void ui.perform("Couldn't start the Chief of Staff", () => cos.startStaff(projectId)),
         },
+    {
+      label: "New session",
+      icon: MessageSquarePlus,
+      detail: "Starts a fresh conversation; keeps its brief, notes and agents",
+      disabled: !canChange || state === "starting",
+      onSelect: () =>
+        void ui.perform("Couldn't start a new session", () => cos.newStaffSession(projectId)),
+    },
     {
       label: "Stop",
       icon: Square,

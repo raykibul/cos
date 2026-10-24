@@ -134,6 +134,7 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
     @Test func toolTitles() {
         #expect(ToolCall(name: "Bash").title == "Bash")
         #expect(ToolCall(name: "mcp__cos__brief_update").title == "Updated its brief")
+        #expect(ToolCall(name: "mcp__cos__memory_write").title == "Saved a note")
         #expect(ToolCall(name: "mcp__cos__new_thing").title == "new thing")
         #expect(ToolCall(name: "mcp__github__create_issue").title == "create issue (github)")
     }
