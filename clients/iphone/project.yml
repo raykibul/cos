@@ -11,10 +11,11 @@ options:
 packages:
   CosKit:
     path: ../shared/CosKit
-  # Draws agents' live terminals (TerminalHost.swift).
-  SwiftTerm:
-    url: https://github.com/migueldeicaza/SwiftTerm
-    exactVersion: 1.10.1
+  # Ghostty's terminal (libghostty) for agents' live terminals
+  # (TerminalHost.swift). Its C API isn't stable, so the version is exact.
+  GhosttyKit:
+    url: https://github.com/Lakr233/libghostty-spm
+    exactVersion: 2.2.2026102101
 
 settings:
   base:
@@ -37,7 +38,8 @@ targets:
       - path: Cos
     dependencies:
       - package: CosKit
-      - package: SwiftTerm
+      - package: GhosttyKit
+        product: GhosttyTerminal
     settings:
       base:
         PRODUCT_NAME: Cos

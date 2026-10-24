@@ -110,7 +110,7 @@ event: exit
 data: {"exit_code":0}
 ```
 
-- **First event:** always one `snapshot`. Its `data` is escape sequences that redraw the current screen, from vt100's `state_formatted()`: the contents, the cursor's position and visibility, and the input modes (application keypad and cursor keys, bracketed paste, mouse reporting, cursor style), so pastes and arrow keys typed after it reach Claude the right way. If Claude is on the alternate screen, the snapshot switches to it first (`\e[?1049h`). A terminal emulator such as SwiftTerm feeds it as-is, then every `output` chunk in order. The snapshot and the chunks after it come from the same lock, so nothing is missed or repeated between them.
+- **First event:** always one `snapshot`. Its `data` is escape sequences that redraw the current screen, from vt100's `state_formatted()`: the contents, the cursor's position and visibility, and the input modes (application keypad and cursor keys, bracketed paste, mouse reporting, cursor style), so pastes and arrow keys typed after it reach Claude the right way. If Claude is on the alternate screen, the snapshot switches to it first (`\e[?1049h`). A terminal emulator such as Ghostty feeds it as-is, then every `output` chunk in order. The snapshot and the chunks after it come from the same lock, so nothing is missed or repeated between them.
 - **Output:** chunks are raw PTY bytes. They're never split mid-escape on purpose, but a client must handle splits anyway.
 - **Resize:** sent when anyone resizes the agent. The PTY has one size, and the last resize wins.
 - **Exit:** after `exit` the stream ends.

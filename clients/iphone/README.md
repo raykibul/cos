@@ -8,7 +8,7 @@ The iPhone app for the cos daemon, in SwiftUI. It reaches a Mac or server runnin
 - `Cos/Fake`: `FakeCos`, a daemon in memory with invented data, for `-fakeData`, screenshots and tests.
 - `CosTests`: unit tests of the models against `FakeCos`.
 - `../shared/CosKit`: the client library (HTTP over TCP or a Unix socket, models, the event follower), a local Swift package.
-- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) 1.10.1: draws the live terminal. Xcode fetches it on the first build.
+- [libghostty-spm](https://github.com/Lakr233/libghostty-spm) 2.2.2026102101 (its `GhosttyTerminal` product): Ghostty's terminal, which draws the live terminal and keeps its scrollback. Xcode fetches it, with a prebuilt libghostty, on the first build. Its C API isn't stable, so the version is exact.
 
 ## Build
 
