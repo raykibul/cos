@@ -27,7 +27,7 @@ Everything lives in `~/.cos`, or in `$COS_HOME` if that's set. The directory is 
 | Path | |
 |---|---|
 | `cos.sock` | The API socket (mode 0600). Removed on a clean stop, and replaced on start if a crash left it behind. |
-| `hooks.sock` | Where the agents' hooks (relayed by `cos hook`) reach the daemon (mode 0600). One socket for every agent; hooks are routed by session id. |
+| `hooks.sock` | Where the agents' hooks (relayed by `cos hook`) reach the daemon (mode 0600). One socket for every agent; hooks are routed by session id, and by the agent id `cos hook --agent` adds when Claude starts a new session in the same terminal (`/clear`). |
 | `cos.db` | SQLite in WAL mode. The schema version is in `PRAGMA user_version`; migrations are in `crates/cos-core/src/store.rs`. |
 | `daemon.lock` | Holds the running daemon's pid. Its lock means only one daemon runs per home. |
 | `logs/daemon.log` | The daemon's stderr when launchd or systemd runs it. |
@@ -240,7 +240,7 @@ Unknown device ids get 404, a bad port 400.
 
 An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it owns, in a workspace's folder. Apps show its terminal live and type into it; the daemon follows it through hooks, not by reading the screen. The routes, JSON, events and CLI are in [agents-api.md](agents-api.md); this section is how the daemon does it. The code is `crates/cos/src/daemon/agents.rs` (process side) and `cos_core::agents` (the `agents` and `approvals` tables).
 
-- **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder (the folder, system prompt and MCP config are recorded so `resume` starts it the same way). The hooks run `cos hook`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
+- **Starting:** the daemon picks the session id, registers it, then runs `claude --session-id <id> --settings <hooks>` in the workspace folder (the folder, system prompt and MCP config are recorded so `resume` starts it the same way). The hooks run `cos hook --agent <id>`, which relays each one to `<home>/hooks.sock`. `COS_CLAUDE_BIN` overrides which `claude` runs (tests use `cos-fake-claude`).
 - **Environment:** each launch and resume gets the global and project variables as they are at that moment, under the ones cos sets itself (see [Environment](#environment)). The agent records their names in `env_names`.
 - **States** come from hooks: `SessionStart` → `idle`, `UserPromptSubmit` and `PreToolUse` → `working`, `PermissionRequest` → `waiting_approval`, `Stop` → `idle`, process exit → `exited`. The only things read from the screen, before the first hook, are Claude's trust dialog (`needs_trust`) and its login screen (`needs_login`).
 - **Approvals:** a `PermissionRequest` hook waits on the socket while the approval is `pending`. Answering it through the API answers the hook. If the hook goes away (answered in the terminal) or the agent's next hook arrives first, the approval is `settled` by `terminal`. Every approval waits for you, however long it takes; the approvals policy only says why it asks (see "Approvals policy" below).

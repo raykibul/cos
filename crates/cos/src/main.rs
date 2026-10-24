@@ -75,7 +75,12 @@ enum Command {
     Sessions(sessions_cmd::SessionsArgs),
     /// Run by Claude Code's hooks in sessions cos starts: forwards the hook to cos.
     #[command(hide = true)]
-    Hook,
+    Hook {
+        /// The agent this session belongs to, added to every hook so the
+        /// daemon can follow it into a new session (`/clear`).
+        #[arg(long)]
+        agent: Option<i64>,
+    },
     /// Let your other devices reach this daemon over Tailscale: `on`, `off` or show the state.
     Remote {
         #[command(subcommand)]
@@ -135,9 +140,14 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
-    if let Command::Hook = cli.command {
+    if let Command::Hook { agent } = cli.command {
         let socket = std::env::var_os(cos_harness::claude::hooks::SOCKET_ENV).map(std::path::PathBuf::from);
-        cos_harness::claude::hooks::relay(socket.as_deref(), &mut std::io::stdin(), &mut std::io::stdout());
+        cos_harness::claude::hooks::relay(
+            socket.as_deref(),
+            agent,
+            &mut std::io::stdin(),
+            &mut std::io::stdout(),
+        );
         return Ok(ExitCode::SUCCESS);
     }
     let home = CosHome::from_env()?;
@@ -176,7 +186,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Workspace(command) => projects_cmd::workspace(&home, command).await,
         Command::Try(args) => try_cmd::run(args).await,
         Command::Sessions(args) => sessions_cmd::run(&home, args).await,
-        Command::Hook => unreachable!("handled above"),
+        Command::Hook { .. } => unreachable!("handled above"),
         Command::Remote { action } => devices_cmd::remote(&home, action).await,
         Command::Devices { action } => devices_cmd::devices(&home, action).await,
         Command::Agent(command) => agents_cmd::agent(&home, command).await,

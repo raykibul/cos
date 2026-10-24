@@ -7,6 +7,12 @@
 //!   [`super::approvals`]), and `waiting_approval`
 //! - `Stop` → `idle`, with `last_message`
 //!
+//! Hooks are routed by session id. Claude starts a new session in the same
+//! terminal on `/clear` (and on `/resume` of another one), so a `SessionStart`
+//! from an unknown session that names one of our agents (the relay adds the
+//! agent id) moves that agent to the new session: its transcript, its state,
+//! its approvals and its next `--resume` follow.
+//!
 //! A permission request can also be answered in the terminal. Claude doesn't
 //! kill the waiting hook promptly then, so a pending approval counts as
 //! `settled` once its hook is withdrawn **or** a later hook shows the session
@@ -54,10 +60,14 @@ impl Inner {
     fn on_fired(self: &Arc<Self>, hook: Hook) -> Result<(), StoreError> {
         let mut live = self.live();
         let session = hook.session_id.as_deref().unwrap_or_default();
-        let Some(&id) = live.by_session.get(session) else {
-            // Not one of ours. Dropping a permission hook unanswered leaves
-            // the decision to Claude's own prompt in the terminal.
-            return Ok(());
+        let id = match live.by_session.get(session) {
+            Some(&id) => id,
+            None => match self.follow_new_session(&mut live, &hook)? {
+                Some(id) => id,
+                // Not one of ours. Dropping a permission hook unanswered
+                // leaves the decision to Claude's own prompt in the terminal.
+                None => return Ok(()),
+            },
         };
         if let Some(running) = live.terminals.get_mut(&id) {
             running.heard = true;
@@ -132,6 +142,34 @@ impl Inner {
             _ => self.agents.touch(id)?,
         }
         Ok(())
+    }
+
+    /// A new session started in a running agent's terminal (`/clear`): the
+    /// agent moves to it, and its transcript starts over. Only `SessionStart`
+    /// moves an agent, so a late hook from the old session can't move it
+    /// back.
+    fn follow_new_session(&self, live: &mut Live, hook: &Hook) -> Result<Option<i64>, StoreError> {
+        let (Some(id), Some(session)) = (hook.agent_id, hook.session_id.as_deref()) else {
+            return Ok(None);
+        };
+        let running = live.terminals.get(&id).is_some_and(|running| !running.exited);
+        if hook.event != "SessionStart" || session.is_empty() || !running {
+            return Ok(None);
+        }
+        self.agents.set_session_id(id, session)?;
+        tracing::info!(agent = id, session, "the agent moved to a new Claude session");
+        live.by_session.retain(|_, agent| *agent != id);
+        live.by_session.insert(session.to_owned(), id);
+        // Whatever the old session asked is gone with it.
+        self.settle_all(live, id, Some(DecidedBy::Terminal))?;
+        if let Some(running) = live.terminals.get_mut(&id) {
+            running.open_tools.clear();
+        }
+        // The hook's transcript path is recorded next, as for any hook.
+        live.transcripts.remove(&id);
+        // A shorter transcript tells the apps to read it from the top.
+        self.agents.log_transcript(id, 0)?;
+        Ok(Some(id))
     }
 
     /// A permission hook stopped waiting: answered in the terminal, timed

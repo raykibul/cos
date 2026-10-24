@@ -28,7 +28,9 @@
 //! with its result, and each reply.
 //!
 //! `--resume <id>` continues session `<id>`; its `SessionStart` says
-//! `resume`. `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
+//! `resume`. `/clear` ends the session and starts a new one in the same
+//! terminal, as Claude does: a new id (`<id>-cleared`), a new transcript, and
+//! `SessionStart` with `clear`. `/exit` ends the session. With `COS_FAKE_CLAUDE_UNTRUSTED` set it first
 //! shows the trust dialog, reading keys one at a time like the real CLI: the
 //! arrows move the selection, which is redrawn, and Return confirms it.
 //! `COS_FAKE_CLAUDE_TRUST_DELAY_MS` drops keys typed that soon after the dialog
@@ -121,6 +123,13 @@ pub(crate) fn run(args: &[String]) {
             "/exit" => {
                 session.hook("SessionEnd", json!({ "reason": "prompt_input_exit" }));
                 return;
+            }
+            "/clear" => {
+                session.hook("SessionEnd", json!({ "reason": "clear" }));
+                session.id = format!("{}-cleared", session.id);
+                session.transcript = transcript_path(&session.id);
+                show(&format!("session {} (clear)", session.id));
+                session.hook("SessionStart", json!({ "source": "clear" }));
             }
             // Esc with nothing to interrupt.
             "" | ESC => {}
