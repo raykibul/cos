@@ -34,6 +34,26 @@ const shots = [
         .click();
     },
   ],
+  [
+    "chief-attach",
+    "page=chief:1",
+    async (page) => {
+      // A screenshot of the page itself stands in for the one you'd attach.
+      const shot = await page.screenshot({ clip: { x: 320, y: 60, width: 640, height: 400 } });
+      await page.getByTestId("attach-input").setInputFiles([
+        { name: "Screen Shot 2026-10-24.png", mimeType: "image/png", buffer: shot },
+        { name: "release-spec.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.7") },
+      ]);
+      await page
+        .getByRole("textbox", { name: "Message the Chief of Staff" })
+        .fill("The tab bar overlaps the sidebar on narrow windows, see the screenshot. Spec attached.");
+    },
+  ],
+  [
+    "chief-attached",
+    "page=chief:1",
+    (page) => page.getByRole("list", { name: "Files sent" }).scrollIntoViewIfNeeded(),
+  ],
   ["chief-empty", "page=chief:2"],
   ["chief-terminal", "page=chief:1&terminal"],
   ["chief-paused", "page=chief:1&paused"],
@@ -189,7 +209,10 @@ const server = createServer((req, res) => {
 await new Promise((resolve) => server.listen(4180, "127.0.0.1", resolve));
 
 mkdirSync(out, { recursive: true });
-const browser = await chromium.launch();
+// CHROMIUM_PATH: a Chromium other than the one this Playwright downloads.
+const browser = await chromium.launch(
+  process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
+);
 try {
   for (const scheme of ["light", "dark"]) {
     const context = await browser.newContext({
