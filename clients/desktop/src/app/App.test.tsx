@@ -63,6 +63,49 @@ describe("Waiting on you", () => {
     });
   });
 
+  it("answers the chosen request from the keyboard", async () => {
+    const harness = fakeStore();
+    const first = harness.daemon.approvals[0]!;
+    harness.daemon.approvals.push({
+      ...first,
+      id: 13,
+      agent_id: 7,
+      tool_input: { command: "cargo test", description: "Run the tests" },
+      summary: "Bash cargo test",
+      created_ms: Number(first.created_ms) + 1000,
+    });
+    const ui = createUiStore({ page: { kind: "waiting" } });
+    render(<App cos={harness.cos} ui={ui} />);
+    await act(async () => {
+      await harness.cos.start();
+      await settle();
+    });
+    const user = userEvent.setup();
+    const card = (text: string) => screen.getByText(text).closest("article")!;
+    expect(card("npm install left-pad --save")).toHaveAttribute("aria-current", "true");
+    expect(
+      within(card("npm install left-pad --save")).getByRole("button", { name: "Allow" }),
+    ).toHaveAttribute("aria-keyshortcuts", "Meta+Enter");
+    await user.keyboard("{ArrowDown}");
+    expect(card("cargo test")).toHaveAttribute("aria-current", "true");
+    await user.keyboard("{Meta>}{Backspace}{/Meta}");
+    await act(() => settle());
+    expect(harness.daemon.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/approvals/13",
+      body: { decision: "deny" },
+    });
+    // The one left takes its place; alone, it needs no ring.
+    expect(card("npm install left-pad --save")).not.toHaveAttribute("aria-current");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+    await act(() => settle());
+    expect(harness.daemon.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/approvals/12",
+      body: { decision: "allow" },
+    });
+  });
+
   it("shows the waiting count in the sidebar", async () => {
     const { cos } = await renderApp();
     const { waitingCount } = await import("../store/selectors");
@@ -122,10 +165,42 @@ describe("workspace page", () => {
 });
 
 describe("agent page", () => {
-  it("shows the approval banner and streams the terminal", async () => {
-    await renderApp({ kind: "agent", id: 8 });
+  it("shows the conversation and the approval, and the terminal on Ctrl-J", async () => {
+    const { user } = await renderApp({ kind: "agent", id: 8 });
     expect(screen.getByText("Claude wants to run")).toBeInTheDocument();
+    const log = page().getByRole("log", { name: "Conversation with Claude" });
+    expect(within(log).getByText(/The table columns pad by hand/)).toBeInTheDocument();
+    // The chief's line is cut from the first prompt and shown as where it came from.
+    expect(
+      within(log).getByText("Add left-pad to the formatter and use it for the table columns."),
+    ).toBeInTheDocument();
+    expect(within(log).getByText(/From the Chief of Staff/)).toBeInTheDocument();
+    expect(page().queryByRole("complementary", { name: "Claude's terminal" })).toBeNull();
+    // Typing would land on the permission prompt, so the box waits.
+    expect(
+      page().getByRole("textbox", { name: "Message Add left-pad to the formatter" }),
+    ).toBeDisabled();
+    await user.keyboard("{Control>}j{/Control}");
+    expect(page().getByRole("complementary", { name: "Claude's terminal" })).toBeInTheDocument();
     await waitFor(() => expect(written.join("")).toContain("Do you want to proceed?"));
+  });
+
+  it("sends a message to the agent from its composer", async () => {
+    const { user, daemon } = await renderApp({ kind: "agent", id: 7 });
+    const box = page().getByRole("textbox", { name: "Message Fix login bug" });
+    await user.type(box, "Also cover the refresh token{Enter}");
+    await act(() => settle());
+    const sent = daemon.requests.find((r) => r.path === "/v1/agents/7/input");
+    expect(sent?.body).toEqual({ text: "Also cover the refresh token" });
+    expect(box).toHaveValue("");
+    expect(page().getByText("Also cover the refresh token")).toBeInTheDocument();
+  });
+
+  it("keeps the chief's own agent page as its terminal", async () => {
+    await renderApp({ kind: "agent", id: 40 });
+    expect(page().queryByRole("log")).toBeNull();
+    expect(page().queryByRole("button", { name: /the terminal/ })).toBeNull();
+    await waitFor(() => expect(written.join("")).not.toBe(""));
   });
 
   it("shows a pending request with why cos asks you", async () => {
@@ -135,6 +210,17 @@ describe("agent page", () => {
       page().getByText(/cos asks you because it changes or downloads dependencies/),
     ).toBeInTheDocument();
     expect(page().getByRole("button", { name: "Allow" })).toBeInTheDocument();
+  });
+
+  it("allows its request with ⌘↩", async () => {
+    const { user, daemon } = await renderApp({ kind: "agent", id: 8 });
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/approvals/12",
+      body: { decision: "allow" },
+    });
   });
 
   it("offers Resume for an exited agent", async () => {

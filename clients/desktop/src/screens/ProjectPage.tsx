@@ -171,8 +171,9 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
               aria-label={`Actions for ${workspaceName(workspace)}`}
               {...props}
               className={cx(
-                "relative z-10 flex size-6 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-subtle hover:text-ink",
-                "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
+                "relative z-10 flex h-6 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-subtle hover:text-ink",
+                // Hidden, it takes no room, so the waiting badge sits at the card's edge.
+                "w-0 overflow-hidden opacity-0 group-hover:w-6 group-hover:opacity-100 focus-visible:w-6 focus-visible:opacity-100 aria-expanded:w-6 aria-expanded:opacity-100",
                 waiting > 0 ? "" : "ml-auto",
               )}
             >

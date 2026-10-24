@@ -5,6 +5,7 @@
 
 import {
   GitBranch,
+  PanelLeft,
   Inbox,
   LayoutGrid,
   ScrollText,
@@ -15,6 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useApp, useCos, useUi } from "../app/context";
+import { useSidebar } from "../app/layout";
 import { tabInfo, tabState } from "../app/tabs";
 import { type Page, samePage } from "../app/ui";
 import { cx } from "../ui/cx";
@@ -32,12 +34,24 @@ const icons: Record<Exclude<Page["kind"], "chief">, LucideIcon> = {
 };
 
 export function TabBar() {
+  const { ui } = useApp();
   const tabs = useUi((s) => s.tabs);
+  const sidebar = useSidebar();
   return (
     <div
       data-tauri-drag-region
       className="flex h-[46px] shrink-0 items-end gap-0.5 overflow-x-auto border-b border-line bg-sidebar px-2 select-none [scrollbar-width:none]"
     >
+      <button
+        type="button"
+        aria-label={sidebar.shown ? "Hide the sidebar" : "Show the sidebar"}
+        title={`${sidebar.shown ? "Hide" : "Show"} the sidebar (⌘B)`}
+        aria-pressed={sidebar.shown}
+        onClick={() => ui.toggleSidebar(sidebar.narrow)}
+        className="mr-1 mb-[7px] flex size-7 shrink-0 items-center justify-center self-end rounded-lg text-ink-3 hover:bg-subtle hover:text-ink"
+      >
+        <PanelLeft className="size-4" strokeWidth={1.8} />
+      </button>
       <div role="tablist" aria-label="Open pages" className="flex min-w-0 items-end gap-0.5">
         {tabs.map((page) => (
           <Tab key={`${page.kind}:${"id" in page ? page.id : ""}`} page={page} />

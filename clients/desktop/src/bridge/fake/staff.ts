@@ -186,7 +186,7 @@ export function makeStaff(
       },
       { project_id: 2, agent_id: null, model: null, brief: "", paused: false, updates_waiting: 0 },
     ] as Raw[],
-    transcripts: { 40: transcript } as Record<number, Raw[]>,
+    transcripts: { 40: transcript, ...agentTranscripts(ms) } as Record<number, Raw[]>,
     contexts: {
       40: {
         used_tokens: Math.round((WINDOW * (options.contextPercent ?? 42)) / 100) + 123,
@@ -194,6 +194,58 @@ export function makeStaff(
       },
     } as Record<number, Raw>,
     inboxes: { 1: inbox } as Record<number, Raw[]>,
+  };
+}
+
+/** What agents 7 and 8, which the cos chief started in lisbon, have said so far. */
+function agentTranscripts(ms: (agoSeconds: number) => number): Record<number, Raw[]> {
+  const chat = (lines: [string, number, string, string?][]): Raw[] =>
+    lines.map(([role, ago, body, tool], index) => ({
+      n: index + 1,
+      role: role === "tool" ? "assistant" : role,
+      kind: role === "tool" ? "tool" : "text",
+      text: role === "tool" ? "" : body,
+      ...(role === "tool" ? { tool: { name: body, summary: tool ?? "", is_error: false } } : {}),
+      ts_ms: ms(ago),
+    }));
+  return {
+    8: chat([
+      [
+        "user",
+        300,
+        "Add left-pad to the formatter and use it for the table columns.\n\n[cos] The Chief of Staff of cos started you.",
+      ],
+      ["assistant", 296, "I'll look at how the formatter pads columns first, then add the helper."],
+      ["tool", 292, "Read", "src/format/table.ts"],
+      ["tool", 288, "Grep", "padStart · 3 matches"],
+      [
+        "assistant",
+        60,
+        "The table columns pad by hand in three places. `left-pad` does it in one call, so I'll install it and use it in `table.ts`.",
+      ],
+      ["tool", 21, "Bash", "npm install left-pad --save"],
+    ]),
+    7: chat([
+      [
+        "user",
+        600,
+        "Logins expire after five minutes. Find out why and fix it, with a regression test.\n\n[cos] The Chief of Staff of cos started you.",
+      ],
+      ["tool", 590, "Read", "src/auth/session.ts"],
+      [
+        "assistant",
+        560,
+        "Found it: `TTL_MS` is `5 * 60 * 1000`, five minutes, where the comment and the config both say five hours.",
+      ],
+      ["tool", 540, "Edit", "src/auth/session.ts · +1 −1"],
+      ["tool", 500, "Write", "src/auth/session.test.ts"],
+      [
+        "assistant",
+        460,
+        "Fixed. Sessions now last five hours, and `session.test.ts` checks the expiry. Running the whole suite before I call it ready.",
+      ],
+      ["tool", 30, "Bash", "npm test -- --runInBand"],
+    ]),
   };
 }
 
@@ -388,6 +440,28 @@ export class FakeStaffDesk {
     if (host.simulate) host.later(700, () => host.setAgentState(agent, "idle"));
     else agent.state = "idle";
     return agent;
+  }
+
+  /** `POST /v1/agents/{id}/input` to an agent of yours: what you typed joins its transcript, and it answers. */
+  agentInput(agent: FakeAgent, text: string): void {
+    if (agent.role === "staff" || !text.trim()) return;
+    this.append(agent, { role: "user", kind: "text", text });
+    if (!this.host.simulate) return;
+    this.host.later(1500, () =>
+      this.append(agent, {
+        role: "assistant",
+        kind: "tool",
+        text: "",
+        tool: { name: "Read", summary: "the files that ask touches", is_error: false },
+      }),
+    );
+    this.host.later(4800, () =>
+      this.append(agent, {
+        role: "assistant",
+        kind: "text",
+        text: "Done. I made that change and the tests still pass.",
+      }),
+    );
   }
 
   private append(agent: FakeAgent, message: Raw): void {

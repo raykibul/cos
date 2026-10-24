@@ -46,7 +46,9 @@ const shots = [
       ]);
       await page
         .getByRole("textbox", { name: "Message the Chief of Staff" })
-        .fill("The tab bar overlaps the sidebar on narrow windows, see the screenshot. Spec attached.");
+        .fill(
+          "The tab bar overlaps the sidebar on narrow windows, see the screenshot. Spec attached.",
+        );
     },
   ],
   [
@@ -93,6 +95,7 @@ const shots = [
   ["project", "page=project:1"],
   ["workspace", "page=workspace:3"],
   ["agent-working", "page=agent:7"],
+  ["agent-terminal", "page=agent:7&terminal"],
   ["agent-approval", "page=agent:8"],
   ["agent-trust", "page=agent:9"],
   ["agent-login", "page=agent:11"],
@@ -100,6 +103,7 @@ const shots = [
   ["sheet-new-agent", "page=workspace:3&dialog=newAgent:3"],
   ["sheet-add-project", "page=waiting&dialog=addProject"],
   ["sheet-new-workspace", "page=project:1&dialog=newWorkspace:1"],
+  ["sheet-new-session", "page=chief:1&dialog=newSession:1"],
   [
     "host-picker",
     "page=waiting",

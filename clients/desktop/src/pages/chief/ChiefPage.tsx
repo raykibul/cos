@@ -41,8 +41,8 @@ import { cx } from "../../ui/cx";
 import { EmptyState, IconButton, Spinner, StateDot } from "../../ui/kit";
 import { type MenuItem, Menu } from "../../ui/Menu";
 import { PageHeader } from "../../ui/Page";
+import { ChatComposer } from "../../ui/ChatComposer";
 import { useDraftFiles } from "../../ui/draftFiles";
-import { ChiefComposer } from "./ChiefComposer";
 import { ContextRing } from "./ContextRing";
 import { Conversation } from "./Conversation";
 import { PausedStrip } from "./PausedStrip";
@@ -231,7 +231,11 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="truncate text-[13.5px] leading-tight font-semibold text-ink">
                 Chief of Staff
-                <span className="font-normal text-ink-3"> · {projectName}</span>
+                {/* The tab names the project too, so a narrow header drops it first. */}
+                <span className="hidden font-normal text-ink-3 @min-[30rem]:inline">
+                  {" "}
+                  · {projectName}
+                </span>
               </h1>
               {account ? (
                 <span
@@ -287,7 +291,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
                   className="flex h-7 items-center gap-1.5 rounded-lg border border-line-strong px-2.5 text-[12px] text-ink-2 hover:bg-subtle hover:text-ink disabled:opacity-45 aria-expanded:bg-subtle"
                 >
                   <Sparkles className="size-3.5" strokeWidth={1.8} />
-                  {modelTitle}
+                  <span className="hidden @min-[26rem]:inline">{modelTitle}</span>
                   <ChevronDown className="size-3 text-ink-3" strokeWidth={2} />
                 </button>
               )}
@@ -347,8 +351,10 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
           {staff?.paused ? (
             <PausedStrip projectId={projectId} waiting={staff.updatesWaiting} />
           ) : null}
-          <ChiefComposer
+          <ChatComposer
             ref={input}
+            label="Message the Chief of Staff"
+            placeholder="What should we work on?"
             value={draft}
             onChange={setDraft}
             onSend={send}

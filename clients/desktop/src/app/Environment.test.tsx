@@ -331,17 +331,13 @@ describe("environment hints", () => {
     );
   });
 
-  it("shows the names an agent launched with on its tab", async () => {
+  it("shows the names an agent launched with on its card", async () => {
     await renderApp({ kind: "workspace", id: 3 });
-    const panel = main().getByRole("tabpanel");
-    const hint = within(panel).getByText("· env: CLAUDE_CONFIG_DIR, +2");
+    const sessions = within(main().getByRole("list", { name: "Sessions" }));
+    const [hint] = sessions.getAllByText("env: CLAUDE_CONFIG_DIR, +2");
     expect(hint).toHaveAttribute(
       "title",
       "Environment set at launch:\nCLAUDE_CONFIG_DIR\nANTHROPIC_BASE_URL\nDISABLE_TELEMETRY",
-    );
-    const agents = within(main().getByRole("tablist", { name: "Agents" }));
-    expect(agents.getAllByRole("tab")[0]?.getAttribute("title")).toMatch(
-      /env: CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL, DISABLE_TELEMETRY/,
     );
   });
 });
@@ -361,12 +357,13 @@ describe("an agent waiting for a Claude login", () => {
     expect(ui.store.getState().page).toEqual({ kind: "agent", id: 11 });
   });
 
-  it("shows its state and a banner over its terminal", async () => {
+  it("shows its state, a banner, and its terminal beside the conversation", async () => {
     await renderApp({ kind: "agent", id: 11 });
     expect(main().getByText("Needs Claude login")).toBeInTheDocument();
     const banner = main().getByRole("region", { name: "Waiting" });
     expect(banner).toHaveTextContent("Claude needs you to log in");
-    expect(banner).toHaveTextContent(`Log in in the terminal below, or run ${LOGIN} once.`);
+    expect(banner).toHaveTextContent(`Log in in the terminal on the right, or run ${LOGIN} once.`);
+    expect(main().getByRole("complementary", { name: "Claude's terminal" })).toBeInTheDocument();
   });
 
   it("shows in the chief's waiting strip when the chief started it", async () => {

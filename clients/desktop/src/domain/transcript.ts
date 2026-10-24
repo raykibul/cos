@@ -83,10 +83,20 @@ export function updateBody(text: string): string {
 }
 
 export type ConversationItem =
-  | { type: "user"; key: string; message: TranscriptMessage }
+  /** `fromChief`: the Chief of Staff wrote it, starting the agent; its `[cos]` line is cut off. */
+  | { type: "user"; key: string; message: TranscriptMessage; fromChief?: boolean }
   | { type: "turn"; key: string; messages: TranscriptMessage[]; tsMs: number }
   | { type: "update"; key: string; message: TranscriptMessage; count: number; sinceMs: number }
   | { type: "pending"; key: string; pending: PendingMessage };
+
+/** The line cos appends to the first prompt of an agent the chief starts (`spawned_line` in the daemon). */
+const SPAWNED_LINE = /\s*\[cos\] The Chief of Staff of .+? started you\.[\s\S]*$/;
+
+/** The prompt without cos's "the Chief of Staff started you" line, or null when it has none. */
+export function spawnedPrompt(text: string): string | null {
+  const match = SPAWNED_LINE.exec(text);
+  return match ? text.slice(0, match.index) : null;
+}
 
 /**
  * Rows for the page: your messages, the chief's turns (its text and tool
@@ -115,7 +125,17 @@ export function conversationItems(
       // A tool result Claude logs as a user turn has no text; skip it.
       if (message.kind !== "text" || !message.text.trim()) continue;
       turn = null;
-      items.push({ type: "user", key: `m${message.n}`, message });
+      const asked = spawnedPrompt(message.text);
+      items.push(
+        asked === null
+          ? { type: "user", key: `m${message.n}`, message }
+          : {
+              type: "user",
+              key: `m${message.n}`,
+              message: { ...message, text: asked },
+              fromChief: true,
+            },
+      );
     } else {
       if (message.kind !== "tool" && !message.text.trim()) continue;
       if (!turn) {

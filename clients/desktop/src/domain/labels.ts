@@ -78,3 +78,17 @@ export function permissionModeTitle(mode: string | null): string {
 export function pluralize(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
+
+/** What an agent that waits on you wants, in one word; null when it doesn't. */
+export function attentionWord(state: AgentState): string | null {
+  switch (state) {
+    case "waiting_approval":
+      return "Approve";
+    case "needs_trust":
+      return "Trust";
+    case "needs_login":
+      return "Log in";
+    default:
+      return null;
+  }
+}

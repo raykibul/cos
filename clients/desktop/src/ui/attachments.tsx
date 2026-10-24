@@ -2,7 +2,7 @@
 // paperclip, the chips on a composer (its files are in draftFiles.ts), the
 // drop overlay, and the files a sent message names, under its bubble.
 
-import { FileText, Paperclip, X } from "lucide-react";
+import { FileText, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type AttachedFile, isImage, sizeLabel } from "../api/attachments";
 import { useApp } from "../app/context";
@@ -34,7 +34,7 @@ export function AttachButton({
           className,
         )}
       >
-        <Paperclip className="size-4" strokeWidth={1.8} />
+        <Plus className="size-[18px]" strokeWidth={1.8} />
       </button>
       <input
         ref={input}

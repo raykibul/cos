@@ -1,19 +1,20 @@
-import { ArrowUp, ChevronDown, ShieldCheck, Sparkles } from "lucide-react";
+import { ChevronDown, ShieldCheck, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
 import { useFocusOnOpen } from "../app/focus";
 import { models, permissionModes } from "../domain/labels";
 import type { AttachTarget } from "../api/attachments";
-import { AttachButton, DraftChips, DropOverlay } from "../ui/attachments";
-import { useDraftFiles, useFileDrop } from "../ui/draftFiles";
-import { cx } from "../ui/cx";
-import { AutoTextarea, Spinner } from "../ui/kit";
+import { ChatComposer } from "../ui/ChatComposer";
+import { useDraftFiles } from "../ui/draftFiles";
 import { Menu } from "../ui/Menu";
 import type { ComposerValue } from "./composerValue";
 
+const pickerClass =
+  "flex h-[34px] items-center gap-1.5 rounded-full px-2.5 text-[12.5px] text-ink-2 hover:bg-subtle hover:text-ink aria-expanded:bg-subtle disabled:opacity-50";
+
 /**
- * Starts an agent the way Claude's chat input starts a conversation: a
- * rounded box to type in, the model and permission mode in its footer, and
- * a send button. Return sends; Shift-Return adds a line.
+ * Starts an agent the way Claude Desktop starts a conversation: a one-line
+ * box with + to attach, the permission mode and model beside the text, and
+ * a round send button. Return sends; Shift-Return adds a line.
  */
 export function Composer({
   onSend,
@@ -42,15 +43,8 @@ export function Composer({
   const input = useRef<HTMLTextAreaElement>(null);
   useFocusOnOpen(input, focusOnOpen);
   const files = useDraftFiles(attachTo);
-  const drop = useFileDrop((picked) => files.add(picked), Boolean(attachTo) && !disabled);
-  const canSend =
-    !disabled &&
-    !sending &&
-    !files.uploading &&
-    (allowEmpty || prompt.trim().length > 0 || files.ready.length > 0);
 
   const send = () => {
-    if (!canSend) return;
     setSending(true);
     const attachments = files.ready.map((a) => a.name);
     onSend({ prompt, model, permissionMode, attachments }).then(
@@ -67,62 +61,45 @@ export function Composer({
   const mode = permissionModes.find((m) => m.value === permissionMode) ?? permissionModes[0];
 
   return (
-    <div
-      {...drop.handlers}
-      className={cx(
-        "relative rounded-[20px] border border-line-strong bg-raised shadow-composer transition-[border-color,box-shadow]",
-        "focus-within:border-ink-3/50",
-        disabled && "opacity-60",
-      )}
-    >
-      <DropOverlay show={drop.dragging} />
-      <DraftChips draft={files} />
-      <AutoTextarea
-        ref={input}
-        aria-label="Prompt"
-        value={prompt}
-        autoFocus={autoFocus}
-        data-autofocus={autoFocus ? "" : undefined}
-        disabled={disabled}
-        minRows={2}
-        maxRows={14}
-        placeholder={placeholder}
-        onChange={(event) => setPrompt(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            send();
-          }
-        }}
-        className="block w-full bg-transparent px-4 pt-3.5 pb-1 text-[15px] leading-[1.55] text-ink outline-none placeholder:text-ink-3"
-      />
-      <div className="flex items-center gap-1 px-2.5 pb-2.5">
-        {attachTo ? (
-          <AttachButton onFiles={(picked) => files.add(picked)} disabled={disabled} />
-        ) : null}
-        <Menu
-          width={250}
-          items={permissionModes.map((m) => ({
-            label: m.title,
-            detail: m.detail,
-            checked: m.value === permissionMode,
-            onSelect: () => setPermissionMode(m.value),
-          }))}
-          trigger={(props) => (
-            <button
-              type="button"
-              {...props}
-              disabled={disabled}
-              aria-label={`Permission mode: ${mode.title}`}
-              className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-ink-2 hover:bg-subtle hover:text-ink aria-expanded:bg-subtle"
-            >
-              <ShieldCheck className="size-3.5" strokeWidth={1.8} />
-              {mode.title}
-              <ChevronDown className="size-3 text-ink-3" strokeWidth={2} />
-            </button>
-          )}
-        />
-        <div className="ml-auto flex items-center gap-1">
+    <ChatComposer
+      ref={input}
+      label="Prompt"
+      placeholder={placeholder}
+      value={prompt}
+      onChange={setPrompt}
+      onSend={send}
+      sending={sending}
+      disabled={disabled}
+      allowEmpty={allowEmpty}
+      autoFocus={autoFocus}
+      files={attachTo ? files : undefined}
+      sendLabel="Start agent"
+      trailing={
+        <>
+          <Menu
+            align="end"
+            width={250}
+            items={permissionModes.map((m) => ({
+              label: m.title,
+              detail: m.detail,
+              checked: m.value === permissionMode,
+              onSelect: () => setPermissionMode(m.value),
+            }))}
+            trigger={(props) => (
+              <button
+                type="button"
+                {...props}
+                disabled={disabled}
+                aria-label={`Permission mode: ${mode.title}`}
+                title={`Permission mode: ${mode.title}`}
+                className={pickerClass}
+              >
+                <ShieldCheck className="size-3.5" strokeWidth={1.8} />
+                <span className="hidden @min-[38rem]:inline">{mode.title}</span>
+                <ChevronDown className="size-3 text-ink-3" strokeWidth={2} />
+              </button>
+            )}
+          />
           <Menu
             align="end"
             width={200}
@@ -137,33 +114,16 @@ export function Composer({
                 {...props}
                 disabled={disabled}
                 aria-label={`Model: ${modelTitle}`}
-                className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-ink-2 hover:bg-subtle hover:text-ink aria-expanded:bg-subtle"
+                className={pickerClass}
               >
                 <Sparkles className="size-3.5" strokeWidth={1.8} />
-                {modelTitle}
+                <span className="hidden @min-[30rem]:inline">{modelTitle}</span>
                 <ChevronDown className="size-3 text-ink-3" strokeWidth={2} />
               </button>
             )}
           />
-          <button
-            type="button"
-            aria-label="Start agent"
-            title="Start agent (Return)"
-            disabled={!canSend}
-            onClick={send}
-            className={cx(
-              "ml-1 flex size-8 items-center justify-center rounded-lg transition-colors",
-              "bg-accent text-white hover:bg-accent-strong disabled:bg-accent/35 disabled:text-white/90",
-            )}
-          >
-            {sending ? (
-              <Spinner className="text-white" />
-            ) : (
-              <ArrowUp className="size-4" strokeWidth={2.2} />
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    />
   );
 }

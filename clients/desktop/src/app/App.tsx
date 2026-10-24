@@ -18,7 +18,9 @@ import { TabBar } from "../screens/TabBar";
 import { WaitingPage } from "../screens/WaitingPage";
 import { WorkspacePage } from "../screens/WorkspacePage";
 import { Dialogs } from "../sheets/Dialogs";
+import { cx } from "../ui/cx";
 import { AppContext, useApp, useCos, useUi } from "./context";
+import { useSidebar } from "./layout";
 import { type UiStore, createUiStore } from "./ui";
 
 export function App({ cos, ui }: { cos: CosStore; ui?: UiStore }) {
@@ -43,7 +45,8 @@ function Shell() {
     if (projectId !== null) ui.showProject(projectId);
   }, [ui, projectId]);
 
-  useShortcuts();
+  const sidebar = useSidebar();
+  useShortcuts(sidebar.narrow);
 
   return (
     // The window has no title bar. The rail's top (under the traffic
@@ -52,8 +55,13 @@ function Shell() {
     // buttons and tabs.
     <div className="flex h-full bg-page text-ink">
       <Rail shown={projectId} />
-      <Sidebar project={project} />
-      <main className="relative flex min-w-0 flex-1 flex-col border-l border-line bg-page">
+      {sidebar.shown ? <Sidebar project={project} /> : null}
+      <main
+        className={cx(
+          "relative flex min-w-0 flex-1 flex-col bg-page",
+          sidebar.shown && "border-l border-line",
+        )}
+      >
         <TabBar />
         <div className="flex min-h-0 flex-1 flex-col">
           <Content />
@@ -69,11 +77,11 @@ function Shell() {
 
 /**
  * The window's shortcuts: ⌘K the switcher, ⌘1 to ⌘9 each project's chief,
- * ⌘W closes the tab, and ⌃Tab or ⌘⇧] and ⌘⇧[ move between tabs.
- * They're caught before the page (a terminal, say) sees them, and wait while
- * a dialog is open.
+ * ⌘W closes the tab, ⌃Tab or ⌘⇧] and ⌘⇧[ move between tabs, and ⌘B shows
+ * or hides the sidebar. They're caught before the page (a terminal, say)
+ * sees them, and wait while a dialog is open.
  */
-function useShortcuts() {
+function useShortcuts(narrow: boolean) {
   const { cos, ui } = useApp();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -90,6 +98,8 @@ function useShortcuts() {
         if (project) ui.navigate({ kind: "chief", id: project.id });
       } else if (command && !event.shiftKey && key === "w") {
         ui.closeTab();
+      } else if (command && !event.shiftKey && event.code === "KeyB") {
+        ui.toggleSidebar(narrow);
       } else if (event.ctrlKey && !event.metaKey && key === "tab") {
         ui.cycleTab(event.shiftKey ? -1 : 1);
       } else if (command && event.shiftKey && (event.code === "BracketRight" || key === "}")) {
@@ -106,7 +116,7 @@ function useShortcuts() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [cos, ui]);
+  }, [cos, ui, narrow]);
 }
 
 function Content() {

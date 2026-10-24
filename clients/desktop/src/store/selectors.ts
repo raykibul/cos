@@ -90,6 +90,30 @@ export function workspacesNewestFirst(project: Project): Workspace[] {
   return [...project.workspaces].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
 }
 
+/** Sessions that work in one folder: a workspace and your agents in it, newest first. */
+export interface SessionGroup {
+  workspace: Workspace;
+  agents: Agent[];
+}
+
+/**
+ * A project's sessions (your agents in its workspaces) for the sidebar,
+ * grouped by the folder they share and ordered by their newest start, so a
+ * group stays put while its agents work. Empty workspaces are left out.
+ */
+export function sessionGroups(agents: Agent[], project: Project): SessionGroup[] {
+  const groups = project.workspaces
+    .map((workspace) => ({
+      workspace,
+      agents: agents
+        .filter((a) => a.workspaceId === workspace.id)
+        .sort((a, b) => b.startedMs - a.startedMs || b.id - a.id),
+    }))
+    .filter((g) => g.agents.length > 0);
+  const newest = (g: SessionGroup) => g.agents[0]!.startedMs;
+  return groups.sort((a, b) => newest(b) - newest(a) || b.workspace.id - a.workspace.id);
+}
+
 /** The chief's runtime agent, once it has started. */
 export function staffAgent(s: DaemonState, projectId: number): Agent | undefined {
   return agent(s, s.staffs[projectId]?.agentId);
