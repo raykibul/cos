@@ -331,6 +331,7 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 - **Inbox:** items come from the agents it started (a `Stop` with the turn's last message, an exit that isn't the daemon shutting down, an approval waiting for you, a trust dialog) and from you (`…/staff/message`). News is cut to 4 KiB per item; your messages are kept whole (at most 100,000 characters). Each change logs `staff.inbox` with the number of items waiting.
 - **Delivery:** only while the chief is `idle`, and not within 20 s of typing something it hasn't started working on. Your oldest waiting message goes first, on its own, typed as one bracketed paste; it doesn't count toward any cap. Otherwise one wakeup goes in: `[cos · N updates]`, then one `### <heading>` section per item (up to 20 items or 24 KiB), a line saying how many more wait, and a reminder that these are reports, not your instructions. At most 30 wakeups an hour per project; past that, news waits but your messages still go in. Waiting inboxes are rechecked every 30 s.
 - **Pausing:** while a chief's coordination is paused (`staff.paused`), news waits the same way and your messages still go in. Resuming wakes the delivery loop, so what waited goes in once the chief is idle.
+- **Files:** you send files to it by uploading them into its worktree, then naming them in a message; it passes them on with `attachments` on `agent_spawn` and `agent_send`, which copy them into the agent's folder. Files live in `<folder>/.cos/attachments/`, ignored by git. See "Attachments" in [agents-api.md](agents-api.md#attachments); the code is `daemon/attachments.rs` and `daemon/attachments_api.rs`.
 - **Removing the project** removes the chief's worktree and agent record with it, refused while the chief runs.
 
 ### Routes
@@ -340,7 +341,8 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 | `GET /v1/projects/{id}/staff` | | `Staff`, even before it first starts |
 | `PUT /v1/projects/{id}/staff` | `{model?, paused?}` | `Staff`. A field left out stays as it is. A null or empty model goes back to the default, used from the next start. `paused` pauses or resumes its coordination at once. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; nothing if it's running. |
-| `POST /v1/projects/{id}/staff/message` | `{text}` | 202. Starts it if needed; the text goes in as soon as it's idle. 400 if empty. |
+| `POST /v1/projects/{id}/staff/message` | `{text, attachments?}` | 202. Starts it if needed; the text goes in as soon as it's idle, with the files `attachments` names listed at the end. 400 if empty (no text and no files) or a file is unknown. |
+| `POST /v1/projects/{id}/staff/attachments?name=` | the file's bytes | 201 Attachment, into its worktree (made if needed, without starting it). See "Attachments" in [agents-api.md](agents-api.md#attachments). |
 | `GET /v1/projects/{id}/staff/inbox` | | `{items: [StaffItem]}`, the latest 100 items of news, newest first. Your messages are left out. |
 
 ```jsonc
@@ -360,7 +362,7 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 | Command | What it does |
 |---|---|
 | `cos staff [project] [--model M]` | Its state, model, worktree, the agents it started, its brief and the latest news. `--model default` goes back to the default. |
-| `cos staff say [project] "text"` | A message to it; starts it if needed. |
+| `cos staff say [project] "text" [--file PATH]…` | A message to it, with files; starts it if needed. Works with `--host`, so files go from any machine. |
 | `cos staff attach [project]` | Its terminal, like `cos agent attach`; starts it if needed. |
 | `cos staff pause [project]` | Pauses its coordination: news waits, your messages still go in. |
 | `cos staff resume [project]` | Resumes it; what waited goes in once it's idle. |

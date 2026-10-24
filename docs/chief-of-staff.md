@@ -46,13 +46,15 @@ Change it only together with all sides.
 |---|---|---|
 | `workspaces_list` | – | This project's workspaces, each with `id`, `title`, `city`, `branch`, `path`, and its agents: `id`, `title`, `state`, `model`, `spawned_by`, and `last_message` cut to 500 characters. |
 | `workspace_create` | `{title?, from?: "origin" \| "head"}` | Creates a workspace; returns it. |
-| `agent_spawn` | `{prompt, workspace_id?, new_workspace?: {title?, from?}, title?, model?, permission_mode?}` | Starts an agent. Give exactly one of `workspace_id` or `new_workspace`. Returns `{agent_id, workspace_id}`. The agent has `role: "user"` and `spawned_by` set to the chief's agent id. |
-| `agent_send` | `{agent_id, message}` | Types a message into the agent, as one bracketed paste. A stopped agent is resumed first. |
+| `agent_spawn` | `{prompt, workspace_id?, new_workspace?: {title?, from?}, title?, model?, permission_mode?, attachments?}` | Starts an agent. Give exactly one of `workspace_id` or `new_workspace`. Returns `{agent_id, workspace_id}`. The agent has `role: "user"` and `spawned_by` set to the chief's agent id. |
+| `agent_send` | `{agent_id, message, attachments?}` | Types a message into the agent, as one bracketed paste. A stopped agent is resumed first. |
 | `agent_read` | `{agent_id, screen?: bool}` | `{state, last_message}` with the full last message, plus the screen text if asked. |
 | `agent_stop` | `{agent_id}` | Stops the agent. |
 | `brief_update` | `{brief}` | Saves the brief. At most 4 KiB. |
 
 The tools work only on the chief's own project. An id from another project gets a tool error.
+
+**Files:** `attachments` on `agent_spawn` and `agent_send` takes the paths (or names) of files in the chief's own attachments folder, such as the ones you sent it. cos copies each into the agent's folder (`.cos/attachments/`, reusing an identical copy) and lists the copies' paths at the end of the prompt or message, as in "Attachments" in [agents-api.md](agents-api.md#attachments). Its system prompt tells it so.
 
 **Agents it starts** get this line appended to their first prompt:
 
@@ -99,7 +101,8 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 | `GET /v1/projects/{id}/staff` | | `Staff` (below). It exists even before the chief starts. |
 | `PUT /v1/projects/{id}/staff` | `{model?, paused?}` | `Staff`. A field left out stays as it is. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; does nothing if it's running. |
-| `POST /v1/projects/{id}/staff/message` | `{text}` | 202. Starts it if needed, then types the text in as a bracketed paste and presses Return. If it's working, the text waits in its inbox and is delivered first thing on the next wakeup. |
+| `POST /v1/projects/{id}/staff/message` | `{text, attachments?}` | 202. Starts it if needed, then types the text in as a bracketed paste and presses Return. If it's working, the text waits in its inbox and is delivered first thing on the next wakeup. `attachments` names files uploaded to its worktree; the text may then be empty. |
+| `POST /v1/projects/{id}/staff/attachments?name=` | the file's bytes | 201 Attachment. Into the chief's worktree, made if needed; the chief isn't started. See [agents-api.md](agents-api.md#attachments). |
 | `GET /v1/projects/{id}/staff/inbox` | | `{items: [...]}`, newest first: what agents reported, for the app's activity panel. |
 
 ```jsonc
@@ -119,7 +122,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 
 **CLI:**
 - `cos staff [project]`: its state, brief and agents.
-- `cos staff say [project] "text"`.
+- `cos staff say [project] "text" [--file PATH]…`: with `--file`, uploads each file first.
 - `cos staff attach [project]`: like `cos agent attach`.
 - `cos staff pause [project]` and `cos staff resume [project]`: its coordination.
 
