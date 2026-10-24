@@ -491,7 +491,11 @@ async fn files_go_up_and_come_down_as_base64() {
     let typeless = bridge.upload("/v1/upload", "", "").await.unwrap().body.unwrap();
     assert_eq!(typeless["content_type"], "application/octet-stream");
     assert_eq!(
-        bridge.upload("/v1/upload", "text/plain", "not base64!").await.unwrap_err().kind,
+        bridge
+            .upload("/v1/upload", "text/plain", "not base64!")
+            .await
+            .unwrap_err()
+            .kind,
         cos_bridge::ErrorKind::BadRequest
     );
     assert!(bridge.upload("/elsewhere", "text/plain", "").await.is_err());
