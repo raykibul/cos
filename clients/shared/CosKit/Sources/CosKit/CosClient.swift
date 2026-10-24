@@ -162,13 +162,15 @@ public struct CosClient: Sendable {
         _ method: String,
         _ path: String,
         headers: [(String, String)] = [],
-        json body: Data? = nil
+        json body: Data? = nil,
+        contentType: String = "application/json"
     ) async throws -> (SocketConnection, HTTPResponse) {
         let connection = SocketConnection(endpoint: endpoint)
         do {
             try await connection.open()
             try await connection.send(httpRequest(
-                method: method, path: path, host: endpoint.hostHeader, headers: headers, json: body.map { Array($0) }
+                method: method, path: path, host: endpoint.hostHeader, headers: headers,
+                json: body.map { Array($0) }, contentType: contentType
             ))
             let response = try await HTTPResponse(reader: connection)
             guard (200..<300).contains(response.head.status) else {

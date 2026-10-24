@@ -29,8 +29,14 @@ public protocol CosService: EventSource {
     func staff(projectId: Int) async throws -> Staff
     func startStaff(projectId: Int) async throws -> Staff
     func messageStaff(projectId: Int, text: String) async throws
+    /// A message naming files uploaded with `uploadAttachment(to: .staff…)`.
+    func messageStaff(projectId: Int, text: String, attachments: [String]) async throws
     func staffInbox(projectId: Int) async throws -> [StaffItem]
     func transcript(agentId: Int, after: Int) async throws -> Transcript
+
+    // Attachments ("Attachments" in docs/agents-api.md)
+    func uploadAttachment(to target: AttachTarget, name: String, contentType: String, data: Data) async throws -> Attachment
+    func attachmentData(agentId: Int, name: String) async throws -> Data
 
     // Environment
     func globalEnv() async throws -> EnvVars

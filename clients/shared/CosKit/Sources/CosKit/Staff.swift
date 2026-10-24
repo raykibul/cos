@@ -247,20 +247,26 @@ public struct TranscriptMessage: Codable, Equatable, Sendable, Identifiable {
     /// For tool calls.
     public var tool: ToolCall?
     public var tsMs: Int64
+    /// Files you attached through cos, which `text` leaves out.
+    public var attachments: [AttachedFile]
 
     public var id: Int { n }
 
-    public init(n: Int, role: MessageRole, kind: MessageKind, text: String = "", tool: ToolCall? = nil, tsMs: Int64 = 0) {
+    public init(
+        n: Int, role: MessageRole, kind: MessageKind, text: String = "", tool: ToolCall? = nil, tsMs: Int64 = 0,
+        attachments: [AttachedFile] = []
+    ) {
         self.n = n
         self.role = role
         self.kind = kind
         self.text = text
         self.tool = tool
         self.tsMs = tsMs
+        self.attachments = attachments
     }
 
     private enum CodingKeys: String, CodingKey {
-        case n, role, kind, text, tool, tsMs
+        case n, role, kind, text, tool, tsMs, attachments
     }
 
     public init(from decoder: Decoder) throws {
@@ -275,6 +281,7 @@ public struct TranscriptMessage: Codable, Equatable, Sendable, Identifiable {
         if kind == .text, role == .user, TaskNotification(text) != nil { kind = .task }
         self.kind = kind
         tsMs = c.int64(.tsMs) ?? 0
+        attachments = c.list(AttachedFile.self, .attachments)
     }
 
     public var date: Date { Date(unixMilliseconds: tsMs) }

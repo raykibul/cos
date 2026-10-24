@@ -1,5 +1,7 @@
 import CosKit
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A project's Chief of Staff as a chat, like a messaging app: your
 /// messages in bubbles on the right, its replies (markdown) on the left,
@@ -255,9 +257,12 @@ struct ChatRowView: View {
         switch row {
         case .user(let message, let receipt):
             Bubble(outgoing: true, time: message.tsMs, receipt: receipt) {
-                Text(message.text)
-                    .font(.body)
-                    .foregroundStyle(Palette.ink)
+                SentFiles(chat: chat, files: message.attachments)
+                if !message.text.isEmpty {
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundStyle(Palette.ink)
+                }
             }
             .contextMenu {
                 Button("Info", systemImage: "info.circle") { info = message }
@@ -269,9 +274,12 @@ struct ChatRowView: View {
         case .pending(let pending):
             VStack(alignment: .trailing, spacing: 4) {
                 Bubble(outgoing: true, time: pending.createdMs, receipt: pending.receipt) {
-                    Text(pending.text)
-                        .font(.body)
-                        .foregroundStyle(Palette.ink)
+                    SentFiles(chat: chat, files: pending.attachments)
+                    if !pending.text.isEmpty {
+                        Text(pending.text)
+                            .font(.body)
+                            .foregroundStyle(Palette.ink)
+                    }
                 }
                 if case .failed(let message) = pending.state {
                     failedFooter(pending, message)
@@ -532,39 +540,280 @@ struct WaitingMessage: View {
     }
 }
 
-/// The message box: a capsule field and a round send button.
+/// The message box: a paperclip (Photos or Files), the files you picked as
+/// chips, a capsule field and a round send button. Files upload as soon as
+/// you pick them; Send waits until they're up.
 struct Composer: View {
     @Bindable var chat: ChiefChat
     var focused: FocusState<Bool>.Binding
+    @State private var choosingPhotos = false
+    @State private var choosingFiles = false
+    @State private var photos: [PhotosPickerItem] = []
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message", text: $chat.draft, axis: .vertical)
-                .lineLimit(1...6)
-                .focused(focused)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Palette.line, lineWidth: 0.5))
-            Button {
-                Task { await chat.send() }
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(canSend ? Palette.claude : Palette.ink3.opacity(0.5), in: Circle())
+        VStack(spacing: 6) {
+            if !chat.files.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(chat.files) { file in
+                            DraftChip(file: file) { chat.removeFile(file.id) }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                }
+                .accessibilityLabel("Attached files")
             }
-            .disabled(!canSend)
-            .accessibilityLabel("Send")
+            HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    Button("Photos", systemImage: "photo.on.rectangle") { choosingPhotos = true }
+                    Button("Files", systemImage: "folder") { choosingFiles = true }
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(Palette.ink2)
+                        .frame(width: 36, height: 36)
+                }
+                .accessibilityLabel("Attach")
+                TextField("Message", text: $chat.draft, axis: .vertical)
+                    .lineLimit(1...6)
+                    .focused(focused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Palette.line, lineWidth: 0.5))
+                Button {
+                    Task { await chat.send() }
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(chat.canSend ? Palette.claude : Palette.ink3.opacity(0.5), in: Circle())
+                }
+                .disabled(!chat.canSend)
+                .accessibilityLabel("Send")
+            }
+            .padding(.horizontal, 10)
         }
-        .padding(.horizontal, 10)
         .padding(.top, 7)
         .padding(.bottom, 7)
         .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 0.5) }
+        .photosPicker(isPresented: $choosingPhotos, selection: $photos, maxSelectionCount: Attachment.maxPerMessage, matching: .images)
+        .onChange(of: photos) {
+            let picked = photos
+            photos = []
+            Task { for item in picked { await attachPhoto(item) } }
+        }
+        .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            Task { for url in urls { await attachFile(url) } }
+        }
     }
 
-    private var canSend: Bool {
-        !chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// A photo from the library. HEIC and other kinds become JPEG, which
+    /// Claude reads; PNG, JPEG, GIF and WebP go as they are.
+    private func attachPhoto(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            chat.refuse(name: "photo", contentType: "image/jpeg", size: 0, reason: "Couldn't read the photo")
+            return
+        }
+        let kind = item.supportedContentTypes.first { $0.conforms(to: .image) }
+        if let kind, let type = kind.preferredMIMEType, ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(type) {
+            await chat.attach(name: "photo.\(kind.preferredFilenameExtension ?? "jpg")", contentType: type, data: data)
+        } else if let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.85) {
+            await chat.attach(name: "photo.jpg", contentType: "image/jpeg", data: jpeg)
+        } else {
+            chat.refuse(name: "photo", contentType: "image/jpeg", size: data.count, reason: "Couldn't read the photo")
+        }
+    }
+
+    /// A file from Files (iCloud Drive, On My iPhone, a file provider).
+    private func attachFile(_ url: URL) async {
+        let name = url.lastPathComponent
+        let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if size > Attachment.maxBytes {
+            chat.refuse(name: name, contentType: type, size: size, reason: "Over 32 MB, the most cos takes")
+            return
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            chat.refuse(name: name, contentType: type, size: size, reason: "Couldn't read the file")
+            return
+        }
+        await chat.attach(name: name, contentType: type, data: data)
+    }
+}
+
+/// A file on the composer: a thumbnail or an icon, its name, and how its
+/// upload goes, with an × to take it off.
+struct DraftChip: View {
+    var file: DraftFile
+    var remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            FileThumb(contentType: file.contentType, data: file.preview, size: 34)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(file.name)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if file.isUploading { ProgressView().controlSize(.mini) }
+                    Text(detail)
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(failed ? Palette.red : Palette.ink3)
+            }
+            .frame(maxWidth: 150, alignment: .leading)
+            Button(action: remove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Palette.ink3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(file.name)")
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(failed ? Palette.red.opacity(0.5) : Palette.line, lineWidth: 0.5))
+    }
+
+    private var failed: Bool {
+        if case .failed = file.state { true } else { false }
+    }
+
+    private var detail: String {
+        switch file.state {
+        case .uploading: "Uploading…"
+        case .ready: Attachment.sizeLabel(file.size)
+        case .failed(let reason): reason
+        }
+    }
+}
+
+/// A square thumbnail for a picture, else an icon for its kind.
+struct FileThumb: View {
+    var contentType: String
+    var data: Data?
+    var size: CGFloat
+
+    var body: some View {
+        Group {
+            if let data, let image = UIImage(data: data) {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.42))
+                    .foregroundStyle(Palette.ink3)
+            }
+        }
+        .frame(width: size, height: size)
+        .background(Palette.subtle)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var symbol: String {
+        if contentType == "application/pdf" { return "doc.richtext" }
+        if contentType.hasPrefix("image/") { return "photo" }
+        if contentType.hasPrefix("text/") || contentType == "application/json" { return "doc.text" }
+        return "doc"
+    }
+}
+
+/// The files one of your messages names, inside its bubble: pictures as
+/// pictures (tap for the whole one), other files as a row with their size.
+struct SentFiles: View {
+    var chat: ChiefChat
+    var files: [AttachedFile]
+
+    var body: some View {
+        if !files.isEmpty {
+            VStack(alignment: .trailing, spacing: 6) {
+                ForEach(files) { file in
+                    if file.isImage {
+                        SentImage(chat: chat, file: file)
+                    } else {
+                        HStack(spacing: 8) {
+                            FileThumb(contentType: file.contentType, data: nil, size: 34)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(file.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                                Text(file.sizeLabel).font(.caption).foregroundStyle(Palette.ink3)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(Palette.ink)
+                        .padding(6)
+                        .frame(minWidth: 180, maxWidth: 240)
+                        .background(Palette.page.opacity(0.55), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+}
+
+/// A picture you sent: the one you picked, or fetched from the chief's folder.
+struct SentImage: View {
+    var chat: ChiefChat
+    var file: AttachedFile
+    @State private var image: UIImage?
+    @State private var showing = false
+
+    /// Its own shape, between a wide strip and a short portrait.
+    static func height(of image: UIImage, width: CGFloat) -> CGFloat {
+        guard image.size.width > 0 else { return width * 0.6 }
+        return min(max(width * image.size.height / image.size.width, 90), 260)
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Button {
+                    showing = true
+                } label: {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 240, height: Self.height(of: image, width: 240))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Palette.subtle)
+                    .frame(width: 200, height: 130)
+                    .overlay { Image(systemName: "photo").foregroundStyle(Palette.ink3) }
+            }
+        }
+        .accessibilityLabel(file.name)
+        .accessibilityAddTraits(.isImage)
+        .task(id: file.name) {
+            if let data = await chat.image(file) { image = UIImage(data: data) }
+        }
+        .sheet(isPresented: $showing) {
+            if let image {
+                NavigationStack {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                        .navigationTitle(file.name)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) { Button("Done") { showing = false } }
+                        }
+                }
+            }
+        }
     }
 }

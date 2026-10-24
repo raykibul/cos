@@ -12,6 +12,8 @@ struct PendingMessage: Identifiable, Equatable, Sendable {
 
     var id: Int
     var text: String
+    /// The files it names, as the transcript will show them.
+    var attachments: [AttachedFile] = []
     /// The transcript's `next` when it was sent: only later messages can be it.
     var afterN: Int
     var state: State
@@ -28,6 +30,30 @@ struct PendingMessage: Identifiable, Equatable, Sendable {
         case .failed: nil
         }
     }
+}
+
+/// A file on the composer. It uploads into the chief's worktree as soon as
+/// you pick it, so sending only names it.
+struct DraftFile: Identifiable, Equatable, Sendable {
+    enum State: Equatable, Sendable {
+        case uploading
+        case ready(Attachment)
+        case failed(String)
+    }
+
+    var id: Int
+    var name: String
+    var contentType: String
+    var size: Int
+    /// The picture, for its thumbnail (images only).
+    var preview: Data?
+    var state: State
+
+    var attachment: Attachment? {
+        if case .ready(let attachment) = state { attachment } else { nil }
+    }
+
+    var isUploading: Bool { state == .uploading }
 }
 
 /// The ticks on what you sent, as a messaging app has them.
@@ -109,12 +135,18 @@ final class ChiefChat {
     private(set) var isLoading = false
     private(set) var error: String?
     var draft = ""
+    /// The files on the composer, in the order you picked them.
+    private(set) var files: [DraftFile] = []
+    /// Pictures you sent, by attachment name (names are unique in the
+    /// chief's folder): picked here, or fetched from the daemon.
+    private(set) var images: [String: Data] = [:]
 
     /// The agent whose transcript `messages` holds.
     @ObservationIgnored private var agentId: Int?
     @ObservationIgnored private var reading = false
     @ObservationIgnored private var readAgain = false
     @ObservationIgnored private var pendingIds = 0
+    @ObservationIgnored private var fileIds = 0
 
     init(projectId: Int, session: HostSession) {
         self.projectId = projectId
@@ -184,20 +216,29 @@ final class ChiefChat {
         }
     }
 
-    /// Sends the draft to the chief, starting it if needed.
-    func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        await send(text)
+    /// There is text or a file to send, and no file is still uploading.
+    var canSend: Bool {
+        guard !files.contains(where: \.isUploading) else { return false }
+        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || files.contains { $0.attachment != nil }
     }
 
-    func send(_ text: String) async {
+    /// Sends the draft and its files to the chief, starting it if needed.
+    /// Files that failed to upload stay on the composer.
+    func send() async {
+        guard canSend else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachments = files.compactMap(\.attachment).map(\.attached)
+        draft = ""
+        files.removeAll { $0.attachment != nil }
+        await send(text, attachments: attachments)
+    }
+
+    func send(_ text: String, attachments: [AttachedFile] = []) async {
         pendingIds += 1
         let id = pendingIds
-        pending.append(PendingMessage(id: id, text: text, afterN: next, state: .sending))
+        pending.append(PendingMessage(id: id, text: text, attachments: attachments, afterN: next, state: .sending))
         do {
-            try await session.service.messageStaff(projectId: projectId, text: text)
+            try await session.service.messageStaff(projectId: projectId, text: text, attachments: attachments.map(\.name))
             update(id) {
                 $0.state = .sent
                 $0.sentMs = nowMs()
@@ -213,7 +254,7 @@ final class ChiefChat {
     /// Sends a failed message again.
     func retry(_ message: PendingMessage) async {
         pending.removeAll { $0.id == message.id }
-        await send(message.text)
+        await send(message.text, attachments: message.attachments)
     }
 
     func discard(_ message: PendingMessage) {
@@ -224,18 +265,78 @@ final class ChiefChat {
         if let index = pending.firstIndex(where: { $0.id == id }) { change(&pending[index]) }
     }
 
+    // MARK: Files
+
+    /// Puts a file on the composer and uploads it into the chief's worktree.
+    func attach(name: String, contentType: String, data: Data) async {
+        guard files.count < Attachment.maxPerMessage else {
+            refuse(name: name, contentType: contentType, size: data.count, reason: "A message takes \(Attachment.maxPerMessage) files at most")
+            return
+        }
+        guard data.count <= Attachment.maxBytes else {
+            refuse(name: name, contentType: contentType, size: data.count, reason: "Over 32 MB, the most cos takes")
+            return
+        }
+        fileIds += 1
+        let id = fileIds
+        let preview = Attachment.isImage(contentType) ? data : nil
+        files.append(DraftFile(id: id, name: name, contentType: contentType, size: data.count, preview: preview, state: .uploading))
+        do {
+            let attachment = try await session.service.uploadAttachment(
+                to: .staff(projectId: projectId), name: name, contentType: contentType, data: data
+            )
+            if let preview { images[attachment.name] = preview }
+            updateFile(id) {
+                $0.name = attachment.name
+                $0.state = .ready(attachment)
+            }
+        } catch {
+            updateFile(id) { $0.state = .failed(error.localizedDescription) }
+        }
+    }
+
+    /// A file the composer can't take, as a chip that says why.
+    func refuse(name: String, contentType: String, size: Int, reason: String) {
+        fileIds += 1
+        files.append(DraftFile(id: fileIds, name: name, contentType: contentType, size: size, state: .failed(reason)))
+    }
+
+    func removeFile(_ id: Int) {
+        files.removeAll { $0.id == id }
+    }
+
+    private func updateFile(_ id: Int, _ change: (inout DraftFile) -> Void) {
+        if let index = files.firstIndex(where: { $0.id == id }) { change(&files[index]) }
+    }
+
+    /// A picture you sent, to show in its bubble: the one you picked, or
+    /// fetched from the chief's folder once.
+    func image(_ file: AttachedFile) async -> Data? {
+        if let data = images[file.name] { return data }
+        guard file.isImage, let agentId = chiefAgentId,
+            let data = try? await session.service.attachmentData(agentId: agentId, name: file.name)
+        else { return nil }
+        images[file.name] = data
+        return data
+    }
+
     /// Drops what you sent once the transcript shows it: each pending
-    /// message matches one later user message with the same text, or a
-    /// wakeup that carried it (text typed while the chief worked).
+    /// message matches one later user message with the same text and files,
+    /// or a wakeup that carried it (text typed while the chief worked).
     private func reconcile() {
         guard !pending.isEmpty else { return }
         var used = Set<Int>()
         pending = pending.filter { item in
             if case .failed = item.state { return true }
             let text = Self.normalize(item.text)
+            let names = item.attachments.map(\.name)
             let match = messages.first { message in
-                message.n > item.afterN && !used.contains(message.n) && message.role == .user
-                    && (message.kind == .update ? Self.normalize(message.text).contains(text) : Self.normalize(message.text) == text)
+                guard message.n > item.afterN, !used.contains(message.n), message.role == .user else { return false }
+                if message.kind == .update {
+                    // Typed in later, with the paths of its files.
+                    return Self.normalize(message.text).contains(text) && item.attachments.allSatisfy { message.text.contains($0.path) }
+                }
+                return Self.normalize(message.text) == text && message.attachments.map(\.name) == names
             }
             if let match {
                 used.insert(match.n)
@@ -264,7 +365,7 @@ final class ChiefChat {
             case (.user, .task), (.user, .text) where message.taskNotification != nil:
                 if let note = message.taskNotification { rows.append(.task(message, note)) }
             case (.user, .text):
-                if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !message.attachments.isEmpty {
                     let seen = answered[message.n] != nil || (typing && message.n == lastTyped)
                     rows.append(.user(message, seen ? .seen : .delivered))
                 }

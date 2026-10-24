@@ -10,13 +10,20 @@ protocol ByteReader: Sendable {
     func read() async throws -> [UInt8]?
 }
 
-func httpRequest(method: String, path: String, host: String = "cos", headers: [(String, String)] = [], json body: [UInt8]? = nil) -> [UInt8] {
+func httpRequest(
+    method: String,
+    path: String,
+    host: String = "cos",
+    headers: [(String, String)] = [],
+    json body: [UInt8]? = nil,
+    contentType: String = "application/json"
+) -> [UInt8] {
     var text = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\n"
     for (name, value) in headers {
         text += "\(name): \(value)\r\n"
     }
     if let body {
-        text += "Content-Type: application/json\r\nContent-Length: \(body.count)\r\n"
+        text += "Content-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n"
     }
     // One request per connection keeps the client simple.
     text += "Connection: close\r\n\r\n"

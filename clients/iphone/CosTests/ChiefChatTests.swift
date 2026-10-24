@@ -186,4 +186,93 @@ import Testing
         #expect(waiting.map(\.agent.id) == [8])
         #expect(waiting.first?.approval?.id == 12)
     }
+
+    // MARK: Attachments
+
+    @Test func aFileUploadsWhenPickedAndGoesWithTheMessage() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = ChiefChat(projectId: 1, session: session)
+        await chat.load()
+        #expect(!chat.canSend)
+
+        await chat.attach(name: "crash notes.txt", contentType: "text/plain", data: Data("panic at main.rs:12".utf8))
+
+        #expect(chat.files.map(\.name) == ["crash-notes.txt"])
+        #expect(chat.files.first?.attachment != nil)
+        // A file alone is enough to send.
+        #expect(chat.canSend)
+        await chat.send()
+
+        #expect(chat.files.isEmpty)
+        #expect(chat.pending.isEmpty)
+        guard case .user(let message, _) = chat.rows.last else {
+            Issue.record("the last row is your message: \(String(describing: chat.rows.last))")
+            return
+        }
+        #expect(message.text.isEmpty)
+        #expect(message.attachments.map(\.name) == ["crash-notes.txt"])
+        #expect(message.attachments.first?.sizeLabel == "19 B")
+        #expect(await fake.calls.contains("POST /v1/projects/1/staff/attachments"))
+    }
+
+    @Test func aPictureYouSentShowsInTheChat() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = ChiefChat(projectId: 1, session: session)
+        await chat.load()
+
+        guard case .user(let first, _) = chat.rows.first else {
+            Issue.record("the chat starts with what you asked: \(chat.rows)")
+            return
+        }
+        #expect(first.attachments.map(\.name) == ["login-expired.png", "auth.log"])
+        let picture = await chat.image(first.attachments[0])
+        #expect(picture == FakeData.loginShot)
+        // Not a picture: nothing to fetch.
+        #expect(await chat.image(first.attachments[1]) == nil)
+    }
+
+    @Test func aFileTooLargeIsRefusedOnTheComposer() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = ChiefChat(projectId: 1, session: session)
+        await chat.load()
+
+        await chat.attach(name: "dump.bin", contentType: "application/octet-stream", data: Data(count: Attachment.maxBytes + 1))
+
+        guard case .failed(let reason) = chat.files.first?.state else {
+            Issue.record("the file was refused: \(chat.files)")
+            return
+        }
+        #expect(reason.contains("32 MB"))
+        #expect(!chat.canSend)
+        chat.removeFile(chat.files[0].id)
+        #expect(chat.files.isEmpty)
+    }
+
+    @Test func aFailedMessageKeepsItsFilesForRetry() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = ChiefChat(projectId: 1, session: session)
+        await chat.load()
+        await chat.attach(name: "trace.log", contentType: "text/plain", data: Data("boom".utf8))
+        chat.draft = "Look at this"
+
+        await fake.setRefusal(.deviceDenied)
+        await chat.send()
+        #expect(chat.pending.first?.attachments.map(\.name) == ["trace.log"])
+
+        await fake.setRefusal(nil)
+        await chat.retry(chat.pending[0])
+        #expect(chat.pending.isEmpty)
+        guard case .user(let message, _) = chat.rows.last else {
+            Issue.record("the last row is your message: \(String(describing: chat.rows.last))")
+            return
+        }
+        #expect(message.text == "Look at this")
+        #expect(message.attachments.map(\.name) == ["trace.log"])
+    }
 }
