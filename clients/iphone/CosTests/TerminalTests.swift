@@ -57,7 +57,7 @@ final class RecordingSink: TerminalSink {
         #expect(Set(peers).isSuperset(of: [7, 8, 13]))
         // An exited session is left out, unless it's the one open.
         #expect(!peers.contains(14))
-        #expect(session.terminalPeers(of: 14).contains(14))
+        #expect(session.terminalPeers(of: 14).contains { $0.id == 14 })
     }
 
     @Test func aTerminalOpensFromTheChatsTab() {
