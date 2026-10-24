@@ -30,6 +30,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use super::agents::{AgentError, Screen, StartAgent, TerminalView};
 use super::api::{ApiError, AppState};
+use super::attachments;
 use super::transcript::Transcript;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,7 +46,13 @@ pub(crate) struct ApprovalsPage {
 /// Body of `POST /v1/agents/{id}/input`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Input {
+    #[serde(default)]
     pub text: String,
+    /// Files uploaded to the agent (`POST /v1/agents/{id}/attachments`), by
+    /// name. With any, the message goes in as one paste with cos's block
+    /// naming them at the end.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 /// Body of `POST /v1/agents/{id}/keys`.
@@ -158,7 +165,14 @@ async fn input(
 ) -> Result<StatusCode, ApiError> {
     let id = agent_id(id)?;
     let Json(body) = body?;
-    state.agents.input(id, &body.text).await?;
+    if body.attachments.is_empty() {
+        state.agents.input(id, &body.text).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let folder = state.agents.folder(id)?;
+    let attached = attachments::find_all(&folder, &body.attachments)?;
+    let text = attachments::with_attachments(&body.text, &attached);
+    state.agents.paste_message(id, &text).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

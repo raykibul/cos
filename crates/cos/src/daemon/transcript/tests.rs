@@ -400,3 +400,39 @@ fn cos_agent_tools_name_their_agent() {
     let json = serde_json::to_value(&transcript.messages[4]).unwrap();
     assert!(json["tool"].get("agent_id").is_none());
 }
+
+#[test]
+fn attachments_come_out_of_the_text() {
+    let pasted = "<pasted_content id=\"1\">Fix this layout\n\n\
+        Attached files (saved by cos; read them with the Read tool):\n\
+        - /w/app/.cos/attachments/shot.png (image/png, 245 KB)</pasted_content id=\"1\">";
+    let only = "Attached files (saved by cos; read them with the Read tool):\n\
+        - /w/app/.cos/attachments/spec.pdf (application/pdf, 3.3 MB)";
+    let transcript = parse((user_line(pasted) + &user_line(only)).as_bytes());
+    let first = &transcript.messages[0];
+    assert_eq!(first.text.as_deref(), Some("Fix this layout"));
+    assert_eq!(first.attachments.len(), 1);
+    assert_eq!(first.attachments[0].name, "shot.png");
+    assert_eq!(first.attachments[0].path, "/w/app/.cos/attachments/shot.png");
+    let second = &transcript.messages[1];
+    assert_eq!(second.text.as_deref(), Some(""));
+    assert_eq!(second.attachments[0].content_type, "application/pdf");
+
+    let json = serde_json::to_value(first).unwrap();
+    assert_eq!(
+        json["attachments"],
+        serde_json::json!([{
+            "name": "shot.png",
+            "path": "/w/app/.cos/attachments/shot.png",
+            "content_type": "image/png",
+            "size_label": "245 KB"
+        }])
+    );
+    let plain = parse(user_line("hello").as_bytes());
+    assert!(
+        serde_json::to_value(&plain.messages[0])
+            .unwrap()
+            .get("attachments")
+            .is_none()
+    );
+}

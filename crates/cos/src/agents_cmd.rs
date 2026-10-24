@@ -7,7 +7,7 @@ use anyhow::bail;
 use cos_core::{Agent, Approval, ApprovalState};
 use jiff::Timestamp;
 
-use crate::client::Client;
+use crate::client::{Client, Folder};
 use crate::commands::human_duration;
 use crate::daemon::agents::StartAgent;
 use crate::home::CosHome;
@@ -34,6 +34,9 @@ pub(crate) enum AgentCommand {
         /// apply, so more requests come to `cos approvals`.
         #[arg(long)]
         project_settings: bool,
+        /// Attach a file to the first message; repeat for more.
+        #[arg(long = "file", value_name = "PATH")]
+        files: Vec<std::path::PathBuf>,
     },
     /// Ask an agent to exit; it is killed if it hasn't after 10 s.
     Stop { id: i64 },
@@ -42,7 +45,13 @@ pub(crate) enum AgentCommand {
     /// Forget an agent that has exited.
     Rm { id: i64 },
     /// Type a message into an agent and press Return.
-    Say { id: i64, text: String },
+    Say {
+        id: i64,
+        text: String,
+        /// Attach a file; repeat for more. It's saved in the agent's folder.
+        #[arg(long = "file", value_name = "PATH")]
+        files: Vec<std::path::PathBuf>,
+    },
     /// Print an agent's screen.
     Screen { id: i64 },
     /// Answer an agent's "trust this folder?" dialog with yes.
@@ -75,14 +84,19 @@ pub(crate) async fn agent(home: &CosHome, command: AgentCommand) -> anyhow::Resu
             model,
             permission_mode,
             project_settings,
+            files,
         } => {
             let workspace = find_workspace(&client.projects().await?, &workspace)?.clone();
+            let attachments = client
+                .upload_files(Folder::Workspace(workspace.id), &files)
+                .await?;
             let request = StartAgent {
                 prompt,
                 title,
                 model,
                 permission_mode,
                 user_settings: project_settings.then_some(false),
+                attachments,
                 ..StartAgent::default()
             };
             let agent = client.start_agent(workspace.id, &request).await?;
@@ -107,7 +121,10 @@ pub(crate) async fn agent(home: &CosHome, command: AgentCommand) -> anyhow::Resu
             client.remove_agent(id).await?;
             println!("Forgot agent #{id}.");
         }
-        AgentCommand::Say { id, text } => client.say(id, text).await?,
+        AgentCommand::Say { id, text, files } => {
+            let attachments = client.upload_files(Folder::Agent(id), &files).await?;
+            client.say_with(id, text, attachments).await?;
+        }
         AgentCommand::Screen { id } => {
             let screen = client.screen(id).await?;
             let lines: Vec<&str> = screen.text.lines().collect();

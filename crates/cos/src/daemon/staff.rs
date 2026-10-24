@@ -35,7 +35,7 @@ use cos_core::events::kind;
 use cos_core::staff::{MAX_WAKEUPS_PER_HOUR, next_batch};
 use cos_core::{
     Agent, AgentState, EventLog, Launch, LoggedEvent, Projects, Role, StaffBooks, StaffItem, StaffItemKind,
-    Store, Subscription,
+    Store, Subscription, Workspace,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -46,6 +46,7 @@ pub(crate) use prompt::configure;
 
 use super::agents::{AgentManager, AgentSignal, StartAgent};
 use super::api::ApiError;
+use super::attachments;
 
 /// The model Chiefs of Staff run unless a project sets one; else Claude's
 /// default.
@@ -144,7 +145,12 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(field: D) -> Result<O
 /// Body of `POST /v1/projects/{id}/staff/message`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct StaffMessage {
+    #[serde(default)]
     pub text: String,
+    /// Files uploaded for the chief (`POST /v1/projects/{id}/staff/attachments`),
+    /// by name, named at the end of the message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 /// `GET /v1/projects/{id}/staff/inbox`.
@@ -332,10 +338,15 @@ impl Staff {
     /// A message from you: it waits in the inbox and goes in on its own,
     /// before any news, as soon as the chief is idle. Starts the chief if
     /// needed.
-    pub(crate) async fn message(&self, project_id: i64, text: &str) -> Result<(), ApiError> {
+    pub(crate) async fn message(
+        &self,
+        project_id: i64,
+        text: &str,
+        attachments: &[String],
+    ) -> Result<(), ApiError> {
         let inner = &self.inner;
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() && attachments.is_empty() {
             return Err(error(StatusCode::BAD_REQUEST, "the message is empty".into()));
         }
         if text.chars().count() > MAX_MESSAGE_CHARS {
@@ -345,10 +356,24 @@ impl Staff {
             ));
         }
         let project = inner.projects.get(project_id).await?;
+        let text = if attachments.is_empty() {
+            text.to_owned()
+        } else {
+            let worktree = inner.projects.staff_workspace(project.id).await?;
+            let attached = attachments::find_all(&worktree.path, attachments)?;
+            attachments::with_attachments(text, &attached)
+        };
         inner.ensure_running(project.id).await?;
-        inner.books.add(project.id, StaffItemKind::Message, None, text)?;
+        inner.books.add(project.id, StaffItemKind::Message, None, &text)?;
         inner.wake.notify_one();
         Ok(())
+    }
+
+    /// The Chief of Staff's worktree, made if needed, for files you attach
+    /// before the chief has started.
+    pub(crate) async fn attachments_folder(&self, project_id: i64) -> Result<Workspace, ApiError> {
+        let project = self.inner.projects.get(project_id).await?;
+        Ok(self.inner.projects.staff_workspace(project.id).await?)
     }
 
     /// News from agents, newest first.

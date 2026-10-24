@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use super::{Staff, error, prompt};
 use crate::daemon::agents::StartAgent;
 use crate::daemon::api::ApiError;
+use crate::daemon::attachments;
 
 /// `last_message` in `workspaces_list` is cut to this many characters.
 const LIST_MESSAGE_CHARS: usize = 500;
@@ -43,6 +44,10 @@ struct AgentSpawn {
     model: Option<String>,
     #[serde(default)]
     permission_mode: Option<String>,
+    /// Files in the chief's attachments, by path or name, copied into the
+    /// agent's workspace and named in its prompt.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +55,8 @@ struct AgentSpawn {
 struct AgentSend {
     agent_id: i64,
     message: String,
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -103,7 +110,10 @@ impl Staff {
                 self.agent_spawn(project_id, agent_id, parse(name, arguments)?)
                     .await
             }
-            "agent_send" => self.agent_send(project_id, parse(name, arguments)?).await,
+            "agent_send" => {
+                self.agent_send(project_id, agent_id, parse(name, arguments)?)
+                    .await
+            }
             "agent_read" => self.agent_read(project_id, parse(name, arguments)?).await,
             "agent_stop" => self.agent_stop(project_id, parse(name, arguments)?),
             "brief_update" => {
@@ -184,8 +194,13 @@ impl Staff {
             }
         };
         let project = inner.projects.get(project_id).await?;
+        let attached = self.hand_over(staff_id, &spawn.attachments, &workspace.path)?;
+        let task_and_files = attachments::with_attachments(task, &attached);
         let request = StartAgent {
-            prompt: Some(format!("{task}\n\n{}", prompt::spawned_line(&project.name))),
+            prompt: Some(format!(
+                "{task_and_files}\n\n{}",
+                prompt::spawned_line(&project.name)
+            )),
             // Named after the task, not the line cos adds.
             title: spawn.title.or_else(|| Some(task.to_owned())),
             model: spawn.model,
@@ -204,7 +219,7 @@ impl Staff {
         ))
     }
 
-    async fn agent_send(&self, project_id: i64, send: AgentSend) -> Result<String, ApiError> {
+    async fn agent_send(&self, project_id: i64, staff_id: i64, send: AgentSend) -> Result<String, ApiError> {
         let inner = &self.inner;
         let agent = self.own_agent(project_id, send.agent_id)?;
         let message = send.message.trim();
@@ -214,6 +229,9 @@ impl Staff {
                 format!("the message must be 1 to {MAX_SEND_CHARS} characters"),
             ));
         }
+        let attached = self.hand_over(staff_id, &send.attachments, &inner.agents.folder(agent.id)?)?;
+        let message = attachments::with_attachments(message, &attached);
+        let message = message.as_str();
         let resumed = !agent.state.is_running();
         if resumed {
             inner.agents.resume(agent.id)?;
@@ -309,6 +327,24 @@ impl Staff {
             inner.model(record.model.as_deref()).as_deref(),
         )?;
         Ok(format!("Brief saved ({} bytes).", brief.len()))
+    }
+
+    /// Copies files from the chief's attachments into `folder`, where an
+    /// agent it starts or messages can read them.
+    fn hand_over(
+        &self,
+        staff_id: i64,
+        names: &[String],
+        folder: &std::path::Path,
+    ) -> Result<Vec<attachments::Attachment>, ApiError> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let own = self.inner.agents.folder(staff_id)?;
+        attachments::find_all(&own, names)?
+            .iter()
+            .map(|attachment| attachments::copy_into(attachment, folder))
+            .collect()
     }
 
     /// An agent in one of the project's workspaces, not the chief itself.

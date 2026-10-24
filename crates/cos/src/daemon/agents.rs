@@ -38,6 +38,7 @@ use cos_harness::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use super::attachments;
 use super::transcript::{self, Transcript};
 use crate::home::CosHome;
 
@@ -216,6 +217,10 @@ pub(crate) struct StartAgent {
     pub rows: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<u16>,
+    /// Files uploaded to the workspace (`POST /v1/workspaces/{id}/attachments`),
+    /// by name, named at the end of the prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 /// `GET /v1/agents/{id}/screen`.
@@ -390,6 +395,10 @@ impl AgentManager {
         let title = clean(request.title.as_deref(), MAX_TITLE_CHARS)
             .or_else(|| clean(request.prompt.as_deref(), TITLE_FROM_PROMPT));
         let session_id = ClaudeOptions::new(&workspace.path).session_id;
+        let folder = launch.cwd.clone().unwrap_or_else(|| workspace.path.clone());
+        let attached = attachments::find_all(&folder, &request.attachments)
+            .map_err(|error| AgentError::Invalid(error.message))?;
+        let title = title.or_else(|| attached.first().map(|file| file.name.clone()));
 
         let agent = inner.agents.create(NewAgent {
             workspace_id,
@@ -407,7 +416,9 @@ impl AgentManager {
         } else {
             inner.agents.set_launch(agent.id, launch)?
         };
-        let prompt = request.prompt.clone().filter(|prompt| !prompt.trim().is_empty());
+        let prompt = request.prompt.as_deref().unwrap_or_default();
+        let prompt =
+            Some(attachments::with_attachments(prompt, &attached)).filter(|prompt| !prompt.trim().is_empty());
         let cwd = agent.cwd.clone().unwrap_or(workspace.path);
         inner.launch(&agent, &cwd, prompt, false).inspect_err(|_| {
             let _ = inner.agents.discard(agent.id);
@@ -449,6 +460,16 @@ impl AgentManager {
         inner.launch(&agent, &cwd, None, resume).inspect_err(|_| {
             let _ = inner.agents.finish(id, AgentState::Exited, None);
         })
+    }
+
+    /// The folder the agent works in: its workspace's, or its own (the
+    /// Chief of Staff's worktree). Its attachments go there.
+    pub(crate) fn folder(&self, id: i64) -> Result<PathBuf, AgentError> {
+        let agent = self.inner.agent(id)?;
+        match agent.cwd {
+            Some(cwd) => Ok(cwd),
+            None => Ok(self.inner.projects.workspace(agent.workspace_id)?.path),
+        }
     }
 
     /// Types `text` and presses Return.

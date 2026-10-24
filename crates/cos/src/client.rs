@@ -2,6 +2,8 @@
 //! daemon's tailnet listener when `--host` (or `COS_HOST`) is given.
 
 pub(crate) mod agents;
+mod attachments;
+pub(crate) use attachments::Folder;
 mod env;
 mod judge;
 mod staff;
@@ -275,6 +277,25 @@ impl Client {
         path: &str,
         body: Option<&B>,
     ) -> anyhow::Result<Response<Incoming>> {
+        match body {
+            Some(body) => {
+                let body = Bytes::from(serde_json::to_vec(body)?);
+                self.send_bytes(method, path, Some("application/json"), body)
+                    .await
+            }
+            None => self.send_bytes(method, path, None, Bytes::new()).await,
+        }
+    }
+
+    /// Sends a request with `body` as it is, of `content_type` if given. A
+    /// non-2xx answer becomes a [`DaemonError`].
+    async fn send_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        content_type: Option<&str>,
+        body: Bytes,
+    ) -> anyhow::Result<Response<Incoming>> {
         let stream = self.connect().await?;
         let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
         tokio::spawn(async move {
@@ -285,13 +306,9 @@ impl Client {
             .method(method)
             .uri(path)
             .header(hyper::header::HOST, self.host_header());
-        let body = match body {
-            Some(body) => {
-                request = request.header(hyper::header::CONTENT_TYPE, "application/json");
-                Bytes::from(serde_json::to_vec(body)?)
-            }
-            None => Bytes::new(),
-        };
+        if let Some(content_type) = content_type {
+            request = request.header(hyper::header::CONTENT_TYPE, content_type);
+        }
         let response = sender.send_request(request.body(Full::new(body))?).await?;
         if !response.status().is_success() {
             let status = response.status();

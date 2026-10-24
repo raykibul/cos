@@ -9,7 +9,7 @@ use anyhow::bail;
 use clap::Subcommand;
 use cos_core::{AgentState, Project};
 
-use crate::client::Client;
+use crate::client::{Client, Folder};
 use crate::home::CosHome;
 use crate::projects_cmd::find_project;
 
@@ -31,6 +31,10 @@ enum StaffCommand {
     Say {
         #[arg(num_args = 1..=2, required = true, value_name = "PROJECT] [TEXT")]
         args: Vec<String>,
+        /// Attach a file (an image, a PDF, a log…); repeat for more. The chief
+        /// gets it in its worktree.
+        #[arg(long = "file", value_name = "PATH")]
+        files: Vec<std::path::PathBuf>,
     },
     /// Open its terminal here, starting it if needed. Ctrl-] detaches.
     Attach {
@@ -60,14 +64,15 @@ pub(crate) async fn staff(home: &CosHome, args: StaffArgs) -> anyhow::Result<Exi
             }
             show(&client, args.project.as_deref()).await
         }
-        Some(StaffCommand::Say { args }) => {
+        Some(StaffCommand::Say { args, files }) => {
             let (key, text) = match args.as_slice() {
                 [text] => (None, text.clone()),
                 [key, text] => (Some(key.as_str()), text.clone()),
                 _ => bail!("use `cos staff say [project] \"text\"`"),
             };
             let project = project(&client, key).await?;
-            client.message_staff(project.id, text).await?;
+            let attachments = client.upload_files(Folder::Staff(project.id), &files).await?;
+            client.message_staff_with(project.id, text, attachments).await?;
             println!(
                 "Sent to the Chief of Staff of {}. Follow it with `cos staff attach {}`.",
                 project.name, project.name
