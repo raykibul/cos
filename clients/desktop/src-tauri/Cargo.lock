@@ -551,6 +551,7 @@ dependencies = [
 name = "cos-bridge"
 version = "0.1.5"
 dependencies = [
+ "base64 0.22.1",
  "http-body-util",
  "hyper",
  "hyper-util",

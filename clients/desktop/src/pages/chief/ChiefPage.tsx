@@ -41,6 +41,7 @@ import { cx } from "../../ui/cx";
 import { EmptyState, IconButton, Spinner, StateDot } from "../../ui/kit";
 import { type MenuItem, Menu } from "../../ui/Menu";
 import { PageHeader } from "../../ui/Page";
+import { useDraftFiles } from "../../ui/draftFiles";
 import { ChiefComposer } from "./ChiefComposer";
 import { ContextRing } from "./ContextRing";
 import { Conversation } from "./Conversation";
@@ -98,6 +99,8 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   const account = useCos((s) => claudeAccount(s, projectId));
   const env = envHint(envNames);
   const [draft, setDraft] = useState("");
+  const target = useMemo(() => ({ kind: "staff" as const, projectId }), [projectId]);
+  const files = useDraftFiles(canChange ? target : null);
   const input = useRef<HTMLTextAreaElement>(null);
   useFocusOnOpen(input);
   const [jumps, setJumps] = useState(0);
@@ -131,10 +134,12 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
 
   const send = () => {
     const text = draft.trim();
-    if (!text) return;
+    const attached = files.ready;
+    if ((!text && attached.length === 0) || files.uploading) return;
     setDraft("");
+    files.clear();
     setJumps((n) => n + 1);
-    void cos.messageStaff(projectId, text);
+    void cos.messageStaff(projectId, text, attached);
   };
 
   const suggest = (text: string) => {
@@ -321,6 +326,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         ) : (
           <Conversation
             items={items}
+            agentId={agentId}
             inbox={inbox ?? []}
             working={state === "working" || (state === "starting" && pending.length > 0)}
             jumpSignal={jumps}
@@ -348,6 +354,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             onSend={send}
             sending={sending}
             disabled={!canChange}
+            files={canChange ? files : undefined}
             note={
               state === "working" && draft.trim()
                 ? "It's working: your message waits until it's free"

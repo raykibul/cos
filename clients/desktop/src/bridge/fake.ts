@@ -20,12 +20,14 @@ import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } fr
 import { FakeEnv, makeEnv } from "./fake/env";
 import { FakeJudge } from "./fake/judge";
 import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
+import { AttachmentError, FakeFiles, created, seedFiles } from "./fake/attachments";
 import type {
   Bridge,
   BridgeError,
   DaemonInfo,
   DaemonResponse,
   EventMessage,
+  FileResponse,
   Host,
   HostList,
   HttpMethod,
@@ -134,6 +136,8 @@ export class FakeDaemon {
   readonly env: FakeEnv;
   /** jev in shadow mode (fake/judge.ts). */
   readonly judge: FakeJudge;
+  /** Uploaded attachments (fake/attachments.ts). */
+  readonly files = new FakeFiles();
 
   constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
@@ -159,6 +163,7 @@ export class FakeDaemon {
     this.staffDesk = new FakeStaffDesk(this, staff);
     this.env = new FakeEnv(this, makeEnv());
     this.judge = new FakeJudge(this, this.fixtures.now);
+    if (!remote) seedFiles(this.files);
     for (const item of this.fixtures.history) {
       this.events.push({
         seq: this.events.length + 1,
@@ -263,6 +268,71 @@ export class FakeDaemon {
         return { status: error.status, body: { error: error.message } };
       throw error;
     }
+  }
+
+  /** `POST …/attachments?name=` with the file's bytes, base64. */
+  upload(rawPath: string, contentType: string, data: string): DaemonResponse {
+    const url = new URL(rawPath, "http://cos");
+    const name = url.searchParams.get("name") ?? "";
+    this.requests.push({ method: "POST", path: rawPath, body: { contentType, size: data.length } });
+    try {
+      const folder = this.uploadFolder(url.pathname);
+      const file = this.files.save(folder.path, name, contentType, data);
+      this.log("attachment.added", {
+        workspace_id: folder.workspaceId,
+        name: file.name,
+        size: file.size,
+        content_type: file.content_type,
+      });
+      return created(file);
+    } catch (error) {
+      if (
+        error instanceof HttpError ||
+        error instanceof StaffError ||
+        error instanceof AttachmentError
+      )
+        return { status: error.status, body: { error: error.message } };
+      throw error;
+    }
+  }
+
+  /** `GET /v1/agents/{id}/attachments/{name}`: the file, base64. */
+  fetchBytes(rawPath: string): FileResponse {
+    const p = rawPath.match(/^\/v1\/agents\/(\d+)\/attachments\/([^/?]+)$/);
+    if (!p) throw { kind: "io", message: `no route for GET ${rawPath}` } satisfies BridgeError;
+    try {
+      const file = this.files.find(this.agentFolder(Number(p[1])), decodeURIComponent(p[2]!));
+      return { status: 200, contentType: file.content_type, data: file.data };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : (error as { message: string }).message;
+      throw { kind: "io", message } satisfies BridgeError;
+    }
+  }
+
+  private uploadFolder(path: string): { path: string; workspaceId: number | null } {
+    let p = path.match(/^\/v1\/agents\/(\d+)\/attachments$/);
+    if (p) {
+      const agent = this.agents.find((a) => a.id === Number(p![1]));
+      return { path: this.agentFolder(Number(p[1])), workspaceId: agent?.workspace_id ?? null };
+    }
+    p = path.match(/^\/v1\/workspaces\/(\d+)\/attachments$/);
+    if (p) {
+      const workspace = this.workspaces.find((w) => w.id === Number(p![1]));
+      if (!workspace) throw new HttpError(404, `there is no workspace ${p[1]}`);
+      return { path: workspace.path as string, workspaceId: workspace.id as number };
+    }
+    p = path.match(/^\/v1\/projects\/(\d+)\/staff\/attachments$/);
+    if (p) return { path: this.staffDesk.worktree(Number(p[1])), workspaceId: null };
+    throw new HttpError(404, `no route for POST ${path}`);
+  }
+
+  private agentFolder(id: number): string {
+    const agent = this.agents.find((a) => a.id === id);
+    if (!agent) throw new HttpError(404, `there is no agent ${id}`);
+    if (typeof agent.cwd === "string") return agent.cwd;
+    const workspace = this.workspaces.find((w) => w.id === agent.workspace_id);
+    return (workspace?.path as string | undefined) ?? `/Users/me/.cos/agents/${id}`;
   }
 
   get screens(): Fixtures["screens"] {
@@ -1079,6 +1149,34 @@ export class FakeBridge implements Bridge {
       home: "/Users/me/.cos",
       host: this.publicHost(this.hostOf(this.current)!),
     };
+  }
+
+  async daemonUpload(path: string, contentType: string, data: string): Promise<DaemonResponse> {
+    const daemon = await this.admitted(path);
+    if (!(daemon instanceof FakeDaemon)) return daemon;
+    return daemon.upload(path, contentType, data);
+  }
+
+  async daemonFetchBytes(path: string): Promise<FileResponse> {
+    const daemon = await this.admitted(path);
+    if (!(daemon instanceof FakeDaemon)) {
+      const body = daemon.body as { error: string; code?: string };
+      throw { kind: "io", message: body.error, code: body.code } satisfies BridgeError;
+    }
+    return daemon.fetchBytes(path);
+  }
+
+  /** The current daemon, once the same checks as `daemonRequest` let the call through. */
+  private async admitted(path: string): Promise<FakeDaemon | DaemonResponse> {
+    await this.wait();
+    if (!path.startsWith("/v1/"))
+      throw { kind: "bad_request", message: `${path} isn't a /v1/ path` };
+    const gate = this.gate(this.current);
+    if (gate?.notRunning) throw { kind: "not_running", message: gate.message };
+    if (gate) return { status: gate.status, body: { error: gate.message, code: gate.code } };
+    const daemon = this.currentDaemon;
+    if (!daemon.running) throw this.notRunning();
+    return daemon;
   }
 
   async daemonRequest(method: HttpMethod, path: string, body?: unknown): Promise<DaemonResponse> {

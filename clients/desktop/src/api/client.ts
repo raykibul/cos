@@ -1,4 +1,11 @@
 import type { Bridge, HttpMethod } from "../bridge/types";
+import {
+  type AttachTarget,
+  type Attachment,
+  MAX_ATTACHMENT_BYTES,
+  decodeAttachment,
+  uploadPath,
+} from "./attachments";
 import { DecodeError, page } from "./decode";
 import {
   type EnvAnswer,
@@ -49,6 +56,8 @@ export interface NewAgent {
   userSettings?: boolean;
   rows?: number;
   cols?: number;
+  /** Files uploaded to the workspace, by name. */
+  attachments?: string[];
 }
 
 export type Decision = "allow" | "deny";
@@ -201,12 +210,62 @@ export class DaemonClient {
     if (request.userSettings !== undefined) body.user_settings = request.userSettings;
     if (request.rows) body.rows = request.rows;
     if (request.cols) body.cols = request.cols;
+    if (request.attachments?.length) body.attachments = request.attachments;
     return this.send("POST", `/v1/workspaces/${workspaceId}/agents`, body, decodeAgent);
   }
 
-  /** Types the text and presses Return. */
-  async sendInput(agentId: number, text: string): Promise<void> {
-    await this.request("POST", `/v1/agents/${agentId}/input`, { text });
+  /** Types the text and presses Return; with files, as one paste naming them. */
+  async sendInput(agentId: number, text: string, attachments: string[] = []): Promise<void> {
+    await this.request("POST", `/v1/agents/${agentId}/input`, {
+      text,
+      ...(attachments.length ? { attachments } : {}),
+    });
+  }
+
+  // MARK: Attachments
+
+  /**
+   * Uploads a file into the folder `target` works in. The answer's `name`
+   * goes in the message's `attachments`.
+   */
+  async uploadAttachment(
+    target: AttachTarget,
+    file: Blob & { name?: string },
+  ): Promise<Attachment> {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      throw new CosError(
+        "bad_request",
+        `${file.name ?? "The file"} is over 32 MB, the most cos takes.`,
+      );
+    }
+    const name = file.name || "file";
+    const path = uploadPath(target, name);
+    const data = toBase64(new Uint8Array(await file.arrayBuffer()));
+    let response;
+    try {
+      response = await this.bridge.daemonUpload(
+        path,
+        file.type || "application/octet-stream",
+        data,
+      );
+    } catch (error) {
+      throw CosError.from(error);
+    }
+    if (response.status < 200 || response.status >= 300) {
+      throw CosError.fromResponse(response.status, response.body, path);
+    }
+    return this.decoded(path, decodeAttachment, response.body);
+  }
+
+  /** An agent's attachment, to show: a `data:` URL. */
+  async attachmentUrl(agentId: number, name: string): Promise<string> {
+    const path = `/v1/agents/${agentId}/attachments/${encodeURIComponent(name)}`;
+    try {
+      const file = await this.bridge.daemonFetchBytes(path);
+      return `data:${file.contentType};base64,${file.data}`;
+    } catch (error) {
+      throw CosError.from(error);
+    }
   }
 
   /** Raw keystrokes, exactly as typed. */
@@ -282,8 +341,11 @@ export class DaemonClient {
   }
 
   /** Starts it if needed and types the text in. While it works, the text waits in its inbox. */
-  async messageStaff(projectId: number, text: string): Promise<void> {
-    await this.request("POST", `/v1/projects/${projectId}/staff/message`, { text });
+  async messageStaff(projectId: number, text: string, attachments: string[] = []): Promise<void> {
+    await this.request("POST", `/v1/projects/${projectId}/staff/message`, {
+      text,
+      ...(attachments.length ? { attachments } : {}),
+    });
   }
 
   /** What the agents it started reported, newest first. */

@@ -4,6 +4,7 @@ import type {
   DaemonInfo,
   DaemonResponse,
   EventMessage,
+  FileResponse,
   Host,
   HostList,
   HttpMethod,
@@ -21,6 +22,14 @@ export class TauriBridge implements Bridge {
 
   daemonRequest(method: HttpMethod, path: string, body?: unknown): Promise<DaemonResponse> {
     return invoke<DaemonResponse>("daemon_request", { method, path, body: body ?? null });
+  }
+
+  daemonUpload(path: string, contentType: string, data: string): Promise<DaemonResponse> {
+    return invoke<DaemonResponse>("daemon_upload", { path, contentType, data });
+  }
+
+  daemonFetchBytes(path: string): Promise<FileResponse> {
+    return invoke<FileResponse>("daemon_fetch_bytes", { path });
   }
 
   followEvents(after: number | null, onMessage: (message: EventMessage) => void): Promise<number> {

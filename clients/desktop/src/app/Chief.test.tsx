@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FakeOptions } from "../bridge/fake";
@@ -132,7 +132,10 @@ describe("chief page", () => {
     expect(log.getByText(/Logins expire after five minutes/)).toBeInTheDocument();
     expect(log.getAllByRole("button", { name: /Started an agent/ })).toHaveLength(2);
     // The answer's numbered list, rendered as markdown.
-    const items = log.getAllByRole("listitem").map((li) => li.textContent);
+    const items = log
+      .getAllByRole("listitem")
+      .filter((li) => !li.closest('[aria-label="Files sent"]'))
+      .map((li) => li.textContent);
     expect(items).toEqual([
       expect.stringMatching(/^Review and merge lisbon/),
       expect.stringMatching(/^Trust the folder in porto/),
@@ -140,6 +143,52 @@ describe("chief page", () => {
     ]);
     // A wakeup isn't shown as your message.
     expect(log.queryByText(/\[cos ·/)).not.toBeInTheDocument();
+  });
+
+  it("shows the files you sent with your ask", async () => {
+    await renderApp({ kind: "chief", id: 1 });
+    const sent = within(await screen.findByRole("list", { name: "Files sent" }));
+    expect(await sent.findByRole("img", { name: "login-expired.svg" })).toHaveAttribute(
+      "src",
+      expect.stringMatching(/^data:image\/svg\+xml;base64,/),
+    );
+    expect(sent.getByText("auth.log")).toBeInTheDocument();
+  });
+
+  it("attaches a file, uploads it at once, and sends it with the message", async () => {
+    const { user, bridge } = await renderApp({ kind: "chief", id: 1 });
+    const input = screen.getByTestId("attach-input");
+    const file = new File(["fn main() {}"], "main rs notes.txt", { type: "text/plain" });
+    await user.upload(input, file);
+    const chips = within(screen.getByRole("list", { name: "Attached files" }));
+    expect(await chips.findByText("main-rs-notes.txt")).toBeInTheDocument();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message the Chief of Staff" }),
+      "Read this",
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(screen.queryByRole("list", { name: "Attached files" })).not.toBeInTheDocument();
+    const posted = bridge.daemon.requests.find((r) => r.path.endsWith("/staff/message"));
+    expect(posted?.body).toEqual({ text: "Read this", attachments: ["main-rs-notes.txt"] });
+    const log = within(screen.getByRole("log"));
+    expect(await log.findByText("main-rs-notes.txt")).toBeInTheDocument();
+  });
+
+  it("sends files without text, and can take one back before sending", async () => {
+    const { user, bridge } = await renderApp({ kind: "chief", id: 1 });
+    const input = screen.getByTestId("attach-input");
+    await user.upload(input, [
+      new File(["a"], "a.txt", { type: "text/plain" }),
+      new File(["b"], "b.txt", { type: "text/plain" }),
+    ]);
+    const chips = within(screen.getByRole("list", { name: "Attached files" }));
+    await chips.findByText("b.txt");
+    await user.click(chips.getByRole("button", { name: "Remove a.txt" }));
+    expect(chips.queryByText("a.txt")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    const posted = bridge.daemon.requests.find((r) => r.path.endsWith("/staff/message"));
+    expect(posted?.body).toEqual({ text: "", attachments: ["b.txt"] });
   });
 
   it("expands a tool row and an update row", async () => {

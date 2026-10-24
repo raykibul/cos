@@ -6,6 +6,7 @@
 // resumed. Transcripts carry how full each chief's context is.
 
 import type { DaemonResponse } from "../types";
+import { FakeFiles } from "./attachments";
 import type { FakeAgent, Raw } from "./fixtures";
 import type { ScreenSpec } from "./screen";
 
@@ -14,6 +15,8 @@ export interface StaffHost {
   readonly projects: Raw[];
   readonly agents: FakeAgent[];
   readonly simulate: boolean;
+  /** Uploaded attachments (fake/attachments.ts). */
+  readonly files: FakeFiles;
   readonly screens: Record<number, Omit<ScreenSpec, "cols" | "rows" | "cwd">>;
   id(): number;
   log(kind: string, data: Raw): void;
@@ -84,7 +87,23 @@ export function makeStaff(
   });
 
   const transcript: Raw[] = [
-    text("user", 960, ask),
+    {
+      ...text("user", 960, ask),
+      attachments: [
+        {
+          name: "login-expired.svg",
+          path: `${home}/worktrees/cos-1/chief/.cos/attachments/login-expired.svg`,
+          content_type: "image/svg+xml",
+          size_label: "2 KB",
+        },
+        {
+          name: "auth.log",
+          path: `${home}/worktrees/cos-1/chief/.cos/attachments/auth.log`,
+          content_type: "text/plain",
+          size_label: "2 KB",
+        },
+      ],
+    },
     text(
       "assistant",
       950,
@@ -190,6 +209,14 @@ I'll give this its own workspace so it doesn't collide with **lisbon**:
 3. **Report back** when it finishes, or sooner if it needs you.`;
 }
 
+function replyWithFiles(text: string, attachments: Raw[]): string {
+  const names = attachments.map((a) => `\`${a.name as string}\``).join(", ");
+  const ask = text ? ` about *${text.replace(/\s+/g, " ").trim().slice(0, 60)}*` : "";
+  return `I read ${names}${ask}.
+
+I'll hand ${attachments.length === 1 ? "it" : "them"} to an agent in a new workspace with the ask, and report back when it's done.`;
+}
+
 /** The staff routes and every agent's transcript. */
 export class FakeStaffDesk {
   readonly staffs: Raw[];
@@ -252,14 +279,22 @@ export class FakeStaffDesk {
     }
     if (action === "message" && method === "POST") {
       const text = String(b.text ?? "").trim();
-      if (!text) throw new StaffError(400, "text can't be empty");
-      this.message(staff, text);
+      const names = Array.isArray(b.attachments) ? b.attachments.map(String) : [];
+      if (!text && names.length === 0) throw new StaffError(400, "the message is empty");
+      const worktree = this.json(staff).worktree as string;
+      const files = names.map((name) => this.host.files.find(worktree, name));
+      this.message(staff, text, FakeFiles.block(files));
       return { status: 202, body: null };
     }
     if (action === "inbox" && method === "GET") {
       return ok({ items: this.inboxes[projectId] ?? [] });
     }
     throw new StaffError(404, `no route for ${method} ${path}`);
+  }
+
+  /** The chief's worktree, where files attached for it go. */
+  worktree(projectId: number): string {
+    return this.json(this.staff(projectId)).worktree as string;
   }
 
   private staff(projectId: number): Raw {
@@ -364,10 +399,15 @@ export class FakeStaffDesk {
     this.host.log("agent.transcript", { agent_id: agent.id, next: n });
   }
 
-  private message(staff: Raw, text: string): void {
+  private message(staff: Raw, text: string, attachments: Raw[] = []): void {
     const agent = this.start(staff);
     const host = this.host;
-    this.append(agent, { role: "user", kind: "text", text });
+    this.append(agent, {
+      role: "user",
+      kind: "text",
+      text,
+      ...(attachments.length ? { attachments } : {}),
+    });
     host.screens[agent.id] = {
       prompt: text,
       transcript: "blank",
@@ -390,8 +430,9 @@ export class FakeStaffDesk {
       // Each exchange fills a little more of its context.
       const context = (this.contexts[agent.id] ??= { used_tokens: 18_000, window_tokens: WINDOW });
       context.used_tokens = Math.min(WINDOW, (context.used_tokens as number) + 2_400);
-      this.append(agent, { role: "assistant", kind: "text", text: reply(text) });
-      agent.last_message = reply(text);
+      const answer = attachments.length ? replyWithFiles(text, attachments) : reply(text);
+      this.append(agent, { role: "assistant", kind: "text", text: answer });
+      agent.last_message = answer;
       host.screens[agent.id] = { prompt: text, transcript: "notes", footer: { kind: "idle" } };
       host.setAgentState(agent, "idle");
     });

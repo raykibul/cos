@@ -419,9 +419,24 @@ async fn host(headers: HeaderMap) -> String {
 }
 
 /// Everything else: a few fixed answers, and an echo of the request.
-async fn echo(State(state): State<Arc<FakeState>>, method: Method, uri: Uri, body: Bytes) -> Response {
+async fn echo(
+    State(state): State<Arc<FakeState>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     state.hits.lock().unwrap().push(format!("{method} {uri}"));
     match uri.path() {
+        "/v1/upload" => {
+            let content_type = headers.get("content-type").and_then(|v| v.to_str().ok());
+            (
+                StatusCode::CREATED,
+                axum::Json(json!({"content_type": content_type, "bytes": BASE64.encode(&body)})),
+            )
+                .into_response()
+        }
+        "/v1/file.png" => ([("content-type", "image/png")], b"\x89PNG".to_vec()).into_response(),
         "/v1/empty" => StatusCode::NO_CONTENT.into_response(),
         "/v1/text" => "plain text".into_response(),
         "/v1/missing" => (
@@ -460,6 +475,33 @@ fn assert_connected(message: &EventMessage, last_seq: u64) {
 }
 
 // Requests
+
+#[tokio::test]
+async fn files_go_up_and_come_down_as_base64() {
+    let daemon = FakeDaemon::start();
+    let bridge = daemon.bridge();
+    let up = bridge
+        .upload("/v1/upload", "image/png", &BASE64.encode(b"\x00\x01raw"))
+        .await
+        .unwrap();
+    assert_eq!(up.status, 201);
+    let body = up.body.unwrap();
+    assert_eq!(body["content_type"], "image/png");
+    assert_eq!(body["bytes"], BASE64.encode(b"\x00\x01raw"));
+    let typeless = bridge.upload("/v1/upload", "", "").await.unwrap().body.unwrap();
+    assert_eq!(typeless["content_type"], "application/octet-stream");
+    assert_eq!(
+        bridge.upload("/v1/upload", "text/plain", "not base64!").await.unwrap_err().kind,
+        cos_bridge::ErrorKind::BadRequest
+    );
+    assert!(bridge.upload("/elsewhere", "text/plain", "").await.is_err());
+
+    let file = bridge.fetch_bytes("/v1/file.png").await.unwrap();
+    assert_eq!(file.content_type, "image/png");
+    assert_eq!(file.data, BASE64.encode(b"\x89PNG"));
+    let missing = bridge.fetch_bytes("/v1/missing").await.unwrap_err();
+    assert_eq!(missing.message, "no such thing");
+}
 
 #[tokio::test]
 async fn requests_pass_bodies_and_statuses_through() {

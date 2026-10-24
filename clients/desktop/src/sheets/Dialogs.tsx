@@ -387,6 +387,7 @@ function NewAgentSheet({ workspaceId }: { workspaceId: number }) {
       </Field>
       <Composer
         autoFocus
+        attachTo={{ kind: "workspace", workspaceId }}
         disabled={!canChange}
         onSend={(value) =>
           cos.createAgent(workspaceId, toNewAgent(value, title)).then(

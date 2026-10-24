@@ -2,6 +2,7 @@
 // read with `after=next`, reconciling what you typed with what the
 // transcript caught up to, and grouping messages into what the page shows.
 
+import type { SentAttachment } from "../api/attachments";
 import type { InboxItem, TranscriptMessage } from "../api/staff";
 
 /** Adds a page of messages, dropping ones already there (by `n`), oldest first. */
@@ -25,6 +26,8 @@ export interface PendingMessage {
   afterN: number;
   state: "sending" | "sent" | "failed";
   error?: string;
+  /** Files it carries, uploaded already. */
+  attachments?: SentAttachment[];
 }
 
 function normalize(text: string): string {
@@ -51,12 +54,21 @@ export function reconcilePending(
         m.n > item.afterN &&
         !used.has(m.n) &&
         m.role === "user" &&
-        (m.kind === "update" ? normalize(m.text).includes(text) : normalize(m.text) === text),
+        (m.kind === "update"
+          ? normalize(m.text).includes(text)
+          : normalize(m.text) === text && sameFiles(item, m)),
     );
     if (match) used.add(match.n);
     else left.push(item);
   }
   return left.length === pending.length ? pending : left;
+}
+
+/** The transcript message names the files the pending one carries. */
+function sameFiles(item: PendingMessage, message: TranscriptMessage): boolean {
+  const sent = (item.attachments ?? []).map((a) => a.name).join("\n");
+  const seen = message.attachments.map((a) => a.name).join("\n");
+  return sent === seen;
 }
 
 /** `[cos · 3 updates]` → 3; one when the header has no count. */

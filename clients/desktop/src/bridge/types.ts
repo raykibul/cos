@@ -10,6 +10,14 @@ export interface DaemonResponse {
   body: unknown;
 }
 
+/** `daemon_fetch_bytes`'s result: a file the daemon serves, such as an attachment. */
+export interface FileResponse {
+  status: number;
+  contentType: string;
+  /** The bytes, base64. */
+  data: string;
+}
+
 /** `GET /v1/status`, as the daemon sends it (snake_case). */
 export type RawStatus = Record<string, unknown>;
 /** One log event, as the daemon sends it. */
@@ -87,6 +95,10 @@ export interface Bridge {
   readonly kind: "tauri" | "fake";
   daemonInfo(): Promise<DaemonInfo>;
   daemonRequest(method: HttpMethod, path: string, body?: unknown): Promise<DaemonResponse>;
+  /** Uploads a file: `POST path` with `data` (base64) as the body. Any status is a normal result. */
+  daemonUpload(path: string, contentType: string, data: string): Promise<DaemonResponse>;
+  /** Fetches a file the daemon serves, as base64. Rejects with `io` on a non-2xx answer. */
+  daemonFetchBytes(path: string): Promise<FileResponse>;
   /** Follows the event log; returns a stream id for `closeStream`. */
   followEvents(after: number | null, onMessage: (message: EventMessage) => void): Promise<number>;
   attachTerminal(agentId: number, onMessage: (message: TerminalMessage) => void): Promise<number>;
