@@ -14,7 +14,7 @@ public struct TerminalSize: Equatable, Hashable, Sendable, CustomStringConvertib
     public var description: String { "\(cols)×\(rows)" }
 }
 
-/// The emulator a `TerminalSession` drives, such as a SwiftTerm view.
+/// The emulator a `TerminalSession` drives, such as a Ghostty view.
 @MainActor
 public protocol TerminalSink: AnyObject {
     /// Clear everything and switch to this size; a snapshot's bytes follow.
