@@ -24,6 +24,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::attachments::{self, Attached};
+
 /// Wakeups the daemon types into a Chief of Staff start with this.
 pub(crate) const UPDATE_PREFIX: &str = "[cos ·";
 /// A tool summary is cut to this many characters.
@@ -76,6 +78,10 @@ pub(crate) struct Message {
     pub tool: Option<ToolCall>,
     /// When Claude wrote it; 0 if the entry had no time.
     pub ts_ms: i64,
+    /// Files you attached through cos, read back from the block cos
+    /// appended to your message (which `text` leaves out).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attached>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -463,7 +469,14 @@ fn push_user_text(messages: &mut Vec<Message>, text: &str, ts_ms: i64) {
     } else {
         MessageKind::Text
     };
-    push(messages, Speaker::User, kind, Some(text), None, ts_ms);
+    let (text, attached) = match kind {
+        MessageKind::Text => attachments::split(text),
+        _ => (text.to_owned(), Vec::new()),
+    };
+    push(messages, Speaker::User, kind, Some(&text), None, ts_ms);
+    if let Some(message) = messages.last_mut() {
+        message.attachments = attached;
+    }
 }
 
 fn push(
@@ -481,6 +494,7 @@ fn push(
         text: text.map(str::to_owned),
         tool,
         ts_ms,
+        attachments: Vec::new(),
     });
 }
 

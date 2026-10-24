@@ -108,6 +108,12 @@ pub(crate) fn tools() -> Vec<Tool> {
         },
         "additionalProperties": false
     });
+    let attachments = json!({
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Files the user attached to a message to you (the paths under \"Attached files\"), to hand \
+                        to the agent: cos copies them into its workspace and names them in its message."
+    });
     vec![
         tool(
             "workspaces_list",
@@ -136,7 +142,8 @@ pub(crate) fn tools() -> Vec<Tool> {
                     "new_workspace": new_workspace,
                     "title": {"type": "string", "description": "A short name for the agent; defaults to the start of the prompt."},
                     "model": {"type": "string", "description": "A Claude model such as \"sonnet\"; defaults to Claude's default."},
-                    "permission_mode": {"type": "string", "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]}
+                    "permission_mode": {"type": "string", "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]},
+                    "attachments": attachments.clone()
                 },
                 "required": ["prompt"],
                 "additionalProperties": false
@@ -149,7 +156,7 @@ pub(crate) fn tools() -> Vec<Tool> {
              first.",
             json!({
                 "type": "object",
-                "properties": {"agent_id": {"type": "integer"}, "message": {"type": "string"}},
+                "properties": {"agent_id": {"type": "integer"}, "message": {"type": "string"}, "attachments": attachments},
                 "required": ["agent_id", "message"],
                 "additionalProperties": false
             }),

@@ -65,9 +65,20 @@ impl Client {
         read_json(self.send::<()>(Method::POST, &path, None).await?).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn message_staff(&self, project_id: i64, text: String) -> anyhow::Result<()> {
+        self.message_staff_with(project_id, text, Vec::new()).await
+    }
+
+    /// [`Self::message_staff`] with files uploaded for the chief, by name.
+    pub(crate) async fn message_staff_with(
+        &self,
+        project_id: i64,
+        text: String,
+        attachments: Vec<String>,
+    ) -> anyhow::Result<()> {
         let path = format!("/v1/projects/{project_id}/staff/message");
-        self.send(Method::POST, &path, Some(&StaffMessage { text }))
+        self.send(Method::POST, &path, Some(&StaffMessage { text, attachments }))
             .await?;
         Ok(())
     }

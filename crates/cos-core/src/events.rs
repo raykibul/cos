@@ -40,6 +40,7 @@ pub mod kind {
     pub const STAFF_STOPPED: &str = "staff.stopped";
     pub const AGENT_TRANSCRIPT: &str = "agent.transcript";
     pub const ENV_CHANGED: &str = "env.changed";
+    pub const ATTACHMENT_ADDED: &str = "attachment.added";
     pub const JUDGE_DECIDED: &str = "judge.decided";
     pub const JUDGE_CHANGED: &str = "judge.changed";
 }

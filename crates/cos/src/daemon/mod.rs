@@ -6,6 +6,8 @@
 pub(crate) mod agents;
 pub(crate) mod agents_api;
 pub(crate) mod api;
+pub(crate) mod attachments;
+pub(crate) mod attachments_api;
 pub(crate) mod env_api;
 pub(crate) mod judge;
 pub(crate) mod judge_api;

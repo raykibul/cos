@@ -123,6 +123,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::staff_api::routes())
         .merge(super::env_api::routes())
         .merge(super::judge_api::routes())
+        .merge(super::attachments_api::routes())
         .with_state(state)
 }
 
@@ -265,6 +266,7 @@ async fn remove_workspace(
 }
 
 /// An error response: `{"error": message}` with a status code.
+#[derive(Debug)]
 pub(crate) struct ApiError {
     pub(crate) status: StatusCode,
     pub(crate) message: String,

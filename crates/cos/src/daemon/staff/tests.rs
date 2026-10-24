@@ -935,3 +935,169 @@ async fn chiefs_come_back_after_a_daemon_restart_unless_you_stopped_them() {
     fixture.client.stop_agent(staff.id).await.unwrap();
     fixture.until_state(staff.id, AgentState::Exited).await;
 }
+
+#[tokio::test]
+async fn files_you_attach_reach_the_chief_and_the_agents_it_starts() {
+    use crate::client::{DaemonError, Folder};
+
+    let fixture = Fixture::start().await;
+    let git_status = |dir: &std::path::Path| {
+        let out = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    // Uploaded before the chief ever started: its worktree is made for it.
+    let shot = fixture
+        .client
+        .upload(
+            Folder::Staff(fixture.project_id),
+            "Screen Shot.png",
+            b"png bytes".to_vec(),
+        )
+        .await
+        .unwrap();
+    let view = fixture.client.staff(fixture.project_id).await.unwrap();
+    assert_eq!(view.agent_id, None);
+    assert_eq!(shot.name, "Screen-Shot.png");
+    assert_eq!(shot.content_type, "image/png");
+    assert_eq!(shot.size, 9);
+    assert_eq!(shot.path, view.worktree.join(".cos/attachments/Screen-Shot.png"));
+    assert_eq!(git_status(&view.worktree), "", "attachments stay out of git");
+    let added = fixture.events(kind::ATTACHMENT_ADDED);
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].data["name"], "Screen-Shot.png");
+
+    // A message names it, by path, at its end.
+    let staff = fixture.idle_staff().await;
+    let missing = fixture
+        .client
+        .message_staff_with(fixture.project_id, "Look".into(), vec!["nope.png".into()])
+        .await
+        .unwrap_err();
+    assert_eq!(missing.downcast_ref::<DaemonError>().unwrap().status, 404);
+    fixture
+        .client
+        .message_staff_with(
+            fixture.project_id,
+            "Fix this layout".into(),
+            vec![shot.name.clone()],
+        )
+        .await
+        .unwrap();
+    let echoed = fixture
+        .until_says(staff.id, &shot.path.display().to_string())
+        .await
+        .last_message
+        .unwrap();
+    assert!(
+        echoed.starts_with(
+            "echo: Fix this layout\n\nAttached files (saved by cos; read them with the Read tool):\n- "
+        ),
+        "{echoed}"
+    );
+    assert!(echoed.ends_with("Screen-Shot.png (image/png, 9 B)"), "{echoed}");
+
+    // The chat shows the text, and the file apart from it.
+    let transcript = fixture.client.transcript(staff.id, 0).await.unwrap();
+    let mine = transcript
+        .messages
+        .iter()
+        .find(|message| !message.attachments.is_empty())
+        .expect("a message with attachments");
+    assert_eq!(mine.text.as_deref(), Some("Fix this layout"));
+    assert_eq!(mine.attachments[0].name, "Screen-Shot.png");
+    // And the app can fetch it to show it.
+    let (content_type, bytes) = fixture
+        .client
+        .download(staff.id, "Screen-Shot.png")
+        .await
+        .unwrap();
+    assert_eq!(
+        (content_type.as_str(), bytes.as_slice()),
+        ("image/png", &b"png bytes"[..])
+    );
+    assert!(fixture.client.download(staff.id, ".gitignore").await.is_err());
+
+    // The chief hands it to an agent it starts: copied into the workspace.
+    let workspace = fixture.projects.workspace(fixture.workspace_id).unwrap();
+    let copy = workspace.path.join(".cos/attachments/Screen-Shot.png");
+    let spawn = json!({
+        "prompt": "use the screenshot",
+        "workspace_id": fixture.workspace_id,
+        "attachments": [shot.path],
+    });
+    let spawned = fixture.say(staff.id, &format!("mcp agent_spawn {spawn}")).await;
+    let agent_id = serde_json::from_str::<Value>(&spawned).unwrap()["agent_id"]
+        .as_i64()
+        .unwrap();
+    fixture.until_says(agent_id, &copy.display().to_string()).await;
+    assert_eq!(std::fs::read(&copy).unwrap(), b"png bytes");
+    assert_eq!(git_status(&workspace.path), "");
+
+    // Sending it again reuses the copy rather than making another.
+    let send = json!({ "agent_id": agent_id, "message": "again", "attachments": ["Screen-Shot.png"] });
+    fixture.say(staff.id, &format!("mcp agent_send {send}")).await;
+    let again = fixture
+        .until_says(agent_id, "echo: again")
+        .await
+        .last_message
+        .unwrap();
+    assert!(again.contains(&copy.display().to_string()), "{again}");
+    let names: Vec<_> = std::fs::read_dir(workspace.path.join(".cos/attachments"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    assert_eq!(names, ["Screen-Shot.png"]);
+
+    // Straight to an agent, and to a new agent in a workspace.
+    let log = fixture
+        .client
+        .upload(Folder::Agent(agent_id), "build log", b"error: oops".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(log.name, "build-log");
+    fixture
+        .client
+        .say_with(agent_id, "why did this fail?".into(), vec![log.name.clone()])
+        .await
+        .unwrap();
+    fixture
+        .until_says(
+            agent_id,
+            &workspace
+                .path
+                .join(".cos/attachments/build-log")
+                .display()
+                .to_string(),
+        )
+        .await;
+    let notes = fixture
+        .client
+        .upload(
+            Folder::Workspace(fixture.workspace_id),
+            "notes.md",
+            b"# notes".to_vec(),
+        )
+        .await
+        .unwrap();
+    let started = fixture
+        .client
+        .start_agent(
+            fixture.workspace_id,
+            &crate::daemon::agents::StartAgent {
+                attachments: vec![notes.name.clone()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(started.title, "notes.md");
+    fixture
+        .until_says(started.id, "notes.md (text/markdown, 7 B)")
+        .await;
+}

@@ -32,9 +32,21 @@ impl Client {
     }
 
     /// Types `text` into the agent and presses Return.
+    #[cfg(test)]
     pub(crate) async fn say(&self, id: i64, text: String) -> anyhow::Result<()> {
+        self.say_with(id, text, Vec::new()).await
+    }
+
+    /// [`Self::say`] with files uploaded to the agent, by name.
+    pub(crate) async fn say_with(
+        &self,
+        id: i64,
+        text: String,
+        attachments: Vec<String>,
+    ) -> anyhow::Result<()> {
         let path = format!("/v1/agents/{id}/input");
-        self.send(Method::POST, &path, Some(&Input { text })).await?;
+        self.send(Method::POST, &path, Some(&Input { text, attachments }))
+            .await?;
         Ok(())
     }
 

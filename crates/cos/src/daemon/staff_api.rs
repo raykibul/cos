@@ -86,7 +86,7 @@ async fn message(
 ) -> Result<StatusCode, ApiError> {
     let id = project_id(id)?;
     let Json(body) = body?;
-    state.staff.message(id, &body.text).await?;
+    state.staff.message(id, &body.text, &body.attachments).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
