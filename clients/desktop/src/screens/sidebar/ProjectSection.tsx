@@ -3,7 +3,7 @@
 // each, newest first. Workspaces stay out of sight; sessions that share one
 // folder sit together, joined by a bracket in that folder's colour.
 
-import { GitBranch, LayoutGrid, MoreHorizontal, Plus, Variable } from "lucide-react";
+import { GitBranch, LayoutGrid, MoreHorizontal, Plus, Trash2, Variable } from "lucide-react";
 import { useMemo } from "react";
 import { envHint } from "../../api/env";
 import { type Agent, type Project, workspaceName } from "../../api/models";
@@ -193,7 +193,9 @@ function SessionRow({
   group: SessionGroup;
   indent?: boolean;
 }) {
-  const { ui } = useApp();
+  const { cos, ui } = useApp();
+  const canChange = useCanChange();
+  const agentsSupported = useCos((s) => s.agentsSupported);
   const selected = useUi((s) => samePage(s.page, { kind: "agent", id: agent.id }));
   const label = agentLabel(agent.state);
   const word = attentionWord(agent.state);
@@ -207,34 +209,67 @@ function SessionRow({
   ]
     .filter(Boolean)
     .join("\n");
+  // Right-click: another session in the same folder, the folder, or remove it.
+  const menu: MenuItem[] = [
+    {
+      label: `New session in ${name}`,
+      icon: Plus,
+      disabled: !canChange || !agentsSupported,
+      onSelect: () => ui.open({ kind: "newAgent", workspaceId: group.workspace.id }),
+    },
+    "separator",
+    ...folderItems(cos, agent.cwd ?? group.workspace.path),
+    "separator",
+    {
+      label: "Remove session…",
+      icon: Trash2,
+      danger: true,
+      detail: others.length > 0 ? undefined : `Deletes ${name} with it`,
+      disabled: !canChange,
+      onSelect: () => ui.open({ kind: "removeAgent", agentId: agent.id }),
+    },
+  ];
   return (
     <li role="none">
-      <button
-        type="button"
-        role="treeitem"
-        aria-selected={selected}
-        aria-label={`${agent.title}, ${label.title}`}
-        title={tooltip}
-        onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
-        className={cx(
-          "flex h-8 w-full items-center gap-2 rounded-lg pr-2 text-left text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
-          indent ? "pl-[22px]" : "pl-2.5",
-          selected ? "bg-subtle-2 text-ink" : "text-ink-2 hover:bg-subtle hover:text-ink",
-          agent.state === "exited" && !selected && "text-ink-3",
+      <Menu
+        items={menu}
+        width={240}
+        trigger={({ ref, onContextMenu, ...popup }) => (
+          <button
+            ref={ref}
+            type="button"
+            role="treeitem"
+            aria-selected={selected}
+            aria-label={`${agent.title}, ${label.title}`}
+            aria-haspopup={popup["aria-haspopup"]}
+            aria-expanded={popup["aria-expanded"]}
+            aria-controls={popup["aria-controls"]}
+            title={tooltip}
+            onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
+            onContextMenu={onContextMenu}
+            className={cx(
+              "flex h-8 w-full items-center gap-2 rounded-lg pr-2 text-left text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+              indent ? "pl-[22px]" : "pl-2.5",
+              selected
+                ? "bg-subtle-2 text-ink"
+                : "text-ink-2 hover:bg-subtle hover:text-ink aria-expanded:bg-subtle",
+              agent.state === "exited" && !selected && "text-ink-3",
+            )}
+          >
+            <StateIcon state={agent.state} />
+            <span className={cx("min-w-0 flex-1 truncate", word && "text-ink")}>{agent.title}</span>
+            {word ? (
+              <span className="shrink-0 rounded-full bg-accent/14 px-1.5 py-px text-[10.5px] font-semibold text-accent-ink">
+                {word}
+              </span>
+            ) : agent.state === "interrupted" ? (
+              <span className="shrink-0 text-[11px] text-tone-amber">stopped</span>
+            ) : agent.state === "exited" ? (
+              <span className="shrink-0 text-[11px] text-ink-3">exited</span>
+            ) : null}
+          </button>
         )}
-      >
-        <StateIcon state={agent.state} />
-        <span className={cx("min-w-0 flex-1 truncate", word && "text-ink")}>{agent.title}</span>
-        {word ? (
-          <span className="shrink-0 rounded-full bg-accent/14 px-1.5 py-px text-[10.5px] font-semibold text-accent-ink">
-            {word}
-          </span>
-        ) : agent.state === "interrupted" ? (
-          <span className="shrink-0 text-[11px] text-tone-amber">stopped</span>
-        ) : agent.state === "exited" ? (
-          <span className="shrink-0 text-[11px] text-ink-3">exited</span>
-        ) : null}
-      </button>
+      />
     </li>
   );
 }

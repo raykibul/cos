@@ -2,15 +2,16 @@
 // shows the daemon's error as-is and stays open until the action succeeds.
 
 import { useState } from "react";
-import { messageOf } from "../api/errors";
+import { isConflict, messageOf } from "../api/errors";
 import { projectSlug, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../app/context";
-import type { DialogState } from "../app/ui";
+import type { DialogState, Page } from "../app/ui";
 import { Composer } from "../screens/Composer";
 import { toNewAgent } from "../screens/composerValue";
-import { pluralize } from "../domain/labels";
+import { isAlive, pluralize } from "../domain/labels";
 import {
   agent as agentOf,
+  isUnder,
   project as projectOf,
   workspace as workspaceOf,
   workspacesNewestFirst,
@@ -440,8 +441,8 @@ function NewAgentSheet({ workspaceId }: { workspaceId: number }) {
   return (
     <Dialog
       width="lg"
-      title={`New agent in ${workspaceName(workspace)}`}
-      description="Claude Code starts in the workspace folder. Leave the prompt empty to start it idle."
+      title={`New session in ${workspaceName(workspace)}`}
+      description="Claude Code starts in this folder, beside the sessions already there. Leave the prompt empty to start it idle."
       onClose={ui.close}
     >
       <Field label="Title" htmlFor="agent-title" hint="Optional. Taken from the prompt otherwise.">
@@ -475,30 +476,92 @@ function NewAgentSheet({ workspaceId }: { workspaceId: number }) {
   );
 }
 
+/**
+ * Removes a session. A running one is stopped first. When no other session
+ * works in its folder, the folder (the worktree) goes too, unless you untick
+ * it; the daemon keeps a folder with uncommitted changes, and so does this.
+ */
 function RemoveAgent({ agentId }: { agentId: number }) {
   const { cos, ui } = useApp();
   const agent = useCos((s) => agentOf(s, agentId));
+  const workspace = useCos((s) => workspaceOf(s, agent?.workspaceId));
+  const agents = useCos((s) => s.agents);
+  const [withFolder, setWithFolder] = useState(true);
   const { busy, error, run, close } = useAction();
   if (!agent) return null;
+  const alive = isAlive(agent.state);
+  const others = workspace
+    ? agents.filter((a) => a.workspaceId === workspace.id && a.id !== agent.id)
+    : [];
+  const name = workspace ? workspaceName(workspace) : null;
+  const deletesFolder = workspace !== undefined && others.length === 0 && withFolder;
+
+  const remove = async () => {
+    if (alive) {
+      await cos.stopAgent(agent.id);
+      await cos.untilStopped(agent.id);
+    }
+    if (deletesFolder) {
+      await cos.removeWorkspace(workspace).catch((failure: unknown) => {
+        if (!isConflict(failure)) throw failure;
+        throw new Error(
+          `${messageOf(failure)}. The folder stays. Untick “Delete its folder” to remove just the session.`,
+        );
+      });
+    } else {
+      await cos.removeAgent(agent.id);
+    }
+    // Its tabs go: the session's, and with the folder, the folder's and its terminals'.
+    const gone = (page: Page) =>
+      (page.kind === "agent" && page.id === agent.id) ||
+      (deletesFolder &&
+        ((page.kind === "workspace" && page.id === workspace.id) ||
+          (page.kind === "shell" && isUnder(page.cwd, workspace.path))));
+    for (const tab of ui.store.getState().tabs.filter(gone)) ui.closeTab(tab);
+  };
+
   return (
     <Dialog
       width="sm"
       title={`Remove ${agent.title}?`}
-      description="cos forgets the agent and its terminal. The workspace and Claude's own session history stay."
-      onClose={close}
-      onSubmit={() =>
-        run(async () => {
-          await cos.removeAgent(agentId);
-          ui.navigate(
-            agent.workspaceId !== null
-              ? { kind: "workspace", id: agent.workspaceId }
-              : { kind: "waiting" },
-          );
-          ui.closeTab({ kind: "agent", id: agentId });
-        })
+      description={
+        <>
+          {alive ? "It's still running, so it stops first. " : null}
+          cos forgets the session and its terminal. Claude's own session history stays.
+          {name && others.length > 0 ? (
+            <>
+              {" "}
+              {name} stays: {others.map((a) => a.title).join(", ")}{" "}
+              {others.length === 1 ? "works" : "work"} there too.
+            </>
+          ) : null}
+        </>
       }
-      footer={<Footer busy={busy} label="Remove" danger onCancel={close} />}
+      onClose={close}
+      onSubmit={() => run(remove)}
+      footer={
+        <Footer busy={busy} label={alive ? "Stop and remove" : "Remove"} danger onCancel={close} />
+      }
     >
+      {workspace && others.length === 0 ? (
+        <label className="flex items-start gap-2.5 text-[13px] text-ink">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4 accent-[var(--c-accent)]"
+            checked={withFolder}
+            onChange={(event) => setWithFolder(event.target.checked)}
+          />
+          <span className="flex flex-col gap-0.5">
+            <span>Delete its folder, {name}, too</span>
+            <span className="text-[12px] leading-snug text-ink-3">
+              <code className="font-mono text-[11.5px]">{workspace.path}</code>, unless it has
+              uncommitted changes. The branch{" "}
+              <code className="font-mono text-[11.5px]">{workspace.branch}</code> is kept, so no
+              commit is lost.
+            </span>
+          </span>
+        </label>
+      ) : null}
       <ErrorText>{error}</ErrorText>
     </Dialog>
   );

@@ -1,7 +1,7 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { fakeStore, settle } from "../test/harness";
+import { fakeStore, requestLines, settle } from "../test/harness";
 import { App } from "./App";
 import { type Page, createUiStore } from "./ui";
 
@@ -95,6 +95,88 @@ describe("tabs", () => {
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
     await act(() => settle());
     expect(ui.store.getState().tabs.some((t) => t.kind === "agent" && t.id === 5)).toBe(false);
+  });
+});
+
+describe("a session's right-click menu", () => {
+  const menu = () => within(screen.getByRole("menu"));
+  const dialog = () => within(screen.getByRole("dialog"));
+  const rightClick = async (user: ReturnType<typeof userEvent.setup>, name: RegExp) =>
+    user.pointer({ keys: "[MouseRight]", target: sidebar().getByRole("treeitem", { name }) });
+
+  it("starts another session in the same folder", async () => {
+    const { user } = await renderApp({ kind: "chief", id: 1 });
+    await rightClick(user, /^Write the release notes/);
+    await user.click(menu().getByRole("menuitem", { name: "New session in porto" }));
+    expect(screen.getByRole("dialog", { name: "New session in porto" })).toBeInTheDocument();
+  });
+
+  it("removes only the session when others share its folder", async () => {
+    const { user, ui, daemon } = await renderApp({ kind: "agent", id: 5 });
+    await rightClick(user, /^Bump dependencies/);
+    await user.click(menu().getByRole("menuitem", { name: /Remove session/ }));
+    expect(dialog().getByText(/porto stays/)).toBeInTheDocument();
+    expect(dialog().queryByRole("checkbox")).not.toBeInTheDocument();
+    await user.click(dialog().getByRole("button", { name: "Remove" }));
+    await act(() => settle());
+    expect(requestLines(daemon)).toContain("DELETE /v1/agents/5");
+    expect(requestLines(daemon).some((line) => line.startsWith("DELETE /v1/workspaces"))).toBe(
+      false,
+    );
+    expect(sidebar().queryByRole("treeitem", { name: /^Bump dependencies/ })).toBeNull();
+    expect(ui.store.getState().tabs.some((t) => t.kind === "agent" && t.id === 5)).toBe(false);
+  });
+
+  it("deletes the folder with a session alone in it", async () => {
+    const { user, ui, daemon } = await renderApp({ kind: "workspace", id: 8 });
+    act(() => ui.navigate({ kind: "chief", id: 2 }));
+    await rightClick(user, /^Export invoices as CSV/);
+    await user.click(menu().getByRole("menuitem", { name: /Remove session/ }));
+    expect(
+      dialog().getByRole("checkbox", { name: /Delete its folder, Billing export/ }),
+    ).toBeChecked();
+    await user.click(dialog().getByRole("button", { name: "Remove" }));
+    await act(() => settle());
+    expect(requestLines(daemon)).toContain("DELETE /v1/workspaces/8");
+    expect(requestLines(daemon)).not.toContain("DELETE /v1/agents/4");
+    expect(sidebar().queryByRole("treeitem", { name: /^Export invoices/ })).toBeNull();
+    expect(ui.store.getState().tabs.some((t) => t.kind === "workspace" && t.id === 8)).toBe(false);
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 2 });
+  });
+
+  it("stops a running session before removing it", async () => {
+    const { user, daemon } = await renderApp({ kind: "chief", id: 2 });
+    await rightClick(user, /^Explore the billing service/);
+    await user.click(menu().getByRole("menuitem", { name: /Remove session/ }));
+    await user.click(dialog().getByRole("button", { name: "Stop and remove" }));
+    await act(() => settle());
+    const lines = requestLines(daemon);
+    expect(lines).toContain("POST /v1/agents/3/stop");
+    expect(lines.indexOf("DELETE /v1/workspaces/9")).toBeGreaterThan(
+      lines.indexOf("POST /v1/agents/3/stop"),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps a folder with uncommitted changes, and can remove just the session", async () => {
+    const { user, daemon } = await renderApp({ kind: "chief", id: 1 });
+    // Fix login bug and Add left-pad share lisbon; remove one, then the other.
+    await rightClick(user, /^Fix login bug/);
+    await user.click(menu().getByRole("menuitem", { name: /Remove session/ }));
+    await user.click(dialog().getByRole("button", { name: "Stop and remove" }));
+    await act(() => settle());
+    expect(requestLines(daemon)).toContain("DELETE /v1/agents/7");
+
+    await rightClick(user, /^Add left-pad/);
+    await user.click(menu().getByRole("menuitem", { name: /Remove session/ }));
+    await user.click(dialog().getByRole("button", { name: "Stop and remove" }));
+    await act(() => settle());
+    expect(dialog().getByText(/uncommitted changes.*The folder stays/)).toBeInTheDocument();
+    await user.click(dialog().getByRole("checkbox", { name: /Delete its folder/ }));
+    await user.click(dialog().getByRole("button", { name: "Remove" }));
+    await act(() => settle());
+    expect(requestLines(daemon)).toContain("DELETE /v1/agents/8");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
 
