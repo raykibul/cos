@@ -57,8 +57,8 @@ pub enum EventMessage {
     },
 }
 
-/// One message of [`crate::Bridge::attach_terminal`]. `data` is base64, as
-/// the daemon sent it.
+/// One message of [`crate::Bridge::attach_terminal`] or
+/// [`crate::Bridge::attach_shell`]. `data` is base64, as the daemon sent it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalMessage {

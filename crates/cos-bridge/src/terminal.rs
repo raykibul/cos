@@ -26,11 +26,21 @@ impl Bridge {
     /// Must be called inside a Tokio runtime.
     pub fn attach_terminal(&self, agent_id: i64, sink: impl Sink<TerminalMessage>) -> StreamHandle {
         let bridge = self.clone();
-        stream::spawn(sink, move |outbox| bridge.attach(agent_id, outbox))
+        let path = format!("/v1/agents/{agent_id}/terminal");
+        stream::spawn(sink, move |outbox| bridge.attach(path, outbox))
     }
 
-    async fn attach<S: Sink<TerminalMessage>>(self, agent_id: i64, mut outbox: Outbox<S>) {
-        let path = format!("/v1/agents/{agent_id}/terminal");
+    /// Streams shell `shell_id`'s terminal (`/v1/shells/{id}/terminal`), the
+    /// same way as [`Self::attach_terminal`].
+    ///
+    /// Must be called inside a Tokio runtime.
+    pub fn attach_shell(&self, shell_id: i64, sink: impl Sink<TerminalMessage>) -> StreamHandle {
+        let bridge = self.clone();
+        let path = format!("/v1/shells/{shell_id}/terminal");
+        stream::spawn(sink, move |outbox| bridge.attach(path, outbox))
+    }
+
+    async fn attach<S: Sink<TerminalMessage>>(self, path: String, mut outbox: Outbox<S>) {
         let mut retry = Retry::new(self.backoff);
         let mut last_drop: Option<String> = None;
         loop {

@@ -11,6 +11,7 @@ import {
   ScrollText,
   Settings,
   SquareTerminal,
+  Terminal,
   Variable,
   X,
   type LucideIcon,
@@ -31,6 +32,7 @@ const icons: Record<Exclude<Page["kind"], "chief">, LucideIcon> = {
   projectEnv: Variable,
   workspace: GitBranch,
   agent: SquareTerminal,
+  shell: Terminal,
 };
 
 export function TabBar() {

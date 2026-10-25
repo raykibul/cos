@@ -49,6 +49,15 @@ export function tabInfo(s: DaemonState, page: Page): TabInfo {
       const owner = ws ? project(s, ws.projectId)?.name : undefined;
       return { ...base, title: name, hint: owner ? `${owner} · ${name}` : name };
     }
+    case "shell": {
+      const name = page.cwd.split("/").filter(Boolean).pop() ?? "/";
+      const owner = page.projectId !== null ? project(s, page.projectId)?.name : undefined;
+      return {
+        ...base,
+        title: `${name} terminal`,
+        hint: `Terminal in ${page.cwd}${owner && owner !== name ? ` · ${owner}` : ""}`,
+      };
+    }
     case "agent": {
       const a = agent(s, page.id);
       if (!a) return { ...base, title: "Removed agent", hint: "Removed agent" };

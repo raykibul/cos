@@ -4,22 +4,25 @@ import { cx } from "../ui/cx";
 import { Spinner } from "../ui/kit";
 import { useScheme } from "../ui/scheme";
 import { type TerminalEngine, createEngine } from "./engine";
-import { terminalBackend } from "./backend";
+import { shellBackend, terminalBackend } from "./backend";
 import { type TerminalPhase, TerminalSession } from "./session";
 import { darkTheme, lightTheme, terminalFont, terminalFontSize } from "./theme";
 
 /**
- * An agent's live terminal. It takes keys and focus like a terminal app:
- * typing goes to Claude, Cmd-C copies, Cmd-V pastes. The emulator is rebuilt
+ * An agent's live terminal, or a shell's (`kind="shell"`, with the shell's id
+ * as `agentId`). It takes keys and focus like a terminal app: typing goes to
+ * Claude or the shell, Cmd-C copies, Cmd-V pastes. The emulator is rebuilt
  * with a fresh snapshot when the colour scheme changes.
  */
 export function AgentTerminal({
   agentId,
+  kind = "agent",
   alive,
   className,
   autoFocus = true,
 }: {
   agentId: number;
+  kind?: "agent" | "shell";
   /** Whether Claude runs. Going from exited back to alive (a resume) reconnects. */
   alive: boolean;
   className?: string;
@@ -30,7 +33,10 @@ export function AgentTerminal({
   const engineRef = useRef<TerminalEngine | null>(null);
   const scheme = useScheme();
   const [loadError, setLoadError] = useState<string | null>(null);
-  const session = useMemo(() => new TerminalSession(agentId, terminalBackend(cos)), [agentId, cos]);
+  const session = useMemo(
+    () => new TerminalSession(agentId, kind === "shell" ? shellBackend(cos) : terminalBackend(cos)),
+    [agentId, kind, cos],
+  );
   const phase = useSyncExternalStore(session.subscribe, session.getPhase);
 
   useEffect(() => {
@@ -116,12 +122,20 @@ export function AgentTerminal({
           data-testid="terminal"
         />
       </div>
-      <PhaseOverlay phase={phase} loadError={loadError} />
+      <PhaseOverlay phase={phase} loadError={loadError} kind={kind} />
     </div>
   );
 }
 
-function PhaseOverlay({ phase, loadError }: { phase: TerminalPhase; loadError: string | null }) {
+function PhaseOverlay({
+  phase,
+  loadError,
+  kind,
+}: {
+  phase: TerminalPhase;
+  loadError: string | null;
+  kind: "agent" | "shell";
+}) {
   if (loadError) {
     return <Notice tone="error">The terminal couldn't load: {loadError}</Notice>;
   }
@@ -137,6 +151,14 @@ function PhaseOverlay({ phase, loadError }: { phase: TerminalPhase; loadError: s
     case "failed":
       return <Notice tone="error">{phase.message}</Notice>;
     case "exited":
+      if (kind === "shell") {
+        return (
+          <Notice>
+            The shell exited{phase.code !== null ? ` with code ${phase.code}` : ""}. Ctrl-J opens
+            another.
+          </Notice>
+        );
+      }
       return (
         <Notice>
           Claude exited{phase.code !== null ? ` with code ${phase.code}` : ""}. Resume it to go on.

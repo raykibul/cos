@@ -7,7 +7,7 @@
 
 use std::io::{Read, Write};
 use std::num::NonZeroU16;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -171,16 +171,6 @@ impl ClaudeTerminal {
     pub fn spawn(
         options: TerminalOptions,
     ) -> Result<(Self, mpsc::UnboundedReceiver<TerminalEvent>), HarnessError> {
-        let binary = options.claude.binary.display().to_string();
-        let pair = native_pty_system()
-            .openpty(PtySize {
-                rows: options.rows,
-                cols: options.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(pty_error)?;
-
         let mut command = CommandBuilder::new(&options.claude.binary);
         command.args(options.args());
         command.cwd(&options.claude.cwd);
@@ -199,11 +189,59 @@ impl ClaudeTerminal {
         if let Some(hooks) = &options.hooks {
             command.env(hooks::SOCKET_ENV, &hooks.socket);
         }
+        Self::start(command, options.claude.session_id, options.rows, options.cols)
+    }
 
+    /// Runs any program in a terminal of its own, such as a login shell, in
+    /// `cwd`. It gets the daemon's environment with `env` on top, the
+    /// terminal's variables, and none of Claude's session markers. Its
+    /// session id is empty.
+    pub fn spawn_program(
+        program: &Path,
+        args: &[String],
+        cwd: &Path,
+        env: &[(String, String)],
+        rows: u16,
+        cols: u16,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<TerminalEvent>), HarnessError> {
+        let mut command = CommandBuilder::new(program);
+        command.args(args);
+        command.cwd(cwd);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        for name in SESSION_MARKERS {
+            command.env_remove(name);
+        }
+        for (name, value) in TERMINAL_ENV {
+            command.env(name, value);
+        }
+        Self::start(command, String::new(), rows, cols)
+    }
+
+    fn start(
+        command: CommandBuilder,
+        session_id: String,
+        rows: u16,
+        cols: u16,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<TerminalEvent>), HarnessError> {
+        let program = command
+            .get_argv()
+            .first()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(pty_error)?;
         let mut child = pair
             .slave
             .spawn_command(command)
-            .map_err(|error| HarnessError::Terminal(format!("could not start {binary}: {error:#}")))?;
+            .map_err(|error| HarnessError::Terminal(format!("could not start {program}: {error:#}")))?;
         // Only the child should hold the terminal's other end, so reads end
         // once it exits.
         drop(pair.slave);
@@ -213,12 +251,7 @@ impl ClaudeTerminal {
         let killer = child.clone_killer();
         let pid = child.process_id();
         let screen = Arc::new(Mutex::new(Screen {
-            parser: vt100::Parser::new_with_callbacks(
-                size(options.rows),
-                size(options.cols),
-                SCROLLBACK,
-                Replies::default(),
-            ),
+            parser: vt100::Parser::new_with_callbacks(size(rows), size(cols), SCROLLBACK, Replies::default()),
             updates: broadcast::channel(UPDATE_BUFFER).0,
             exited: None,
         }));
@@ -261,7 +294,7 @@ impl ClaudeTerminal {
             .map_err(|error| HarnessError::Terminal(error.to_string()))?;
 
         let terminal = Self {
-            session_id: options.claude.session_id,
+            session_id,
             pid,
             writer,
             master: Mutex::new(pair.master),

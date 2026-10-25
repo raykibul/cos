@@ -102,6 +102,8 @@ export interface Bridge {
   /** Follows the event log; returns a stream id for `closeStream`. */
   followEvents(after: number | null, onMessage: (message: EventMessage) => void): Promise<number>;
   attachTerminal(agentId: number, onMessage: (message: TerminalMessage) => void): Promise<number>;
+  /** A shell's terminal (`/v1/shells/{id}/terminal`), like `attachTerminal`. */
+  attachShell(shellId: number, onMessage: (message: TerminalMessage) => void): Promise<number>;
   closeStream(id: number): Promise<void>;
   hostsList(): Promise<HostList>;
   /** Saves a host without switching to it. */

@@ -261,6 +261,18 @@ pub(crate) async fn attach_terminal(
     Ok(state.keep(generation, handle))
 }
 
+/// A shell's terminal (`/v1/shells/{id}/terminal`), like `attach_terminal`.
+#[tauri::command]
+pub(crate) async fn attach_shell(
+    state: State<'_, AppState>,
+    shell_id: i64,
+    on_message: Channel<TerminalMessage>,
+) -> CommandResult<u32> {
+    let (generation, bridge) = state.bridge();
+    let handle = bridge.attach_shell(shell_id, move |message| on_message.send(message).is_ok());
+    Ok(state.keep(generation, handle))
+}
+
 #[tauri::command]
 pub(crate) fn hosts_list(state: State<'_, AppState>) -> HostList {
     state.list()

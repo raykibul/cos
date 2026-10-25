@@ -16,7 +16,9 @@ export type Page =
   /** A project's environment variables for its agents; `id` is the project's. */
   | { kind: "projectEnv"; id: number }
   /** Settings: your machines, environment variables for all projects, and remote access to this one. */
-  | { kind: "settings" };
+  | { kind: "settings" }
+  /** A shell the daemon runs in `cwd` (`id` is the shell's), opened with Ctrl-J. */
+  | { kind: "shell"; id: number; cwd: string; projectId: number | null };
 
 export type DialogState =
   | { kind: "addProject" }

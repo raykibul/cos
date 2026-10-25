@@ -111,6 +111,7 @@ impl Fixture {
             self.dir.path(),
         );
         let state = api::AppState {
+            shells: crate::daemon::shells::Shells::new(),
             staff,
             judge,
             log: self.log.clone(),

@@ -221,6 +221,7 @@ impl FakeDaemon {
             .route("/v1/status", get(status))
             .route("/v1/events/stream", get(events_stream))
             .route("/v1/agents/{id}/terminal", get(terminal))
+            .route("/v1/shells/{id}/terminal", get(terminal))
             .route("/v1/host", get(host))
             .fallback(echo)
             .layer(middleware::from_fn_with_state(self.state.clone(), guard))
@@ -917,6 +918,20 @@ async fn terminal_messages_pass_through() {
     assert_eq!(within("the stream to end", messages.recv()).await, None);
     assert!(handle.is_finished());
     assert_eq!(daemon.state.snapshots.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_shell_terminal_streams_from_the_shells_route() {
+    let daemon = FakeDaemon::start();
+    let (handle, mut messages) = collect(|sink| daemon.bridge().attach_shell(3, sink));
+    assert_eq!(next(&mut messages).await, snapshot(1));
+    daemon.terminal("exit", json!({"exit_code": 0}));
+    assert_eq!(
+        next(&mut messages).await,
+        TerminalMessage::Exit { exit_code: Some(0) }
+    );
+    assert_eq!(within("the stream to end", messages.recv()).await, None);
+    assert!(handle.is_finished());
 }
 
 #[tokio::test]

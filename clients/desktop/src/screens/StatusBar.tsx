@@ -30,7 +30,7 @@ export function StatusBar() {
         </>
       ) : null}
       <span className="ml-auto truncate font-mono text-[10.5px]">
-        ⌘K jump · ⌘1–9 chiefs · ⌘W close tab
+        ⌘K jump · ⌘1–9 chiefs · ⌃J terminal · ⌘W close tab
       </span>
     </footer>
   );

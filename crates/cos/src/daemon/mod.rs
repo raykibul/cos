@@ -13,6 +13,7 @@ pub(crate) mod judge;
 pub(crate) mod judge_api;
 pub(crate) mod peers;
 pub(crate) mod remote_api;
+pub(crate) mod shells;
 pub(crate) mod staff;
 pub(crate) mod staff_api;
 pub(crate) mod tailnet;
@@ -106,7 +107,9 @@ pub(crate) async fn run_with(
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
 
     let (stopping_tx, stopping) = watch::channel(false);
+    let shells = shells::Shells::new();
     let state = api::AppState {
+        shells: shells.clone(),
         log: log.clone(),
         projects,
         devices,
@@ -137,6 +140,7 @@ pub(crate) async fn run_with(
     // Bounded: agents that don't exit in time are killed. They end up
     // `interrupted`, ready to resume.
     agents.shutdown().await;
+    shells.close_all();
     match tokio::time::timeout(SHUTDOWN_GRACE, server).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => tracing::error!(%error, "server failed"),

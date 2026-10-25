@@ -6,6 +6,8 @@ mod attachments;
 pub(crate) use attachments::Folder;
 mod env;
 mod judge;
+#[cfg(test)]
+mod shells;
 mod staff;
 
 pub(crate) use agents::TerminalMessage;

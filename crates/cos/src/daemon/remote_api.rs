@@ -37,7 +37,9 @@ use super::tailnet::{Guard, Refusal, TailnetSettings, TailnetStatus};
 /// How long `PUT /v1/tailnet` waits for the listener to start or stop.
 const SETTLE: Duration = Duration::from_secs(15);
 /// Path prefixes only the Unix socket may use.
-const HOST_ONLY: &[&str] = &["/v1/devices", "/v1/tailnet"];
+const HOST_ONLY: &[&str] = &["/v1/devices", "/v1/tailnet", SHELLS];
+/// Shell terminals: a shell is the machine itself, so only its own user opens one.
+const SHELLS: &str = "/v1/shells";
 /// Under a host-only prefix, but served to approved devices too.
 const SHARED: &[&str] = &["/v1/tailnet/peers"];
 
@@ -111,24 +113,30 @@ async fn admit(
 }
 
 async fn refuse_host_only(request: Request, next: Next) -> Response {
-    if is_host_only(request.uri().path()) {
+    let path = request.uri().path();
+    if is_host_only(path) {
+        let message = if is_under(path, SHELLS) {
+            "terminals in a folder open only on the host itself"
+        } else {
+            "devices and remote access can only be managed on the host (`cos devices`, `cos remote`)"
+        };
         return Refusal {
             status: StatusCode::FORBIDDEN,
             code: "host_only",
-            message:
-                "devices and remote access can only be managed on the host (`cos devices`, `cos remote`)"
-                    .into(),
+            message: message.into(),
         }
         .into_response();
     }
     next.run(request).await
 }
 
+fn is_under(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 fn is_host_only(path: &str) -> bool {
-    let under = |prefix: &&str| {
-        path.strip_prefix(*prefix)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    };
+    let under = |prefix: &&str| is_under(path, prefix);
     let shared = SHARED
         .iter()
         .any(|route| path.strip_suffix('/').unwrap_or(path) == *route);
@@ -255,6 +263,8 @@ mod tests {
             "/v1/tailnet/peersx",
             "/v1/tailnet/peers/1",
             "/v1/agents/3/tools/board_get",
+            "/v1/shells",
+            "/v1/shells/2/terminal",
         ] {
             assert!(is_host_only(path), "{path}");
         }
@@ -264,6 +274,7 @@ mod tests {
             "/v1/status",
             "/v1/devicesx",
             "/v1/tailnetwork",
+            "/v1/shellsx",
             "/v2/devices",
             "/",
         ] {

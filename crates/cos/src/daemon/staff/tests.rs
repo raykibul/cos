@@ -219,6 +219,7 @@ fn serve_daemon(
     let (stop, stopping) = watch::channel(false);
     let judge = crate::daemon::judge::Judge::off_for_tests(store, log, projects, manager, dir);
     let state = api::AppState {
+        shells: crate::daemon::shells::Shells::new(),
         log: log.clone(),
         projects: projects.clone(),
         devices: Arc::new(cos_core::Devices::new(store.clone(), log.clone())),

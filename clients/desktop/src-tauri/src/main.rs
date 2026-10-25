@@ -27,6 +27,7 @@ fn main() {
             commands::daemon_fetch_bytes,
             commands::follow_events,
             commands::attach_terminal,
+            commands::attach_shell,
             commands::close_stream,
             commands::hosts_list,
             commands::host_add,

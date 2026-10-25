@@ -25,7 +25,7 @@ use cos_harness::TerminalUpdate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::agents::{AgentError, Screen, StartAgent, TerminalView};
@@ -247,7 +247,12 @@ async fn screen(State(state): State<AppState>, id: Id) -> Result<Json<Screen>, A
 /// is dropped; it reconnects for a fresh snapshot.
 async fn terminal(State(state): State<AppState>, id: Id) -> Result<impl IntoResponse, ApiError> {
     let view = state.agents.attach(agent_id(id)?)?;
-    let mut stopping = state.stopping.clone();
+    Ok(terminal_stream(view, state.stopping.clone()))
+}
+
+/// A terminal as server-sent events, for an agent's or a shell's: see
+/// "Terminal stream" in `docs/agents-api.md`.
+pub(crate) fn terminal_stream(view: TerminalView, mut stopping: watch::Receiver<bool>) -> impl IntoResponse {
     let (sender, receiver) = mpsc::channel::<Result<SseEvent, Infallible>>(64);
 
     tokio::spawn(async move {
@@ -298,7 +303,7 @@ async fn terminal(State(state): State<AppState>, id: Id) -> Result<impl IntoResp
         }
     });
 
-    Ok(Sse::new(ReceiverStream::new(receiver)).keep_alive(KeepAlive::default()))
+    Sse::new(ReceiverStream::new(receiver)).keep_alive(KeepAlive::default())
 }
 
 fn snapshot(rows: u16, cols: u16, data: &[u8]) -> SseEvent {

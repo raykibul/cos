@@ -92,11 +92,18 @@ function AgentView({ agent }: { agent: Agent }) {
 
   useEffect(() => cos.watchTranscript(agent.id), [cos, agent.id]);
 
-  // Ctrl-J shows and hides the terminal, as on the chief's page.
+  // Ctrl-Shift-J shows and hides the terminal, as on the chief's page.
   useEffect(() => {
     if (terminalOnly) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "j") {
+      // Plain Ctrl-J opens a shell tab (App.tsx).
+      if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        event.code === "KeyJ"
+      ) {
         event.preventDefault();
         ui.toggleAgentTerminal();
       }
@@ -153,7 +160,7 @@ function AgentView({ agent }: { agent: Agent }) {
             <IconButton
               icon={SquareTerminal}
               label={terminalOpen ? "Hide the terminal" : "Show the terminal"}
-              title={`${terminalOpen ? "Hide" : "Show"} Claude's terminal (Ctrl-J)`}
+              title={`${terminalOpen ? "Hide" : "Show"} Claude's terminal (Ctrl-Shift-J)`}
               aria-pressed={terminalOpen}
               onClick={() => ui.toggleAgentTerminal(!terminalOpen)}
               className={cx("size-8", terminalOpen && "bg-subtle-2 text-ink")}
@@ -406,7 +413,7 @@ function AgentWelcome({
         >
           open its terminal
         </button>{" "}
-        (Ctrl-J).
+        (Ctrl-Shift-J).
       </p>
       {error ? <p className="text-[13px] text-tone-red">{error}</p> : null}
     </div>

@@ -19,6 +19,7 @@ import {
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
 import { FakeEnv, makeEnv } from "./fake/env";
 import { FakeJudge } from "./fake/judge";
+import { FakeShells } from "./fake/shells";
 import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
 import { AttachmentError, FakeFiles, created, seedFiles } from "./fake/attachments";
 import type {
@@ -138,10 +139,13 @@ export class FakeDaemon {
   readonly judge: FakeJudge;
   /** Uploaded attachments (fake/attachments.ts). */
   readonly files = new FakeFiles();
+  /** Shell terminals (fake/shells.ts). */
+  readonly shells: FakeShells;
 
   constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
     this.remote = remote;
+    this.shells = new FakeShells(remote, () => this.fixtures.now);
     this.devices = remote ? [] : makeDevices(this.fixtures.now);
     this.tailnet = tailnetStatus(!remote, 7700, options.firewall ? firewallReason : null);
     this.peersReason = options.tailscaleOff ? tailscaleReason : null;
@@ -361,6 +365,8 @@ export class FakeDaemon {
     if (env) return env;
     const judge = this.judge.route(method, path, b);
     if (judge) return judge;
+    const shell = this.shells.route(method, path, b);
+    if (shell) return shell;
 
     // Projects and workspaces.
     if (method === "GET" && path === "/v1/projects") {
@@ -981,6 +987,7 @@ export class FakeDaemon {
     const stream = this.terminals.get(id);
     if (stream?.timer) clearInterval(stream.timer);
     this.terminals.delete(id);
+    this.shells.detach(id);
   }
 }
 
@@ -1273,6 +1280,27 @@ export class FakeBridge implements Bridge {
           return;
         }
         daemon.attach(agentId, onMessage, id);
+      },
+    );
+    return id;
+  }
+
+  async attachShell(
+    shellId: number,
+    onMessage: (message: TerminalMessage) => void,
+  ): Promise<number> {
+    const id = this.nextStream++;
+    const daemon = this.currentDaemon;
+    this.whenAdmitted(
+      id,
+      this.current,
+      (gate) => onMessage({ type: "disconnected", reason: gate.message, code: gate.code }),
+      () => {
+        if (!daemon.running) {
+          onMessage({ type: "disconnected", reason: this.notRunning().message, code: null });
+          return;
+        }
+        daemon.shells.attach(shellId, onMessage, id);
       },
     );
     return id;

@@ -165,7 +165,7 @@ describe("workspace page", () => {
 });
 
 describe("agent page", () => {
-  it("shows the conversation and the approval, and the terminal on Ctrl-J", async () => {
+  it("shows the conversation and the approval, and the terminal on Ctrl-Shift-J", async () => {
     const { user } = await renderApp({ kind: "agent", id: 8 });
     expect(screen.getByText("Claude wants to run")).toBeInTheDocument();
     const log = page().getByRole("log", { name: "Conversation with Claude" });
@@ -180,7 +180,7 @@ describe("agent page", () => {
     expect(
       page().getByRole("textbox", { name: "Message Add left-pad to the formatter" }),
     ).toBeDisabled();
-    await user.keyboard("{Control>}j{/Control}");
+    await user.keyboard("{Control>}{Shift>}j{/Shift}{/Control}");
     expect(page().getByRole("complementary", { name: "Claude's terminal" })).toBeInTheDocument();
     await waitFor(() => expect(written.join("")).toContain("Do you want to proceed?"));
   });
@@ -228,6 +228,49 @@ describe("agent page", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+  });
+});
+
+describe("terminal tabs", () => {
+  it("opens a shell in the project's root on Ctrl-J from its chief, and ends it with the tab", async () => {
+    const { user, daemon, cos, ui } = await renderApp({ kind: "chief", id: 1 });
+    const root = cos.get().projects.find((p) => p.id === 1)!.root;
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/shells",
+      body: { cwd: root, project_id: 1 },
+    });
+    const page = ui.store.getState().page;
+    expect(page).toMatchObject({ kind: "shell", cwd: root, projectId: 1 });
+    const folder = root.split("/").pop()!;
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent(`${folder} terminal`);
+    expect(screen.getByRole("heading", { name: "Terminal" })).toBeInTheDocument();
+    await waitFor(() => expect(written.join("")).toContain("me@mac"));
+
+    await user.click(screen.getByRole("button", { name: `Close ${folder} terminal` }));
+    await act(() => settle());
+    const closed = `/v1/shells/${"id" in page ? page.id : -1}`;
+    expect(daemon.requests.some((r) => r.method === "DELETE" && r.path === closed)).toBe(true);
+  });
+
+  it("opens it in the session's folder from a session's page", async () => {
+    const { user, daemon, cos } = await renderApp({ kind: "agent", id: 7 });
+    const agent = cos.get().agents.find((a) => a.id === 7)!;
+    const workspace = cos
+      .get()
+      .projects.flatMap((p) => p.workspaces)
+      .find((w) => w.id === agent.workspaceId)!;
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    const started = daemon.requests.find((r) => r.path === "/v1/shells");
+    expect(started?.body).toEqual({
+      cwd: agent.cwd ?? workspace.path,
+      project_id: workspace.projectId,
+    });
+    // Claude's own terminal stays where it was.
+    expect(screen.queryByRole("complementary", { name: "Claude's terminal" })).toBeNull();
   });
 });
 
