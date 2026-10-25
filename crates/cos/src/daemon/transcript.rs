@@ -7,7 +7,9 @@
 //! or an entry this module doesn't know, is skipped, never an error. Left out:
 //! thinking, system and meta entries, sidechains (subagents), bookkeeping
 //! entries (`attachment`, `file-history-snapshot`, `api-request-*`…), local
-//! command echoes and interruption markers. A line still being written (no
+//! command echoes and interruption markers. A message you sent while Claude
+//! was busy, which Claude records as a `queued_command` attachment when it
+//! reads it mid-turn, is shown as what you typed. A line still being written (no
 //! newline yet) waits for the next read, so message numbers never change.
 //!
 //! Reads go through a [`Cache`]: a file that only grew since the last read
@@ -40,6 +42,8 @@ const AGENT_TOOLS: [&str; 3] = [
     "mcp__cos__agent_read",
     "mcp__cos__agent_stop",
 ];
+/// The attachment Claude records for a message typed while it was busy.
+const QUEUED_COMMAND: &str = "queued_command";
 /// How many transcripts the cache keeps parsed.
 const CACHED_FILES: usize = 64;
 /// Context windows, in tokens.
@@ -234,6 +238,19 @@ impl Parser {
                             }
                         }
                         _ => {}
+                    }
+                }
+            }
+            // A message sent while Claude was busy, which it read mid-turn.
+            // Claude keeps it as an attachment rather than a user entry.
+            Some("attachment") if entry["attachment"]["type"].as_str() == Some(QUEUED_COMMAND) => {
+                let prompt = &entry["attachment"]["prompt"];
+                if let Some(text) = prompt.as_str() {
+                    push_user_text(messages, text, ts_ms);
+                }
+                for block in prompt.as_array().into_iter().flatten() {
+                    if block["type"].as_str() == Some("text") {
+                        push_user_text(messages, block["text"].as_str().unwrap_or_default(), ts_ms);
                     }
                 }
             }

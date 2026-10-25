@@ -70,7 +70,7 @@ type EventMessage =
   | { type: "disconnected"; reason: string; notRunning: boolean; code: string | null };
 ```
 
-- **Reconnects:** the bridge keeps the stream open until `close_stream`. On a drop it sends `disconnected`, retries with backoff (0.5 s doubling to 5 s), and resumes after the last `seq` it delivered, sending `connected` again first.
+- **Reconnects:** the bridge keeps the stream open until `close_stream`. On a drop it sends `disconnected`, retries with backoff (0.5 s doubling to 5 s), and resumes after the last `seq` it delivered, sending `connected` again first. Over TCP (another host), a stream that brings nothing for 45 s, not even the daemon's 15 s keep-alive, counts as dropped: a host that vanished (the Mac slept, the network changed) can otherwise leave the connection open and silent for hours, with the app showing nothing new. Terminal streams do the same.
 - **Refusals:** when the daemon refuses this Mac, `code` says why (`device_pending`, `device_denied`, `wrong_user`, …) and the bridge waits the longest delay, 5 s, before asking again. An approval on the other Mac lets the app in within seconds.
 - **Log reset:** if `status.last_seq` is lower than the last `seq` delivered, it sends `log_reset` and restarts from 0.
 
