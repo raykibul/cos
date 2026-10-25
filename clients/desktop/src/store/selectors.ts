@@ -210,6 +210,7 @@ export function workspaceOfPage(s: DaemonState, page: Page): number | null {
 export function projectOfPage(s: DaemonState, page: Page): number | null {
   if (page.kind === "chief" || page.kind === "project" || page.kind === "projectEnv")
     return page.id;
+  if (page.kind === "shell") return page.projectId;
   const ws = workspace(s, workspaceOfPage(s, page));
   if (ws) return ws.projectId;
   if (page.kind === "agent") {
@@ -218,6 +219,42 @@ export function projectOfPage(s: DaemonState, page: Page): number | null {
     }
   }
   return null;
+}
+
+/**
+ * Where Ctrl-J opens a terminal from `page`: a chief's or project's root, a
+ * workspace's folder, a session's folder, or the same folder as a terminal.
+ * Elsewhere, the root of `fallbackProject` (the one the sidebar shows).
+ */
+export function shellPlace(
+  s: DaemonState,
+  page: Page,
+  fallbackProject: number | null,
+): { cwd: string; projectId: number | null } | null {
+  const root = (id: number | null) => {
+    const p = id === null ? undefined : project(s, id);
+    return p ? { cwd: p.root, projectId: p.id } : null;
+  };
+  switch (page.kind) {
+    case "shell":
+      return { cwd: page.cwd, projectId: page.projectId };
+    case "chief":
+    case "project":
+    case "projectEnv":
+      return root(page.id);
+    case "workspace": {
+      const ws = workspace(s, page.id);
+      return ws ? { cwd: ws.path, projectId: ws.projectId } : null;
+    }
+    case "agent": {
+      const a = agent(s, page.id);
+      const ws = workspace(s, a?.workspaceId);
+      const cwd = a?.cwd ?? ws?.path;
+      return cwd ? { cwd, projectId: ws?.projectId ?? projectOfPage(s, page) } : null;
+    }
+    default:
+      return root(fallbackProject);
+  }
 }
 
 // MARK: Environment variables

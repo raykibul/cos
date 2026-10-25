@@ -94,6 +94,8 @@ pub(crate) struct AppState {
     pub tailnet: super::tailnet::Tailnet,
     pub peers: super::peers::Peers,
     pub agents: super::agents::AgentManager,
+    /// Shell terminals you open in a folder.
+    pub shells: super::shells::Shells,
     pub staff: super::staff::Staff,
     /// jev, in shadow mode.
     pub judge: super::judge::Judge,
@@ -124,6 +126,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(super::env_api::routes())
         .merge(super::judge_api::routes())
         .merge(super::attachments_api::routes())
+        .merge(super::shells::routes())
         .with_state(state)
 }
 

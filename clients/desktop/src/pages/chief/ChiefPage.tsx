@@ -2,7 +2,7 @@
 // a header with its state, how full its context is, model, terminal toggle
 // and menu; the conversation from its transcript; the agents waiting on you;
 // whether coordination is paused; and a composer. Its own terminal opens in
-// a resizable split on the right (Ctrl-J).
+// a resizable split on the right (Ctrl-Shift-J).
 
 import {
   ChevronDown,
@@ -109,10 +109,17 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   useEffect(() => (agentId !== null ? cos.watchTranscript(agentId) : undefined), [cos, agentId]);
   useEffect(() => cos.watchInbox(projectId), [cos, projectId]);
 
-  // Ctrl-J shows and hides the chief's terminal, as in Selene.
+  // Ctrl-Shift-J shows and hides the chief's terminal.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "j") {
+      // Plain Ctrl-J opens a shell tab (App.tsx).
+      if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        event.code === "KeyJ"
+      ) {
         event.preventDefault();
         ui.toggleChiefTerminal();
       }
@@ -308,7 +315,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             <IconButton
               icon={SquareTerminal}
               label={terminalOpen ? "Hide the chief's terminal" : "Show the chief's terminal"}
-              title={`${terminalOpen ? "Hide" : "Show"} the chief's terminal (Ctrl-J)`}
+              title={`${terminalOpen ? "Hide" : "Show"} the chief's terminal (Ctrl-Shift-J)`}
               aria-pressed={terminalOpen}
               disabled={agentId === null}
               onClick={() => ui.toggleChiefTerminal()}

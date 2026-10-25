@@ -280,6 +280,33 @@ export function decodeScreen(value: unknown): AgentScreen {
   };
 }
 
+// MARK: Shells (socket-only)
+
+/** A login shell the daemon runs in a folder, for you to type in. */
+export interface Shell {
+  id: number;
+  /** The project whose environment it got. */
+  projectId: number | null;
+  cwd: string;
+  pid: number | null;
+  startedMs: number;
+  exited: boolean;
+  exitCode: number | null;
+}
+
+export function decodeShell(value: unknown): Shell {
+  const o = asObject(value, "shell");
+  return {
+    id: reqNum(o, "id", "shell"),
+    projectId: optNum(o.project_id),
+    cwd: str(o.cwd),
+    pid: optNum(o.pid),
+    startedMs: num(o.started_ms, 0),
+    exited: bool(o.exited, false),
+    exitCode: optNum(o.exit_code),
+  };
+}
+
 // MARK: Devices and the tailnet (socket-only routes)
 
 export interface Device {

@@ -99,11 +99,7 @@ impl Client {
 
     /// The agent's terminal: a snapshot, then output as it comes.
     pub(crate) async fn terminal(&self, id: i64) -> anyhow::Result<TerminalStream> {
-        let response = self.get(&format!("/v1/agents/{id}/terminal")).await?;
-        Ok(TerminalStream {
-            body: response.into_body(),
-            buffer: Vec::new(),
-        })
+        TerminalStream::open(self, &format!("/v1/agents/{id}/terminal")).await
     }
 
     /// Approvals, all of them or only those in `state` (such as `pending`).
@@ -160,6 +156,15 @@ pub(crate) struct TerminalStream {
 }
 
 impl TerminalStream {
+    /// Opens the terminal stream at `path`, an agent's or a shell's.
+    pub(crate) async fn open(client: &Client, path: &str) -> anyhow::Result<Self> {
+        let response = client.get(path).await?;
+        Ok(Self {
+            body: response.into_body(),
+            buffer: Vec::new(),
+        })
+    }
+
     /// The next message, or `None` when the daemon ends the stream.
     pub(crate) async fn next(&mut self) -> anyhow::Result<Option<TerminalMessage>> {
         loop {

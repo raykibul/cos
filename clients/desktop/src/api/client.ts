@@ -24,6 +24,7 @@ import {
   type Device,
   type LoggedEvent,
   type Project,
+  type Shell,
   type Status,
   type TailnetStatus,
   type Workspace,
@@ -33,6 +34,7 @@ import {
   decodeEvent,
   decodeProject,
   decodeScreen,
+  decodeShell,
   decodeStatus,
   decodeTailnet,
   decodeWorkspace,
@@ -295,6 +297,30 @@ export class DaemonClient {
 
   screen(agentId: number): Promise<AgentScreen> {
     return this.get(`/v1/agents/${agentId}/screen`, decodeScreen);
+  }
+
+  // MARK: Shells (this Mac only: another machine answers 403 host_only)
+
+  /** Starts a login shell in `cwd`, with the project's environment when given. */
+  startShell(cwd: string, projectId: number | null, rows?: number, cols?: number): Promise<Shell> {
+    const body: Record<string, unknown> = { cwd };
+    if (projectId !== null) body.project_id = projectId;
+    if (rows) body.rows = rows;
+    if (cols) body.cols = cols;
+    return this.send("POST", "/v1/shells", body, decodeShell);
+  }
+
+  async shellKeys(shellId: number, bytes: Uint8Array): Promise<void> {
+    await this.request("POST", `/v1/shells/${shellId}/keys`, { data: toBase64(bytes) });
+  }
+
+  async resizeShell(shellId: number, rows: number, cols: number): Promise<void> {
+    await this.request("POST", `/v1/shells/${shellId}/resize`, { rows, cols });
+  }
+
+  /** Kills the shell, if it still runs, and forgets it. */
+  async closeShell(shellId: number): Promise<void> {
+    await this.request("DELETE", `/v1/shells/${shellId}`);
   }
 
   // MARK: Approvals

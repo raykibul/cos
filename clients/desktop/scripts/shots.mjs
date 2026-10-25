@@ -96,6 +96,18 @@ const shots = [
   ["workspace", "page=workspace:3"],
   ["agent-working", "page=agent:7"],
   ["agent-terminal", "page=agent:7&terminal"],
+  [
+    "shell-tab",
+    "page=chief:1",
+    async (page) => {
+      await page.keyboard.press("Control+j");
+      await page.getByRole("heading", { name: "Terminal" }).waitFor();
+      await page.waitForTimeout(400);
+      await page.keyboard.type("pwd");
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+    },
+  ],
   ["agent-approval", "page=agent:8"],
   ["agent-trust", "page=agent:9"],
   ["agent-login", "page=agent:11"],

@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
-import { useEffect, useMemo } from "react";
-import { shownProject } from "../store/selectors";
+import { useEffect, useMemo, useRef } from "react";
+import { shellPlace, shownProject } from "../store/selectors";
 import { type CosStore, isThisMac } from "../store/store";
 import { ChiefPage } from "../pages/chief/ChiefPage";
 import { AgentPage } from "../screens/AgentPage";
@@ -12,6 +12,7 @@ import { ProjectPage } from "../screens/ProjectPage";
 import { QuickSwitch } from "../screens/QuickSwitch";
 import { Rail } from "../screens/Rail";
 import { SettingsPage } from "../screens/SettingsPage";
+import { ShellPage } from "../screens/ShellPage";
 import { Sidebar } from "../screens/Sidebar";
 import { StatusBar } from "../screens/StatusBar";
 import { TabBar } from "../screens/TabBar";
@@ -21,7 +22,7 @@ import { Dialogs } from "../sheets/Dialogs";
 import { cx } from "../ui/cx";
 import { AppContext, useApp, useCos, useUi } from "./context";
 import { useSidebar } from "./layout";
-import { type UiStore, createUiStore } from "./ui";
+import { type Page, type UiStore, createUiStore } from "./ui";
 
 export function App({ cos, ui }: { cos: CosStore; ui?: UiStore }) {
   const value = useMemo(() => ({ cos, ui: ui ?? createUiStore() }), [cos, ui]);
@@ -47,6 +48,7 @@ function Shell() {
 
   const sidebar = useSidebar();
   useShortcuts(sidebar.narrow);
+  useShellsEndWithTheirTabs();
 
   return (
     // The window has no title bar. The rail's top (under the traffic
@@ -77,9 +79,10 @@ function Shell() {
 
 /**
  * The window's shortcuts: ⌘K the switcher, ⌘1 to ⌘9 each project's chief,
- * ⌘W closes the tab, ⌃Tab or ⌘⇧] and ⌘⇧[ move between tabs, and ⌘B shows
- * or hides the sidebar. They're caught before the page (a terminal, say)
- * sees them, and wait while a dialog is open.
+ * ⌘W closes the tab, ⌃Tab or ⌘⇧] and ⌘⇧[ move between tabs, ⌘B shows or
+ * hides the sidebar, and ⌃J opens a terminal tab where the page is (see
+ * `shellPlace`). They're caught before the page (a terminal, say) sees them,
+ * and wait while a dialog is open.
  */
 function useShortcuts(narrow: boolean) {
   const { cos, ui } = useApp();
@@ -100,6 +103,14 @@ function useShortcuts(narrow: boolean) {
         ui.closeTab();
       } else if (command && !event.shiftKey && event.code === "KeyB") {
         ui.toggleSidebar(narrow);
+      } else if (
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.code === "KeyJ"
+      ) {
+        openShell(cos, ui);
       } else if (event.ctrlKey && !event.metaKey && key === "tab") {
         ui.cycleTab(event.shiftKey ? -1 : 1);
       } else if (command && event.shiftKey && (event.code === "BracketRight" || key === "}")) {
@@ -142,7 +153,40 @@ function Content() {
       return <WorkspacePage key={page.id} workspaceId={page.id} />;
     case "agent":
       return <AgentPage key={page.id} agentId={page.id} />;
+    case "shell":
+      return <ShellPage key={page.id} page={page} />;
   }
+}
+
+/** Starts a shell where the page is and opens it in a tab next to it. */
+function openShell(cos: CosStore, ui: UiStore): void {
+  const { page, project } = ui.store.getState();
+  const place = shellPlace(cos.get(), page, project);
+  if (!place) {
+    ui.toast("Nowhere to open a terminal", "Add a project first; Ctrl-J opens one in its folder.");
+    return;
+  }
+  void ui.perform("Couldn't open a terminal", async () => {
+    const shell = await cos.client.startShell(place.cwd, place.projectId);
+    ui.navigate({ kind: "shell", id: shell.id, cwd: shell.cwd, projectId: shell.projectId });
+  });
+}
+
+/** A closed terminal tab ends its shell, so none is left running unseen. */
+function useShellsEndWithTheirTabs() {
+  const { cos } = useApp();
+  const tabs = useUi((s) => s.tabs);
+  const open = useRef<Page[]>(tabs);
+  useEffect(() => {
+    const before = open.current;
+    open.current = tabs;
+    for (const tab of before) {
+      if (tab.kind !== "shell") continue;
+      if (tabs.some((t) => t.kind === "shell" && t.id === tab.id)) continue;
+      // Already gone (it exited, or the daemon restarted): nothing to end.
+      void cos.client.closeShell(tab.id).catch(() => undefined);
+    }
+  }, [cos, tabs]);
 }
 
 function Toasts() {

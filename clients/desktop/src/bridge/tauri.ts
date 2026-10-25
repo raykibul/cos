@@ -44,6 +44,12 @@ export class TauriBridge implements Bridge {
     return invoke<number>("attach_terminal", { agentId, onMessage: channel });
   }
 
+  attachShell(shellId: number, onMessage: (message: TerminalMessage) => void): Promise<number> {
+    const channel = new Channel<TerminalMessage>();
+    channel.onmessage = onMessage;
+    return invoke<number>("attach_shell", { shellId, onMessage: channel });
+  }
+
   closeStream(id: number): Promise<void> {
     return invoke("close_stream", { id });
   }

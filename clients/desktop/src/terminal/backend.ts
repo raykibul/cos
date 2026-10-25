@@ -10,3 +10,13 @@ export function terminalBackend(cos: CosStore): TerminalBackend {
     resize: (agentId, rows, cols) => cos.client.resizeAgent(agentId, rows, cols),
   };
 }
+
+/** The same for a shell: its id in place of an agent's. */
+export function shellBackend(cos: CosStore): TerminalBackend {
+  return {
+    attach: (shellId, onMessage) => cos.bridge.attachShell(shellId, onMessage),
+    close: (id) => cos.bridge.closeStream(id),
+    sendKeys: (shellId, bytes) => cos.client.shellKeys(shellId, bytes),
+    resize: (shellId, rows, cols) => cos.client.resizeShell(shellId, rows, cols),
+  };
+}

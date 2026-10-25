@@ -73,6 +73,8 @@ impl TestServer {
         let (stop, stopping) = watch::channel(false);
         let judge = crate::daemon::judge::Judge::off_for_tests(&store, &log, &projects, &agents, dir.path());
         let state = api::AppState {
+            // A plain shell, whatever `$SHELL` the machine running the tests has.
+            shells: crate::daemon::shells::Shells::with_program("/bin/sh".into()),
             log: log.clone(),
             projects,
             devices,
@@ -406,6 +408,110 @@ async fn bad_requests_get_json_errors() {
     assert!(bad_json.contains("{\"error\":"), "{bad_json}");
     assert!(bad_id.starts_with("HTTP/1.1 404"), "{bad_id}");
     assert!(bad_id.contains("there is no such workspace"), "{bad_id}");
+}
+
+// ---- Shells ----
+
+#[tokio::test]
+async fn a_shell_runs_in_its_folder_until_closed() {
+    use crate::client::TerminalMessage;
+    use crate::daemon::shells::StartShell;
+
+    let server = TestServer::start();
+    let client = server.client();
+    let folder = tempfile::tempdir().unwrap();
+    let cwd = folder.path().canonicalize().unwrap();
+    let start = |cwd: &str| StartShell {
+        cwd: cwd.into(),
+        project_id: None,
+        rows: Some(24),
+        cols: Some(80),
+    };
+
+    let shell = client.start_shell(&start(cwd.to_str().unwrap())).await.unwrap();
+    assert_eq!(shell.cwd, cwd.display().to_string());
+    assert!(shell.pid.is_some() && !shell.exited);
+    assert_eq!(client.shells().await.unwrap(), std::slice::from_ref(&shell));
+
+    let mut stream = client.shell_terminal(shell.id).await.unwrap();
+    let first = within("snapshot", stream.next()).await.unwrap().unwrap();
+    assert!(
+        matches!(
+            first,
+            TerminalMessage::Snapshot {
+                rows: 24,
+                cols: 80,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
+    client
+        .shell_keys(shell.id, b"pwd; echo done-$((40+2))\n")
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    within("pwd", async {
+        while !String::from_utf8_lossy(&seen).contains("done-42") {
+            if let Some(TerminalMessage::Output(bytes)) = stream.next().await.unwrap() {
+                seen.extend(bytes);
+            }
+        }
+    })
+    .await;
+    assert!(String::from_utf8_lossy(&seen).contains(cwd.to_str().unwrap()));
+    client.resize_shell(shell.id, 30, 100).await.unwrap();
+
+    client.close_shell(shell.id).await.unwrap();
+    assert!(client.shells().await.unwrap().is_empty());
+    let (status, _) = daemon_error(client.shell_keys(shell.id, b"x").await.unwrap_err());
+    assert_eq!(status, 404);
+
+    for (cwd, wanted) in [
+        ("relative/path", "absolute"),
+        ("/no/such/folder", "isn't a folder"),
+    ] {
+        let (status, message) = daemon_error(client.start_shell(&start(cwd)).await.unwrap_err());
+        assert_eq!(status, 400);
+        assert!(message.contains(wanted), "{message}");
+    }
+    let mut unknown = start(cwd.to_str().unwrap());
+    unknown.project_id = Some(99);
+    let (status, _) = daemon_error(client.start_shell(&unknown).await.unwrap_err());
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn a_shell_that_exits_ends_its_stream() {
+    use crate::client::TerminalMessage;
+    use crate::daemon::shells::StartShell;
+
+    let server = TestServer::start();
+    let client = server.client();
+    let shell = client
+        .start_shell(&StartShell {
+            cwd: "/".into(),
+            project_id: None,
+            rows: None,
+            cols: None,
+        })
+        .await
+        .unwrap();
+    let mut stream = client.shell_terminal(shell.id).await.unwrap();
+    client.shell_keys(shell.id, b"exit 3\n").await.unwrap();
+    let code = within("exit", async {
+        loop {
+            match stream.next().await.unwrap() {
+                Some(TerminalMessage::Exit { exit_code }) => return exit_code,
+                Some(_) => {}
+                None => panic!("the stream ended without an exit"),
+            }
+        }
+    })
+    .await;
+    assert_eq!(code, Some(3));
+    let listed = client.shells().await.unwrap();
+    assert!(listed[0].exited && listed[0].exit_code == Some(3), "{listed:?}");
 }
 
 // ---- Remote access ----

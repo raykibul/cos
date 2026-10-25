@@ -196,6 +196,23 @@ Files you send with a message, from any device: the Mac app, the iPhone, or `cos
 - **Download:** `GET /v1/agents/{id}/attachments/{name}` gives the file with its content type, `Cache-Control: private, max-age=86400` (names never get reused) and `nosniff`. 404 for anything else in the folder.
 - **Between agents:** a Chief of Staff passes files on with `attachments` on `agent_spawn` and `agent_send` (see [chief-of-staff.md](chief-of-staff.md#staff-mcp-tools-server-cos)); cos copies them into the target's folder, reusing an identical copy already there.
 
+## Shells
+
+A shell is a login shell (`$SHELL -l`, else the OS's usual one) the daemon runs in a folder, for you to type in: the Mac app opens one with Ctrl-J. It runs in a terminal like an agent's and streams the same way, but it isn't an agent: no hooks, no approvals, no events, and nothing in the database. Shells live in the daemon's memory, and stop when it stops.
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `GET /v1/shells` | | `{"shells": [Shell]}` |
+| `POST /v1/shells` | `{"cwd": "/abs/folder", "project_id"?: 1, "rows"?: 40, "cols"?: 120}` | 201 `Shell`. `cwd` must be an absolute path to a folder (400 otherwise). With `project_id` (404 if unknown) the shell gets the project's environment (global, then the project's own), as its agents do, so `claude` there uses the project's account. At most 32 run at once (409); exited ones are forgotten when the next starts. |
+| `POST /v1/shells/{id}/keys` | `{"data": "<base64>"}` | 204 |
+| `POST /v1/shells/{id}/resize` | `{"rows": 40, "cols": 120}` | 204 |
+| `GET /v1/shells/{id}/terminal` | | SSE, as [Terminal stream](#terminal-stream) |
+| `DELETE /v1/shells/{id}` | | 204. Kills it if it still runs, and forgets it. |
+
+`Shell` is `{"id": 1, "project_id": 1, "cwd": "/abs/folder", "pid": 4242, "started_ms": 1761330000000, "exited": false, "exit_code": null}`. An unknown id is 404 "there is no such terminal".
+
+**This machine only:** over the tailnet every `/v1/shells` route answers 403 `host_only`, since a shell is the machine itself. Approved devices still see and type into agents' terminals.
+
 ## Events
 
 These go in the event log, so apps get them over `/v1/events/stream`. `data` holds the ids:
