@@ -108,6 +108,15 @@ const shots = [
       await page.waitForTimeout(300);
     },
   ],
+  [
+    "session-menu",
+    "page=chief:1",
+    (page) =>
+      page
+        .getByRole("treeitem", { name: /^Write the release notes/ })
+        .click({ button: "right", position: { x: 120, y: 16 } }),
+  ],
+  ["sheet-remove-session", "page=chief:2&dialog=removeAgent:3"],
   ["agent-approval", "page=agent:8"],
   ["agent-trust", "page=agent:9"],
   ["agent-login", "page=agent:11"],

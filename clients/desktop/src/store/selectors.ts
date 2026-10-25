@@ -257,6 +257,12 @@ export function shellPlace(
   }
 }
 
+/** Whether `path` is `folder` or inside it. */
+export function isUnder(path: string, folder: string): boolean {
+  const base = folder.replace(/\/+$/, "");
+  return path === base || path.startsWith(`${base}/`);
+}
+
 // MARK: Environment variables
 
 /** A project's own variable names, CLAUDE_CONFIG_DIR first. */

@@ -143,11 +143,11 @@ function AgentView({ agent }: { agent: Agent }) {
     ...(cwd ? folderItems(cos, cwd) : []),
     "separator",
     {
-      label: "Remove agent…",
+      label: "Remove session…",
       icon: Trash2,
       danger: true,
-      disabled: !canChange || alive,
-      detail: alive ? "Stop it first" : undefined,
+      disabled: !canChange,
+      detail: alive ? "Stops it first" : undefined,
       onSelect: () => ui.open({ kind: "removeAgent", agentId: agent.id }),
     },
   ];

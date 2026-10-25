@@ -2,6 +2,7 @@ import { Check, type LucideIcon } from "lucide-react";
 import {
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useId,
@@ -29,6 +30,8 @@ export type MenuItem =
 export interface TriggerProps {
   ref: (el: HTMLButtonElement | null) => void;
   onClick: () => void;
+  /** Opens the menu where the pointer is: a right-click, or the context-menu key. */
+  onContextMenu: (event: ReactMouseEvent) => void;
   onKeyDown: (event: ReactKeyboardEvent) => void;
   "aria-haspopup": "menu";
   "aria-expanded": boolean;
@@ -37,7 +40,8 @@ export interface TriggerProps {
 
 /**
  * A dropdown menu, drawn in a portal so scrolling panes don't clip it.
- * Arrow keys move between items, Return picks one, Escape closes.
+ * Arrow keys move between items, Return picks one, Escape closes. A trigger
+ * that spreads `onContextMenu` also opens it on a right-click, at the pointer.
  */
 export function Menu({
   trigger,
@@ -55,6 +59,8 @@ export function Menu({
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  // Where a right-click opened it; null when it hangs under the trigger.
+  const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   // The trigger, in state rather than a ref: it's handed out during render.
   const [button, setButton] = useState<HTMLButtonElement | null>(null);
   const list = useRef<HTMLDivElement | null>(null);
@@ -72,12 +78,14 @@ export function Menu({
     if (!open || !button) return;
     const rect = button.getBoundingClientRect();
     const height = list.current?.offsetHeight ?? 200;
-    let top = rect.bottom + 4;
-    if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 4);
-    let left = align === "end" ? rect.right - width : rect.left;
+    let top = point ? point.y : rect.bottom + 4;
+    if (top + height > window.innerHeight - 8) {
+      top = Math.max(8, (point ? point.y : rect.top) - height - 4);
+    }
+    let left = point ? point.x : align === "end" ? rect.right - width : rect.left;
     left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
     setPosition({ top, left });
-  }, [open, align, width, button]);
+  }, [open, align, width, button, point]);
 
   useEffect(() => {
     if (!open) return;
@@ -124,7 +132,16 @@ export function Menu({
         ref: setButton,
         onClick: () => {
           if (!open) onOpen?.();
+          setPoint(null);
           setOpen(!open);
+        },
+        onContextMenu: (event) => {
+          event.preventDefault();
+          // The context-menu key reports no pointer: hang it under the trigger then.
+          const fromKey = event.clientX === 0 && event.clientY === 0;
+          setPoint(fromKey ? null : { x: event.clientX, y: event.clientY });
+          if (!open) onOpen?.();
+          setOpen(true);
         },
         onKeyDown: (event) => {
           if (event.key === "ArrowDown" && !open) {

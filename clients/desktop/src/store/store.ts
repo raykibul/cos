@@ -1129,7 +1129,10 @@ export class CosStore {
       ...p,
       workspaces: p.workspaces.filter((w) => w.id !== workspace.id),
     }));
+    // The daemon forgets its agents with it.
+    this.set((s) => ({ agents: s.agents.filter((a) => a.workspaceId !== workspace.id) }));
     this.refreshProjects();
+    this.agentsRefresh.request();
   }
 
   private updateProject(id: number, change: (project: Project) => Project): void {
@@ -1149,6 +1152,30 @@ export class CosStore {
   async stopAgent(id: number): Promise<void> {
     await this.client.stopAgent(id);
     this.agentsRefresh.request();
+  }
+
+  /**
+   * Waits until agent `id` has stopped (exited or interrupted) or is gone,
+   * as the event stream reports it. Rejects after `timeoutMs`.
+   */
+  untilStopped(id: number, timeoutMs = 15_000): Promise<void> {
+    const stopped = (state: DaemonState) => {
+      const agent = state.agents.find((a) => a.id === id);
+      return !agent || agent.state === "exited" || agent.state === "interrupted";
+    };
+    if (stopped(this.get())) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error("It didn't stop in time. Try again, or stop it from its page."));
+      }, timeoutMs);
+      const unsubscribe = this.state.subscribe((state) => {
+        if (!stopped(state)) return;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve();
+      });
+    });
   }
 
   async resumeAgent(id: number): Promise<Agent> {
