@@ -16,6 +16,7 @@
     "allow-host-add",
     "allow-host-rename",
     "allow-host-remove",
+    "allow-host-rename",
     "allow-host-select",
     "allow-tailnet-peers",
     "allow-set-waiting-count",
