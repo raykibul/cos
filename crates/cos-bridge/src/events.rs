@@ -136,6 +136,8 @@ impl Bridge {
                 .unwrap_or_default();
             return Err(answer_error(status.as_u16(), &bytes));
         }
-        Ok(SseReader::new(response.into_body(), connection))
+        // This Mac's socket can't be left half open, so only TCP needs a limit.
+        let idle = self.target().is_remote().then_some(self.read_timeout);
+        Ok(SseReader::new(response.into_body(), connection, idle))
     }
 }

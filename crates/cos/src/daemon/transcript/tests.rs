@@ -217,6 +217,32 @@ fn context_windows_by_model() {
     assert_eq!((context.used_tokens, context.window_tokens), (250_000, None));
 }
 
+#[test]
+fn a_message_read_mid_turn_shows_as_yours() {
+    let lines = [
+        user_line("Tag the topics"),
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#.to_owned() + "\n",
+        r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a"}]}}"#.to_owned() + "\n",
+        r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"stop","commandMode":"prompt"},"timestamp":"2026-10-25T14:38:00Z"}"#.to_owned() + "\n",
+        r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"and say why"}]}}"#.to_owned() + "\n",
+        r#"{"type":"attachment","attachment":{"type":"todo_reminder","prompt":"not this"}}"#.to_owned() + "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Stopped."}]}}"#.to_owned() + "\n",
+    ]
+    .concat();
+    let transcript = parse(lines.as_bytes());
+    assert_eq!(
+        texts(&transcript),
+        vec![
+            (Speaker::User, MessageKind::Text, "Tag the topics".to_owned()),
+            (Speaker::Assistant, MessageKind::Tool, "Bash: ls".to_owned()),
+            (Speaker::User, MessageKind::Text, "stop".to_owned()),
+            (Speaker::User, MessageKind::Text, "and say why".to_owned()),
+            (Speaker::Assistant, MessageKind::Text, "Stopped.".to_owned()),
+        ]
+    );
+    assert_eq!(transcript.messages[2].ts_ms, 1_792_939_080_000);
+}
+
 fn user_line(text: &str) -> String {
     serde_json::json!({"type": "user", "message": {"role": "user", "content": text}}).to_string() + "\n"
 }

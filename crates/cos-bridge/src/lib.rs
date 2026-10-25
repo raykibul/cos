@@ -46,12 +46,20 @@ impl Default for Backoff {
 /// off the tailnet otherwise hangs for over a minute.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Over TCP, a stream that brings nothing for this long is taken as lost and
+/// reopened. The daemon sends a keep-alive every 15 s, so only a host that
+/// vanished goes this quiet: the Mac slept, the network changed, a tailnet
+/// path broke. Without it such a connection can hang open for hours, and
+/// the app shows nothing new while the agent carries on.
+const READ_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// Talks to one daemon. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct Bridge {
     target: Target,
     backoff: Backoff,
     connect_timeout: Duration,
+    read_timeout: Duration,
 }
 
 impl Bridge {
@@ -67,6 +75,7 @@ impl Bridge {
             target,
             backoff: Backoff::default(),
             connect_timeout: CONNECT_TIMEOUT,
+            read_timeout: READ_TIMEOUT,
         }
     }
 
@@ -79,6 +88,13 @@ impl Bridge {
     #[must_use]
     pub fn with_backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = backoff;
+        self
+    }
+
+    /// Gives up on a quiet stream over TCP sooner; tests make it short.
+    #[must_use]
+    pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
+        self.read_timeout = timeout;
         self
     }
 

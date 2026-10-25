@@ -6,7 +6,7 @@
 use std::convert::Infallible;
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -92,6 +92,9 @@ struct FakeState {
     refusal: Mutex<Option<(StatusCode, String, String)>>,
     /// Requests the guard saw, refused or not.
     guarded: AtomicUsize,
+    /// While set, an event stream opens and then sends nothing, not even a
+    /// keep-alive, like a host that vanished without closing the connection.
+    silent: AtomicBool,
 }
 
 impl FakeState {
@@ -107,6 +110,7 @@ impl FakeState {
             hits: Mutex::default(),
             refusal: Mutex::default(),
             guarded: AtomicUsize::new(0),
+            silent: AtomicBool::new(false),
         })
     }
 }
@@ -333,6 +337,10 @@ fn sse(receiver: mpsc::Receiver<Result<SseEvent, Infallible>>) -> Response {
 async fn events_stream(State(state): State<Arc<FakeState>>, Query(query): Query<After>) -> Response {
     let after = query.after;
     state.afters.lock().unwrap().push(after);
+    if state.silent.load(Ordering::SeqCst) {
+        let body = axum::body::Body::from_stream(tokio_stream::pending::<Result<Bytes, Infallible>>());
+        return ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], body).into_response();
+    }
     let (stored, mut live) = {
         let log = state.log.lock().unwrap();
         let stored: Vec<Value> = log
@@ -651,6 +659,52 @@ async fn follow_works_over_tcp() {
     daemon.log("workspace.created");
     assert_eq!(seq(&next(&mut messages).await), 3);
     assert_eq!(daemon.afters(), [0, 2]);
+}
+
+#[tokio::test]
+async fn a_silent_stream_over_tcp_is_reopened() {
+    let daemon = FakeDaemon::start_tcp();
+    daemon.log("daemon.started");
+    daemon.state.silent.store(true, Ordering::SeqCst);
+    // Slow enough to reconnect that the test speaks up again first.
+    let bridge = daemon
+        .bridge()
+        .with_read_timeout(Duration::from_millis(200))
+        .with_backoff(Backoff {
+            initial: Duration::from_millis(300),
+            max: Duration::from_millis(300),
+        });
+    let (_handle, mut messages) = collect(|sink| bridge.follow_events(None, sink));
+    assert_connected(&next(&mut messages).await, 1);
+    // Nothing comes, not even a keep-alive: the connection is given up.
+    match next(&mut messages).await {
+        EventMessage::Disconnected {
+            not_running, reason, ..
+        } => {
+            assert!(!not_running);
+            assert!(reason.contains("no word from the daemon"), "{reason}");
+        }
+        other => panic!("expected a disconnect, got {other:?}"),
+    }
+    daemon.state.silent.store(false, Ordering::SeqCst);
+    let connected = next(&mut messages).await;
+    assert_connected(&connected, 1);
+    assert_eq!(seq(&next(&mut messages).await), 1);
+}
+
+#[tokio::test]
+async fn keep_alives_hold_a_quiet_stream_open() {
+    let daemon = FakeDaemon::start_tcp();
+    daemon.log("daemon.started");
+    // The fake's keep-alives come every 20 ms.
+    let bridge = daemon.bridge().with_read_timeout(Duration::from_millis(200));
+    let (_handle, mut messages) = collect(|sink| bridge.follow_events(None, sink));
+    assert_connected(&next(&mut messages).await, 1);
+    assert_eq!(seq(&next(&mut messages).await), 1);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    daemon.log("project.added");
+    assert_eq!(seq(&next(&mut messages).await), 2);
+    assert_eq!(daemon.afters(), [0]);
 }
 
 #[tokio::test]

@@ -1,5 +1,7 @@
 //! Reads server-sent events from a response body.
 
+use std::time::Duration;
+
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
@@ -17,19 +19,24 @@ pub(crate) struct SseEvent {
 pub(crate) struct SseReader {
     body: Incoming,
     buffer: Vec<u8>,
+    /// How long to wait for the next bytes, keep-alives included, before
+    /// taking the stream as lost. `None` waits for ever.
+    idle: Option<Duration>,
     _connection: Connection,
 }
 
 impl SseReader {
-    pub(crate) fn new(body: Incoming, connection: Connection) -> Self {
+    pub(crate) fn new(body: Incoming, connection: Connection, idle: Option<Duration>) -> Self {
         Self {
             body,
             buffer: Vec::new(),
+            idle,
             _connection: connection,
         }
     }
 
-    /// The next event, or `None` when the daemon ends the stream.
+    /// The next event, or `None` when the daemon ends the stream. An error
+    /// when nothing at all arrives for the `idle` time.
     pub(crate) async fn next(&mut self) -> Result<Option<SseEvent>, BridgeError> {
         loop {
             while let Some(end) = find(&self.buffer, b"\n\n") {
@@ -38,7 +45,16 @@ impl SseReader {
                     return Ok(Some(event));
                 }
             }
-            match self.body.frame().await {
+            let frame = match self.idle {
+                Some(idle) => tokio::time::timeout(idle, self.body.frame()).await.map_err(|_| {
+                    BridgeError::io(format!(
+                        "no word from the daemon in {} s; reconnecting",
+                        idle.as_secs()
+                    ))
+                })?,
+                None => self.body.frame().await,
+            };
+            match frame {
                 None => return Ok(None),
                 Some(Err(error)) => return Err(BridgeError::io(format!("the stream broke: {error}"))),
                 Some(Ok(frame)) => {
