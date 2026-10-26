@@ -40,6 +40,7 @@ Change it only together with all sides.
   - that its brief and notes are all it keeps, since it may be started in a new session at any time.
 
   The current brief, then each memory note's name and description, are appended to the system prompt on each (re)start.
+- **Its identity** is yours to write: who it is and how it works, about 500 words (at most 8 KiB). It goes in the system prompt right after the first paragraph, inside `<identity>…</identity>`, with a line saying only the user can change it. Only `PUT …/staff {identity}` sets it, from the Mac app's Brief & memory page or the API; the chief has no tool for it. Like the brief, an edit is used from its next start or new session, and logs `staff.changed`. An empty identity leaves the section out.
 - **Approvals:** its own permission requests, and those of agents it starts, go to you, like every approval.
 
 ### Staff MCP tools (server `cos`)
@@ -127,7 +128,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 | Route | Body | Result |
 |---|---|---|
 | `GET /v1/projects/{id}/staff` | | `Staff` (below). It exists even before the chief starts. |
-| `PUT /v1/projects/{id}/staff` | `{model?, paused?, brief?}` | `Staff`. A field left out stays as it is. `brief` replaces its brief (trimmed, empty clears it, 400 over 4 KiB), used from its next start or new session. |
+| `PUT /v1/projects/{id}/staff` | `{model?, paused?, brief?, identity?}` | `Staff`. A field left out stays as it is. `brief` replaces its brief (trimmed, empty clears it, 400 over 4 KiB), and `identity` its identity (the same, 400 over 8 KiB), both used from its next start or new session. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; does nothing if it's running. |
 | `POST /v1/projects/{id}/staff/message` | `{text, attachments?}` | 202. Starts it if needed, then types the text in as a bracketed paste and presses Return. If it's working, the text waits in its inbox and is delivered first thing on the next wakeup. `attachments` names files uploaded to its worktree; the text may then be empty. |
 | `POST /v1/projects/{id}/staff/attachments?name=` | the file's bytes | 201 Attachment. Into the chief's worktree, made if needed; the chief isn't started. See [agents-api.md](agents-api.md#attachments). |
@@ -140,7 +141,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 ```jsonc
 // Staff
 {"project_id": 1, "agent_id": 14, "state": "idle",   // agent_id and state are null before it first starts
- "model": null, "brief": "…", "worktree": "/…/chief", "branch": "topflexi/chief",
+ "model": null, "brief": "…", "identity": "…", "worktree": "/…/chief", "branch": "topflexi/chief",
  "working_agents": 2, "waiting_on_you": 1,            // counts over the agents it started
  "paused": false, "updates_waiting": 0}               // coordination paused; news not delivered yet
 ```

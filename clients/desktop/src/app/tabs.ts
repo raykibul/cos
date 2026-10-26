@@ -47,8 +47,8 @@ export function tabInfo(s: DaemonState, page: Page): TabInfo {
       const name = project(s, page.id)?.name ?? "Removed project";
       return {
         ...base,
-        title: `${name} brief & memory`,
-        hint: `The brief and memory notes of ${name}'s Chief of Staff`,
+        title: `${name} identity & memory`,
+        hint: `The identity, brief and memory notes of ${name}'s Chief of Staff`,
       };
     }
     case "workspace": {

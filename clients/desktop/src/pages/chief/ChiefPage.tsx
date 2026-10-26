@@ -234,7 +234,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         },
     "separator",
     {
-      label: "Brief & memory…",
+      label: "Identity & memory…",
       icon: NotebookPen,
       detail: "What it keeps between sessions",
       onSelect: () => ui.navigate({ kind: "chiefMemory", id: projectId }),
@@ -332,11 +332,11 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             />
             <IconButton
               icon={NotebookPen}
-              label="Brief & memory"
+              label="Identity & memory"
               title={
                 staff?.brief
-                  ? `Brief & memory\n\nIts brief:\n${staff.brief}`
-                  : "Brief & memory: set what it should be working on"
+                  ? `Identity & memory\n\nIts brief:\n${staff.brief}`
+                  : "Identity & memory: who it is and what it should be working on"
               }
               onClick={() => ui.navigate({ kind: "chiefMemory", id: projectId })}
               className="ml-1 size-8"

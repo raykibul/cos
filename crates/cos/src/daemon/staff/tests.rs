@@ -444,6 +444,70 @@ async fn you_can_set_its_brief_and_it_gets_it_on_its_next_start() {
 }
 
 #[tokio::test]
+async fn only_you_set_its_identity_and_it_heads_its_prompt() {
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+
+    // Before it ever starts: saved, and in its first prompt, above the rules.
+    let view = client
+        .set_staff_identity(fixture.project_id, "  You are Ada. Be terse.\n")
+        .await
+        .unwrap();
+    assert_eq!(view.identity, "You are Ada. Be terse.");
+    let staff = fixture.idle_staff().await;
+    let stored_prompt = || {
+        fixture
+            .records
+            .get(staff.id)
+            .unwrap()
+            .and_then(|agent| agent.system_prompt)
+            .unwrap_or_default()
+    };
+    let prompt = stored_prompt();
+    let identity = prompt
+        .find("<identity>\nYou are Ada. Be terse.\n</identity>")
+        .unwrap_or_else(|| panic!("{prompt}"));
+    assert!(identity < prompt.find("- You may create workspaces").unwrap(), "{prompt}");
+    assert!(prompt.contains("Only the user can change it"), "{prompt}");
+
+    // The chief has no tool for it.
+    let refused = fixture
+        .tool(staff.id, "identity_update", json!({ "identity": "I am Bob." }))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("no tool"), "{refused:#}");
+    assert_eq!(
+        client.staff(fixture.project_id).await.unwrap().identity,
+        "You are Ada. Be terse."
+    );
+
+    // While it runs: saved for its next launch, and logged.
+    let changed = fixture.events(kind::STAFF_CHANGED).len();
+    client
+        .set_staff_identity(fixture.project_id, "You are Ada. Explain your reasoning.")
+        .await
+        .unwrap();
+    assert!(stored_prompt().contains("<identity>\nYou are Ada. Explain your reasoning.\n</identity>"));
+    assert_eq!(fixture.events(kind::STAFF_CHANGED).len(), changed + 1);
+
+    // Too long: refused, and the old one stays.
+    let too_long = client
+        .set_staff_identity(fixture.project_id, &"x".repeat(8193))
+        .await
+        .unwrap_err();
+    assert!(too_long.to_string().contains("keep it under 8192"), "{too_long:#}");
+    assert_eq!(
+        client.staff(fixture.project_id).await.unwrap().identity,
+        "You are Ada. Explain your reasoning."
+    );
+
+    // Empty clears it, and the prompt says nothing about one.
+    let view = client.set_staff_identity(fixture.project_id, " ").await.unwrap();
+    assert_eq!(view.identity, "");
+    assert!(!stored_prompt().contains("<identity>"), "{}", stored_prompt());
+}
+
+#[tokio::test]
 async fn memory_notes_are_listed_in_its_prompt_and_you_can_edit_them_too() {
     let fixture = Fixture::start().await;
     let staff = fixture.idle_staff().await;

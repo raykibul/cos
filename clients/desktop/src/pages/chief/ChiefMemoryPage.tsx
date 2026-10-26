@@ -1,15 +1,26 @@
 // What a project's Chief of Staff carries from one session to the next
-// (docs/chief-of-staff.md, "Memory notes"): its brief, which says what it's
-// working on now, and its memory notes, which keep what lasts. The chief
-// writes both itself; here you read them, set its brief and keep notes for
-// it. Changes reach it on its next start or new session. Opened from the
+// (docs/chief-of-staff.md, "Memory notes"): its identity, which only you
+// write; its brief, which says what it's working on now; and its memory
+// notes, which keep what lasts. The chief writes the brief and notes itself;
+// here you read them, set its identity and brief, and keep notes for it. Changes reach it on its next start or new session. Opened from the
 // chief's header and ⋯ menu, and the project's menu in the sidebar.
 
-import { ChevronRight, FolderGit2, MessageSquarePlus, Pencil, Plus, Undo2, X } from "lucide-react";
+import {
+  ChevronRight,
+  FolderGit2,
+  Lock,
+  MessageSquarePlus,
+  Pencil,
+  Plus,
+  Undo2,
+  X,
+} from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { messageOf } from "../../api/errors";
 import {
+  IDENTITY_WORDS,
   MAX_BRIEF_BYTES,
+  MAX_IDENTITY_BYTES,
   MAX_NOTE_BYTES,
   MAX_NOTE_DESCRIPTION,
   MAX_NOTES,
@@ -79,14 +90,14 @@ export function ChiefMemoryPage({ projectId }: { projectId: number }) {
         <CrumbSep />
         <Crumb onClick={() => ui.navigate({ kind: "chief", id: project.id })}>Chief of Staff</Crumb>
         <CrumbSep />
-        <span className="truncate font-medium text-ink">Brief & memory</span>
+        <span className="truncate font-medium text-ink">Identity & memory</span>
       </PageHeader>
       <PageBody>
         <PageTitle
           subtitle={
             <span className="block max-w-[620px] leading-relaxed">
-              What {project.name}'s Chief of Staff carries from one session to the next. It reads
-              changes on its next start, or now if you start a new session.
+              Who {project.name}'s Chief of Staff is, and what it carries from one session to the
+              next. It reads changes on its next start, or now if you start a new session.
             </span>
           }
           actions={
@@ -94,7 +105,7 @@ export function ChiefMemoryPage({ projectId }: { projectId: number }) {
               <Button
                 icon={MessageSquarePlus}
                 disabled={!canChange}
-                title="Starts a fresh conversation with the brief and notes as they are now"
+                title="Starts a fresh conversation with the identity, brief and notes as they are now"
                 onClick={() =>
                   void ui.perform("Couldn't start a new session", async () => {
                     await cos.newStaffSession(project.id);
@@ -107,8 +118,9 @@ export function ChiefMemoryPage({ projectId }: { projectId: number }) {
             ) : null
           }
         >
-          Brief & memory
+          Identity & memory
         </PageTitle>
+        <IdentityEditor projectId={project.id} />
         <BriefEditor projectId={project.id} />
         <MemoryNotes projectId={project.id} />
       </PageBody>
@@ -116,13 +128,91 @@ export function ChiefMemoryPage({ projectId }: { projectId: number }) {
   );
 }
 
+/**
+ * Its identity: who it is and how it works, written by you. Only you change
+ * it (the chief has no tool for it); it heads the chief's prompt.
+ */
+function IdentityEditor({ projectId }: { projectId: number }) {
+  const { cos } = useApp();
+  const staff = useCos((s) => s.staffs[projectId]);
+  return (
+    <ProseEditor
+      title="Identity"
+      badge="Only you can change this"
+      saved={staff?.identity ?? ""}
+      ready={staff !== undefined}
+      maxBytes={MAX_IDENTITY_BYTES}
+      words={IDENTITY_WORDS}
+      minRows={8}
+      placeholder={
+        "Who is your Chief of Staff? For example: You are Ada, the Chief of Staff for opal-app. " +
+        "You're calm, direct and careful. Talk to me like a senior engineer: short answers, " +
+        "no fluff. Before starting agents, say in one line what each will do. Prefer small PRs. " +
+        "Never push to main. I work in Dhaka time and review PRs the same day."
+      }
+      note={(justSaved) =>
+        justSaved
+          ? "Saved. It takes this identity from its next start or new session."
+          : "Who it is and how it works. It's at the top of the chief's prompt, it can't change it, and it lasts across sessions."
+      }
+      saveLabel="Save identity"
+      save={(text) => cos.setStaffIdentity(projectId, text)}
+    />
+  );
+}
+
 /** The brief: what the chief is working on now, for whom, and what's open. */
 function BriefEditor({ projectId }: { projectId: number }) {
   const { cos } = useApp();
-  const canChange = useCanChange();
   const staff = useCos((s) => s.staffs[projectId]);
-  const saved = staff?.brief ?? "";
-  // Untouched, the editor follows the saved brief, even as the chief rewrites it.
+  return (
+    <ProseEditor
+      title="Brief"
+      saved={staff?.brief ?? ""}
+      ready={staff !== undefined}
+      maxBytes={MAX_BRIEF_BYTES}
+      minRows={4}
+      placeholder="What should it be working on, for whom, and what's open? For example: Ship 0.2: the login fix, left-pad and the release notes. I review PRs the same day."
+      note={(justSaved) =>
+        justSaved
+          ? "Saved. It reads the new brief on its next start or new session."
+          : "It keeps this up to date itself with brief_update, so it may rewrite what you put here."
+      }
+      saveLabel="Save brief"
+      save={(text) => cos.setStaffBrief(projectId, text)}
+    />
+  );
+}
+
+/** A text the chief reads from its prompt, with a size limit and Save. */
+function ProseEditor({
+  title,
+  badge,
+  saved,
+  ready,
+  maxBytes,
+  words,
+  minRows,
+  placeholder,
+  note,
+  saveLabel,
+  save: write,
+}: {
+  title: string;
+  badge?: string;
+  saved: string;
+  ready: boolean;
+  maxBytes: number;
+  /** Shows a word count against this many words, a guide rather than a limit. */
+  words?: number;
+  minRows: number;
+  placeholder: string;
+  note: (justSaved: boolean) => string;
+  saveLabel: string;
+  save: (text: string) => Promise<unknown>;
+}) {
+  const canChange = useCanChange();
+  // Untouched, the editor follows the saved text, even as the chief rewrites it.
   const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,14 +221,15 @@ function BriefEditor({ projectId }: { projectId: number }) {
 
   const text = draft ?? saved;
   const bytes = utf8Bytes(text.trim());
-  const tooLong = bytes > MAX_BRIEF_BYTES;
+  const tooLong = bytes > maxBytes;
   const dirty = draft !== null && draft.trim() !== saved;
+  const wordCount = wordsIn(text);
 
   const save = () => {
     if (!dirty || tooLong || busy) return;
     setBusy(true);
     setError(null);
-    cos.setStaffBrief(projectId, text).then(
+    write(text).then(
       () => {
         setBusy(false);
         setDraft(null);
@@ -154,16 +245,22 @@ function BriefEditor({ projectId }: { projectId: number }) {
   return (
     <section aria-labelledby={id} className="mb-9">
       <SectionTitle>
-        <span id={id}>Brief</span>
+        <span id={id}>{title}</span>
+        {badge ? (
+          <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-subtle px-2 py-0.5 text-[10.5px] font-medium tracking-normal text-ink-2 normal-case">
+            <Lock className="size-3" strokeWidth={2} aria-hidden />
+            {badge}
+          </span>
+        ) : null}
       </SectionTitle>
       <Card className="overflow-hidden">
         <AutoTextarea
           aria-labelledby={id}
           value={text}
-          minRows={4}
-          maxRows={16}
-          disabled={!canChange || !staff}
-          placeholder="What should it be working on, for whom, and what's open? For example: Ship 0.2: the login fix, left-pad and the release notes. I review PRs the same day."
+          minRows={minRows}
+          maxRows={24}
+          disabled={!canChange || !ready}
+          placeholder={placeholder}
           onChange={(event) => {
             setDraft(event.target.value);
             setSavedAt(null);
@@ -178,18 +275,20 @@ function BriefEditor({ projectId }: { projectId: number }) {
         />
         <div className="flex min-h-11 items-center gap-2 border-t border-line px-4 py-2">
           <p className="min-w-0 flex-1 text-[12px] leading-snug text-ink-3">
-            {savedAt !== null && !dirty
-              ? "Saved. It reads the new brief on its next start or new session."
-              : "It keeps this up to date itself with brief_update, so it may rewrite what you put here."}
+            {note(savedAt !== null && !dirty)}
           </p>
           <span
             className={cx(
               "shrink-0 font-mono text-[11px] tabular-nums",
               tooLong ? "text-tone-red" : "text-ink-3",
             )}
-            title="The brief goes in the chief's prompt, so it's kept short"
+            title={`It goes in the chief's prompt, so it's kept under ${maxBytes.toLocaleString()} bytes`}
           >
-            {bytes.toLocaleString()} / {MAX_BRIEF_BYTES.toLocaleString()} bytes
+            {words !== undefined
+              ? tooLong
+                ? `${bytes.toLocaleString()} / ${maxBytes.toLocaleString()} bytes`
+                : `${wordCount.toLocaleString()} / ~${words} words`
+              : `${bytes.toLocaleString()} / ${maxBytes.toLocaleString()} bytes`}
           </span>
           {dirty ? (
             <Button
@@ -211,7 +310,7 @@ function BriefEditor({ projectId }: { projectId: number }) {
             onClick={save}
             title="Save (⌘↩)"
           >
-            Save brief
+            {saveLabel}
           </Button>
         </div>
       </Card>
@@ -222,6 +321,11 @@ function BriefEditor({ projectId }: { projectId: number }) {
       ) : null}
     </section>
   );
+}
+
+/** How many words: runs of anything but white space. */
+function wordsIn(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
 }
 
 type Editing = { mode: "add" } | { mode: "edit"; note: StaffNote };

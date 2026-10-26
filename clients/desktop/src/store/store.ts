@@ -826,6 +826,22 @@ export class CosStore {
     return staff;
   }
 
+  /**
+   * Replaces the chief's identity, which only you write; it takes it from its
+   * next start or new session. Throws if the daemon is older than identities.
+   */
+  async setStaffIdentity(projectId: number, identity: string): Promise<Staff> {
+    const staff = await this.client.setStaff(projectId, { identity });
+    this.storeStaff(staff);
+    if (staff.identity !== identity.trim()) {
+      throw new CosError(
+        "bad_response",
+        "This cos daemon can't keep an identity yet. Update cos and restart the daemon.",
+      );
+    }
+    return staff;
+  }
+
   /** Creates or replaces one of the chief's notes. */
   async writeStaffNote(
     projectId: number,

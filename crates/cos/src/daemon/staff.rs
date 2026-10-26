@@ -108,6 +108,10 @@ pub(crate) struct StaffView {
     /// means Claude's default.
     pub model: Option<String>,
     pub brief: String,
+    /// Who it is, written by you; empty when not set. It has no tool to
+    /// change it.
+    #[serde(default)]
+    pub identity: String,
     pub worktree: PathBuf,
     pub branch: String,
     /// Agents it started that are starting or working.
@@ -138,6 +142,10 @@ pub(crate) struct StaffSettings {
     /// Replaces its brief, trimmed; empty clears it. At most 4 KiB.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// Replaces its identity, trimmed; empty clears it. At most 8 KiB.
+    /// Only this route sets it: the chief has no tool for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
 }
 
 /// A field that is there, even as null, is `Some`.
@@ -250,6 +258,7 @@ impl Staff {
             state: agent.as_ref().map(|agent| agent.state),
             model: inner.model(record.model.as_deref()),
             brief: record.brief,
+            identity: record.identity,
             worktree,
             branch,
             working_agents: count(&[AgentState::Starting, AgentState::Working]),
@@ -284,9 +293,12 @@ impl Staff {
                 "that model name is too long".into(),
             ));
         }
-        // First, as it's the one that can be refused (over 4 KiB).
+        // First, as they're the ones that can be refused (too long).
         if let Some(brief) = &settings.brief {
             inner.books.set_brief(project.id, brief)?;
+        }
+        if let Some(identity) = &settings.identity {
+            inner.books.set_identity(project.id, identity)?;
         }
         if let Some(model) = &model {
             inner.books.set_model(project.id, model.as_deref())?;
@@ -298,7 +310,7 @@ impl Staff {
                 inner.wake.notify_one();
             }
         }
-        if settings.brief.is_some() {
+        if settings.brief.is_some() || settings.identity.is_some() {
             // Logs `staff.changed` too, and saves the new prompt for its next launch.
             inner.brief_or_notes_changed(project.id).await?;
         } else if model.is_some() || settings.paused.is_some() {
@@ -527,7 +539,7 @@ impl Inner {
     /// Its standing instructions, with its brief and notes as they are now.
     fn system_prompt(&self, project: &str, record: &StaffRecord) -> Result<String, ApiError> {
         let notes = self.books.notes(record.project_id)?;
-        Ok(prompt::system_prompt(project, &record.brief, &notes))
+        Ok(prompt::system_prompt(project, &record.identity, &record.brief, &notes))
     }
 
     /// After its brief or notes changed: the chief gets them on its next

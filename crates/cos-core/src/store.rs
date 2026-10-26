@@ -413,6 +413,11 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (project_id, name)
     );
 ",
+    "
+    -- Who a Chief of Staff is, written by the user: it goes at the top of
+    -- its system prompt, and only the user can change it.
+    ALTER TABLE staff ADD COLUMN identity TEXT NOT NULL DEFAULT '';
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
