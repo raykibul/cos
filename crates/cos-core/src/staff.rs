@@ -17,6 +17,9 @@ use crate::{EventLog, Store, StoreError};
 
 /// The most bytes a brief holds.
 pub const MAX_BRIEF_BYTES: usize = 4 * 1024;
+/// The most bytes the identity holds: room for about 500 words in any
+/// language, with some to spare.
+pub const MAX_IDENTITY_BYTES: usize = 8 * 1024;
 /// The most inbox items one wakeup holds.
 pub const MAX_WAKEUP_ITEMS: usize = 20;
 /// The most bytes of inbox text one wakeup holds.
@@ -55,6 +58,9 @@ pub struct StaffRecord {
     pub model: Option<String>,
     /// What it keeps for its next start, with `brief_update`.
     pub brief: String,
+    /// Who it is, written by the user. It has no tool to change this.
+    #[serde(default)]
+    pub identity: String,
     /// Coordination is paused: news waits, your messages still go in.
     #[serde(default)]
     pub paused: bool,
@@ -192,6 +198,20 @@ impl StaffBooks {
         }
         self.update(project_id, "brief", &brief)?;
         Ok(brief.to_owned())
+    }
+
+    /// Saves the identity, trimmed; empty clears it. At most
+    /// [`MAX_IDENTITY_BYTES`]. Only the user sets it, from an app or the API.
+    pub fn set_identity(&self, project_id: i64, identity: &str) -> Result<String, StaffError> {
+        let identity = identity.trim();
+        if identity.len() > MAX_IDENTITY_BYTES {
+            return Err(StaffError::Invalid(format!(
+                "the identity is {} bytes; keep it under {MAX_IDENTITY_BYTES} (about 500 words)",
+                identity.len()
+            )));
+        }
+        self.update(project_id, "identity", &identity)?;
+        Ok(identity.to_owned())
     }
 
     /// The project whose Chief of Staff is `agent_id`.
@@ -473,7 +493,7 @@ impl StaffBooks {
     }
 }
 
-const RECORD_COLUMNS: &str = "project_id, agent_id, model, brief, paused, stopped";
+const RECORD_COLUMNS: &str = "project_id, agent_id, model, brief, paused, stopped, identity";
 
 fn read_record(row: &Row<'_>) -> rusqlite::Result<StaffRecord> {
     Ok(StaffRecord {
@@ -483,6 +503,7 @@ fn read_record(row: &Row<'_>) -> rusqlite::Result<StaffRecord> {
         brief: row.get(3)?,
         paused: row.get(4)?,
         stopped: row.get(5)?,
+        identity: row.get(6)?,
     })
 }
 
@@ -623,6 +644,28 @@ mod tests {
         books.add(project, StaffItemKind::Agent, Some(3), "done").unwrap();
         assert_eq!(books.news_waiting(project).unwrap(), 1);
         assert_eq!(books.waiting_count(project).unwrap(), 2);
+    }
+
+    #[test]
+    fn the_identity_is_kept_trimmed_and_capped() {
+        let (books, _, project) = books();
+        assert_eq!(books.record(project).unwrap().identity, "");
+        assert_eq!(
+            books.set_identity(project, "\n  You are Ada, terse and careful. \n").unwrap(),
+            "You are Ada, terse and careful."
+        );
+        books.set_brief(project, "ship v2").unwrap();
+        let record = books.record(project).unwrap();
+        assert_eq!(record.identity, "You are Ada, terse and careful.");
+        assert_eq!(record.brief, "ship v2", "the brief is separate");
+
+        let error = books
+            .set_identity(project, &"x".repeat(MAX_IDENTITY_BYTES + 1))
+            .unwrap_err();
+        assert!(matches!(error, StaffError::Invalid(_)), "{error}");
+        assert!(books.set_identity(project, &"x".repeat(MAX_IDENTITY_BYTES)).is_ok());
+        books.set_identity(project, "  ").unwrap();
+        assert_eq!(books.record(project).unwrap().identity, "", "empty clears it");
     }
 
     #[test]

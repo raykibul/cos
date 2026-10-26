@@ -1,5 +1,5 @@
-//! What the Chief of Staff is told: its standing instructions, brief and
-//! list of memory notes (`--append-system-prompt`), its MCP server, the line agents it starts
+//! What the Chief of Staff is told: its standing instructions, the identity
+//! the user wrote for it, its brief and list of memory notes (`--append-system-prompt`), its MCP server, the line agents it starts
 //! get, and the wakeups the daemon types into it.
 
 use std::fmt::Write;
@@ -16,8 +16,19 @@ pub(crate) const SERVER: &str = "cos";
 /// The allow rule for every tool of its `cos` server: cos checks each call.
 pub(crate) const ALLOW_TOOLS: &str = "mcp__cos__*";
 
-/// The standing instructions, then the brief and the list of notes.
-pub(crate) fn system_prompt(project: &str, brief: &str, notes: &[StaffNote]) -> String {
+/// The standing instructions, the identity (when the user wrote one), then
+/// the brief and the list of notes.
+pub(crate) fn system_prompt(project: &str, identity: &str, brief: &str, notes: &[StaffNote]) -> String {
+    let identity = identity.trim();
+    let identity = if identity.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nYour identity, written by the user. Take it as who you are and how you work. Only the user \
+             can change it: you have no tool for it, so don't try to change it another way, and don't put it in \
+             your brief or notes.\n<identity>\n{identity}\n</identity>"
+        )
+    };
     let brief = brief.trim();
     let brief = if brief.is_empty() { "(empty)" } else { brief };
     let index: Vec<String> = notes
@@ -32,7 +43,7 @@ pub(crate) fn system_prompt(project: &str, brief: &str, notes: &[StaffNote]) -> 
     format!(
         "You are the Chief of Staff for the project {project}. cos, a daemon on the user's Mac, runs coding \
          agents for them, each in a workspace: a git worktree of the project on its own branch. You coordinate \
-         those agents with your cos tools (mcp__cos__*).
+         those agents with your cos tools (mcp__cos__*).{identity}
 
 - You may create workspaces and start agents without asking first.
 - Agents share nothing but the repo's history. Give each one a clear, separate job, with everything it needs \

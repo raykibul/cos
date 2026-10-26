@@ -193,6 +193,11 @@ export function makeStaff(
         agent_id: 40,
         model: "opus",
         brief: "Ship 0.2: login fix, left-pad, release notes.",
+        identity:
+          "You are Ada, the Chief of Staff for cos. You're calm, direct and careful. Talk to me " +
+          "like a senior engineer: short answers, no fluff. Before you start agents, say in one " +
+          "line what each will do. Prefer small PRs that are easy to review, and never push to " +
+          "main. When something fails, say what you tried and what you'd do next.",
         paused: options.paused ?? false,
         updates_waiting: options.paused ? 3 : 0,
       },
@@ -369,6 +374,12 @@ export class FakeStaffDesk {
     const staff = this.staff(projectId);
     if (!action && method === "GET") return ok(this.json(staff));
     if (!action && method === "PUT") {
+      if (typeof b.identity === "string") {
+        const identity = b.identity.trim();
+        if (new TextEncoder().encode(identity).length > 8192)
+          throw new StaffError(400, "the identity is too long; keep it under 8192 bytes");
+        staff.identity = identity;
+      }
       if (typeof b.brief === "string") {
         const brief = b.brief.trim();
         if (new TextEncoder().encode(brief).length > 4096)
@@ -487,6 +498,7 @@ export class FakeStaffDesk {
       state: agent?.state ?? null,
       model: staff.model,
       brief: staff.brief,
+      identity: staff.identity ?? "",
       worktree: `${home}/worktrees/${name}-${project.id as number}/chief`,
       branch: `${name}/chief`,
       working_agents: spawned.filter((a) => a.state === "working" || a.state === "starting").length,

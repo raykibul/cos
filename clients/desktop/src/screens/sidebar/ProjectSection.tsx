@@ -61,7 +61,7 @@ export function ProjectPanel({ project }: { project: Project }) {
       onSelect: () => ui.navigate({ kind: "project", id: project.id }),
     },
     {
-      label: "Chief's brief & memory…",
+      label: "Chief's identity & memory…",
       icon: NotebookPen,
       onSelect: () => ui.navigate({ kind: "chiefMemory", id: project.id }),
     },

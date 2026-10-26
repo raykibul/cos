@@ -27,6 +27,8 @@ export interface Staff {
   /** Null for Claude's default (or `COS_STAFF_MODEL`). */
   model: string | null;
   brief: string;
+  /** Who it is, written by you; empty when not set (or on an older daemon). Only you change it. */
+  identity: string;
   worktree: string | null;
   branch: string | null;
   /** Counts over the agents it started. */
@@ -46,6 +48,7 @@ export function decodeStaff(value: unknown): Staff {
     state: optStr(o.state),
     model: optStr(o.model) || null,
     brief: str(o.brief),
+    identity: str(o.identity),
     worktree: optStr(o.worktree),
     branch: optStr(o.branch),
     workingAgents: num(o.working_agents, 0),
@@ -57,6 +60,10 @@ export function decodeStaff(value: unknown): Staff {
 
 /** The most bytes a brief holds; the daemon refuses more. */
 export const MAX_BRIEF_BYTES = 4 * 1024;
+/** The most bytes the identity holds; the daemon refuses more. */
+export const MAX_IDENTITY_BYTES = 8 * 1024;
+/** About how long an identity should be, in words: a guide, not a limit. */
+export const IDENTITY_WORDS = 500;
 /** The most bytes a memory note's body holds. */
 export const MAX_NOTE_BYTES = 8 * 1024;
 /** The most characters a note's one-line description holds. */

@@ -355,13 +355,13 @@ export class DaemonClient {
 
   /**
    * Changes what's given and leaves the rest: `model` (`null` goes back to
-   * the default), `paused` (coordination on hold) and `brief` (replaced,
-   * trimmed; read from its next start). A daemon older than editable briefs
-   * ignores `brief` and answers the old one.
+   * the default), `paused` (coordination on hold), `brief` and `identity`
+   * (replaced, trimmed; read from its next start). A daemon older than
+   * editable briefs or identities ignores them and answers the old ones.
    */
   setStaff(
     projectId: number,
-    settings: { model?: string | null; paused?: boolean; brief?: string },
+    settings: { model?: string | null; paused?: boolean; brief?: string; identity?: string },
   ): Promise<Staff> {
     return this.send("PUT", `/v1/projects/${projectId}/staff`, settings, decodeStaff);
   }

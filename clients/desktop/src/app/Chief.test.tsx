@@ -443,10 +443,10 @@ describe("sessions the chief started", () => {
   });
 });
 
-describe("brief & memory page", () => {
+describe("identity & memory page", () => {
   it("opens from the chief's header and shows its brief and notes", async () => {
     const { user, ui } = await renderApp({ kind: "chief", id: 1 });
-    await user.click(screen.getByRole("button", { name: "Brief & memory" }));
+    await user.click(screen.getByRole("button", { name: "Identity & memory" }));
     expect(ui.store.getState().page).toEqual({ kind: "chiefMemory", id: 1 });
     await act(() => settle());
     expect(screen.getByRole("textbox", { name: "Brief" })).toHaveValue(
@@ -485,6 +485,36 @@ describe("brief & memory page", () => {
     expect(cos.get().staffs[1]?.brief).toBe("Only the login fix this week.");
     expect(brief).toHaveValue("Only the login fix this week.");
     expect(screen.getByText(/Saved\. It reads the new brief/)).toBeInTheDocument();
+  });
+
+  it("saves the identity you write, counting its words", async () => {
+    const { user, daemon, cos } = await renderApp({ kind: "chiefMemory", id: 2 });
+    const identity = screen.getByRole("textbox", { name: "Identity" });
+    expect(identity).toHaveValue("");
+    expect(screen.getByText("Only you can change this")).toBeInTheDocument();
+    expect(screen.getByText("0 / ~500 words")).toBeInTheDocument();
+
+    await user.type(identity, "You are Ada. Be terse and careful.");
+    expect(screen.getByText("7 / ~500 words")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save identity" }));
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "PUT",
+      path: "/v1/projects/2/staff",
+      body: { identity: "You are Ada. Be terse and careful." },
+    });
+    expect(cos.get().staffs[2]?.identity).toBe("You are Ada. Be terse and careful.");
+    expect(screen.getByText(/Saved\. It takes this identity/)).toBeInTheDocument();
+  });
+
+  it("refuses an identity over 8 KiB before sending it", async () => {
+    const { user } = await renderApp({ kind: "chiefMemory", id: 1 });
+    const identity = screen.getByRole("textbox", { name: "Identity" });
+    expect((identity as HTMLTextAreaElement).value).toMatch(/^You are Ada/);
+    await user.click(identity);
+    await user.paste("x".repeat(8200));
+    expect(screen.getByText(/\/ 8,192 bytes/)).toHaveClass("text-tone-red");
+    expect(screen.getByRole("button", { name: "Save identity" })).toBeDisabled();
   });
 
   it("refuses a brief over 4 KiB before sending it", async () => {

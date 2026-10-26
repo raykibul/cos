@@ -192,6 +192,10 @@ async fn show(client: &Client, key: Option<&str>) -> anyhow::Result<ExitCode> {
             }
         }
     }
+    let words = staff.identity.split_whitespace().count();
+    if words > 0 {
+        println!("  identity: {words} words (set in the app)");
+    }
     let brief = staff.brief.trim();
     if brief.is_empty() {
         println!("  brief:    (empty)");

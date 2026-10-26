@@ -70,6 +70,18 @@ impl Client {
         .await
     }
 
+    /// Replaces its identity; it reads the new one from its next start or new session.
+    pub(crate) async fn set_staff_identity(&self, project_id: i64, identity: &str) -> anyhow::Result<StaffView> {
+        self.configure_staff(
+            project_id,
+            &StaffSettings {
+                identity: Some(identity.to_owned()),
+                ..StaffSettings::default()
+            },
+        )
+        .await
+    }
+
     async fn configure_staff(&self, project_id: i64, settings: &StaffSettings) -> anyhow::Result<StaffView> {
         let path = format!("/v1/projects/{project_id}/staff");
         read_json(self.send(Method::PUT, &path, Some(settings)).await?).await
