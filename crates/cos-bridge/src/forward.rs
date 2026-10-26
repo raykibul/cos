@@ -258,6 +258,18 @@ impl ForwardSet {
     /// error, and nothing is kept. A host that can't be reached is kept,
     /// marked `unreachable`, since it may come back.
     pub async fn add(&self, remote: u16, local: Option<u16>) -> Result<Forward, BridgeError> {
+        self.start(remote, local, false).await
+    }
+
+    /// [`Self::add`] for a saved forward, when its host is selected again:
+    /// a refusal or a daemon too old is kept too, marked `refused` with its
+    /// code, so the port stays in the list and works once the host lets
+    /// this Mac in.
+    pub async fn restore(&self, remote: u16) -> Result<Forward, BridgeError> {
+        self.start(remote, None, true).await
+    }
+
+    async fn start(&self, remote: u16, local: Option<u16>, keep: bool) -> Result<Forward, BridgeError> {
         check_port(remote)?;
         let wanted = local.unwrap_or(remote);
         check_port(wanted)?;
@@ -286,15 +298,19 @@ impl ForwardSet {
                 }
             }
             Ok(response) => {
-                let error = refusal(response.status, response.body.as_ref());
+                let mut error = refusal(response.status, response.body.as_ref());
                 if error.code.as_deref() == Some("too_old") {
-                    return Err(too_old(&shared.host));
+                    error = too_old(&shared.host);
                 }
-                return Err(error);
+                if !keep {
+                    return Err(error);
+                }
+                (RemoteState::Refused, error.code, Some(sentence(&error.message)))
             }
             Err(error) if error.is_not_running() || error.code.is_none() => {
                 (RemoteState::Unreachable, None, Some(sentence(&error.message)))
             }
+            Err(error) if keep => (RemoteState::Refused, error.code, Some(sentence(&error.message))),
             Err(error) => return Err(error),
         };
         let mut moved = None;

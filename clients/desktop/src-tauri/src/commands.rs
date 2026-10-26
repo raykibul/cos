@@ -5,10 +5,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cos_bridge::{
-    Bridge, BridgeError, DaemonInfo, EventMessage, FileResponse, Response, StreamHandle, TerminalMessage,
+    Bridge, BridgeError, DaemonInfo, EventMessage, FileResponse, Forward, ForwardList, ForwardMessage,
+    ForwardSet, Response, StreamHandle, TerminalMessage,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -39,11 +40,43 @@ pub(crate) struct AppState {
     hosts: Mutex<Hosts>,
     next_id: AtomicU32,
     streams: Mutex<HashMap<u32, StreamHandle>>,
+    /// The ports forwarded from the host in use. Replaced, and so stopped,
+    /// when another host is selected.
+    forwards: Mutex<Forwards>,
+}
+
+/// A host's forwards, and which host they belong to.
+struct Forwards {
+    host_id: String,
+    set: Arc<ForwardSet>,
+}
+
+impl Forwards {
+    /// Forwards for `host`, with its saved ports started again in the
+    /// background.
+    fn start(bridge: &Bridge, host: &Host) -> Self {
+        let set = Arc::new(ForwardSet::new(bridge.clone(), host.name.clone()));
+        if host.address.is_some() && !host.forwards.is_empty() {
+            let ports = host.forwards.clone();
+            let restoring = set.clone();
+            tauri::async_runtime::spawn(async move {
+                for port in ports {
+                    let _ = restoring.restore(port).await;
+                }
+            });
+        }
+        Self {
+            host_id: host.id.clone(),
+            set,
+        }
+    }
 }
 
 impl AppState {
     pub(crate) fn new(local: Bridge, hosts: Hosts) -> Self {
-        let bridge = bridge_for(&local, &hosts.current());
+        let host = hosts.current();
+        let bridge = bridge_for(&local, &host);
+        let forwards = Forwards::start(&bridge, &host);
         Self {
             local,
             current: Mutex::new(Current {
@@ -53,6 +86,7 @@ impl AppState {
             hosts: Mutex::new(hosts),
             next_id: AtomicU32::new(1),
             streams: Mutex::default(),
+            forwards: Mutex::new(forwards),
         }
     }
 
@@ -84,13 +118,58 @@ impl AppState {
         self.streams().clear();
     }
 
-    /// Points the bridge at `host` and closes every stream, which belonged
-    /// to the host before.
+    /// Points the bridge at `host` and closes every stream and forward,
+    /// which belonged to the host before. The new host's saved forwards
+    /// start again.
     fn switch_to(&self, host: &Host) {
         let mut current = lock(&self.current);
         current.generation += 1;
         current.bridge = bridge_for(&self.local, host);
         self.close_all_streams();
+        *lock(&self.forwards) = Forwards::start(&current.bridge, host);
+    }
+
+    /// The forwards of the host in use, and that host's id.
+    fn forward_set(&self) -> (String, Arc<ForwardSet>) {
+        let forwards = lock(&self.forwards);
+        (forwards.host_id.clone(), forwards.set.clone())
+    }
+
+    fn forwards_list(&self) -> ForwardList {
+        self.forward_set().1.list()
+    }
+
+    /// Forwards `remote_port` from the host in use, and saves its ports.
+    async fn add_forward(&self, remote_port: u16, local_port: Option<u16>) -> CommandResult<Forward> {
+        let (host_id, set) = self.forward_set();
+        if host_id == crate::hosts::THIS_MAC {
+            return Err(BridgeError::bad_request("This Mac's ports are already here"));
+        }
+        let forward = set.add(remote_port, local_port).await?;
+        self.save_forwards(&host_id, &set);
+        Ok(forward)
+    }
+
+    fn remove_forward(&self, remote_port: u16) -> ForwardList {
+        let (host_id, set) = self.forward_set();
+        let list = set.remove(remote_port);
+        self.save_forwards(&host_id, &set);
+        list
+    }
+
+    /// Remembers the ports for the next time `host_id` is selected. Failing
+    /// to save doesn't stop a forward that works.
+    fn save_forwards(&self, host_id: &str, set: &ForwardSet) {
+        let _ = lock(&self.hosts).set_forwards(host_id, set.ports());
+    }
+
+    /// `http://localhost:{local}/` for the forward of `remote_port`.
+    fn forward_url(&self, remote_port: u16) -> CommandResult<String> {
+        let (_, set) = self.forward_set();
+        let forward = set
+            .get(remote_port)
+            .ok_or_else(|| BridgeError::bad_request(format!(":{remote_port} isn't forwarded")))?;
+        Ok(format!("http://localhost:{}/", forward.local_port))
     }
 
     fn list(&self) -> HostList {
@@ -310,6 +389,49 @@ pub(crate) fn host_select(state: State<'_, AppState>, id: String) -> CommandResu
 #[tauri::command]
 pub(crate) async fn tailnet_peers(state: State<'_, AppState>, port: Option<u16>) -> CommandResult<Value> {
     state.tailnet_peers(port).await
+}
+
+/// The ports forwarded from the host in use.
+#[tauri::command]
+pub(crate) fn forwards_list(state: State<'_, AppState>) -> ForwardList {
+    state.forwards_list()
+}
+
+/// Forwards a port of the host in use to this Mac's loopback: the same
+/// port, or `local_port`, or the next free one.
+#[tauri::command]
+pub(crate) async fn forward_add(
+    state: State<'_, AppState>,
+    remote_port: u16,
+    local_port: Option<u16>,
+) -> CommandResult<Forward> {
+    state.add_forward(remote_port, local_port).await
+}
+
+/// Stops forwarding a port: its listener closes and its connections drop.
+#[tauri::command]
+pub(crate) fn forward_remove(state: State<'_, AppState>, remote_port: u16) -> ForwardList {
+    state.remove_forward(remote_port)
+}
+
+/// The forwards of the host in use: the whole list now and on each change.
+#[tauri::command]
+pub(crate) async fn follow_forwards(
+    state: State<'_, AppState>,
+    on_message: Channel<ForwardMessage>,
+) -> CommandResult<u32> {
+    let (generation, _) = state.bridge();
+    let (_, set) = state.forward_set();
+    let handle = set.follow(move |message| on_message.send(message).is_ok());
+    Ok(state.keep(generation, handle))
+}
+
+/// Opens a forward in the default browser. The URL is made here from a
+/// forward that exists, so the page can't open anything else this way.
+#[tauri::command]
+pub(crate) fn forward_open(state: State<'_, AppState>, remote_port: u16) -> CommandResult<()> {
+    let url = state.forward_url(remote_port)?;
+    run(Command::new("/usr/bin/open").arg(url))
 }
 
 /// Closing an unknown or already closed stream does nothing.
@@ -593,6 +715,49 @@ mod tests {
             state.rename_host("h4", "Nope").unwrap_err().kind,
             ErrorKind::BadRequest
         );
+    }
+
+    #[test]
+    fn forwards_are_refused_on_this_mac_and_dropped_on_a_switch() {
+        let state = state();
+        let error = tauri::async_runtime::block_on(state.add_forward(5173, None)).unwrap_err();
+        assert_eq!(error.message, "This Mac's ports are already here");
+        assert!(state.forwards_list().forwards.is_empty());
+        assert_eq!(state.forwards_list().host, "This Mac");
+        assert_eq!(state.forward_url(5173).unwrap_err().kind, ErrorKind::BadRequest);
+
+        // Studio can't be reached, so its forward is kept as unreachable.
+        let studio = state.add_host("Studio", "127.0.0.1:1").unwrap();
+        state.select_host(&studio.id).unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let forward = tauri::async_runtime::block_on(state.add_forward(port, None)).unwrap();
+        assert_eq!(forward.remote, cos_bridge::RemoteState::Unreachable);
+        assert_eq!(state.forwards_list().host, "Studio");
+        assert_eq!(
+            state.forward_url(port).unwrap(),
+            format!("http://localhost:{}/", forward.local_port)
+        );
+        assert_eq!(state.list().hosts[1].forwards, [port]);
+
+        // Selecting This Mac stops it: the port is free again.
+        state.select_host(crate::hosts::THIS_MAC).unwrap();
+        assert!(state.forwards_list().forwards.is_empty());
+        let mut free = false;
+        for _ in 0..100 {
+            if std::net::TcpListener::bind(("127.0.0.1", forward.local_port)).is_ok() {
+                free = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(free, "the forward's listener is still open");
+        // The saved port stays with Studio.
+        assert_eq!(state.list().hosts[1].forwards, [port]);
+        assert!(state.remove_forward(port).forwards.is_empty());
     }
 
     #[test]

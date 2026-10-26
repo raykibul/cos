@@ -1374,6 +1374,23 @@ async fn refusals_and_old_daemons_are_errors_but_an_unreachable_host_is_kept() {
     assert_eq!(error.code.as_deref(), Some("device_pending"));
     assert!(set.ports().is_empty());
 
+    // A saved forward restored on select is kept, refused, until let in.
+    let port = free_port();
+    let forward = set.restore(port).await.unwrap();
+    assert_eq!(forward.remote, RemoteState::Refused);
+    assert_eq!(forward.code.as_deref(), Some("device_pending"));
+    assert_eq!(set.ports(), vec![port]);
+    daemon.admit();
+    let mut stream = connect(port).await;
+    stream.write_all(b"in").await.unwrap();
+    let mut back = [0u8; 2];
+    within("echo", stream.read_exact(&mut back)).await.unwrap();
+    eventually("listening", || {
+        set.get(port).unwrap().remote == RemoteState::Listening
+    })
+    .await;
+    set.remove(port);
+
     let away = ForwardSet::new(FakeDaemon::stopped_tcp().bridge(), "Laptop");
     let port = free_port();
     let forward = away.add(port, None).await.unwrap();
