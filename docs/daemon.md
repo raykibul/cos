@@ -236,6 +236,32 @@ Unknown device ids get 404, a bad port 400.
 | `device.removed` | `{device_id, node_id, name}` |
 | `tailnet.changed` | the new `TailnetStatus`, logged whenever it changes (on, off, listening, unavailable with a new reason) |
 
+## Port forwarding
+
+An approved device can reach a port on this machine's loopback, so the Mac app can show a dev server running on an EC2 box as `localhost:5173` on the Mac ([desktop.md](desktop.md#ports)). One route does it, served on the socket and the tailnet listener. Over the tailnet the guard runs first, as for every route, so an unapproved device gets the usual refusals and never learns the route exists. Why it works this way is in [specs/port-forwarding.md](specs/port-forwarding.md).
+
+| Route | Headers | Returns |
+|---|---|---|
+| `GET /v1/forward/{port}` | none | A probe: 200 `{"port": 3343, "listening": true, "address": "127.0.0.1:3343"}`, or `"listening": false, "address": null`. It opens a connection and closes it without sending anything. |
+| `GET /v1/forward/{port}` | `Connection: upgrade`, `Upgrade: cos-forward` | 101 with `Upgrade: cos-forward`, then raw bytes both ways. The daemon connects before answering, so 101 means something accepted. |
+
+- **Where it connects.** `127.0.0.1:{port}`, then `[::1]:{port}` if that's refused (Node and Vite often listen on `::1` only), each with a 3 s timeout. There is no host and no name lookup, so the route can't reach the machine's network or a cloud metadata address. Any port from 1 to 65535: an approved device already has a shell here, so a deny-list would add nothing.
+- **Tunnels.** Bytes are copied both ways with half-close passed on, and there is no idle timeout. A tunnel ends when either side closes, when the daemon stops or the tailnet listener closes, and when its device is denied or removed. Each device can have 256 open, and the daemon 1024. Accepted tailnet connections use TCP keepalive (60 s, then every 10 s, 3 probes), so the tunnels of a Mac that went to sleep are reaped within about 90 s.
+- **No events.** One page load opens several tunnels, so they aren't logged; approving the device is the logged act.
+
+Errors are `{"error", "code"}` on both listeners:
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `bad_port` | `{port}` isn't a number from 1 to 65535. |
+| 400 | `bad_upgrade` | `Upgrade` is something other than `cos-forward`. |
+| 502 | `nothing_listening` | Both addresses refused: nothing runs on that port. The message names the machine and the port. |
+| 504 | `connect_timeout` | Neither answered within 3 s. |
+| 503 | `too_many_forwards` | The device or the daemon is at its cap. |
+| 403 | the guard's codes | As in "Refusals". |
+
+A daemon older than the route answers 404 with no code; the app says that machine's cos is too old.
+
 ## Agents
 
 An **agent** is a Claude Code session the daemon runs in a pseudo-terminal it owns, in a workspace's folder. Apps show its terminal live and type into it; the daemon follows it through hooks, not by reading the screen. The routes, JSON, events and CLI are in [agents-api.md](agents-api.md); this section is how the daemon does it. The code is `crates/cos/src/daemon/agents.rs` (process side) and `cos_core::agents` (the `agents` and `approvals` tables).
