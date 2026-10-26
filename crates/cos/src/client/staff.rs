@@ -71,7 +71,13 @@ impl Client {
     }
 
     /// Replaces its identity; it reads the new one from its next start or new session.
-    pub(crate) async fn set_staff_identity(&self, project_id: i64, identity: &str) -> anyhow::Result<StaffView> {
+    /// The apps set it; the CLI has no command for it yet.
+    #[cfg(test)]
+    pub(crate) async fn set_staff_identity(
+        &self,
+        project_id: i64,
+        identity: &str,
+    ) -> anyhow::Result<StaffView> {
         self.configure_staff(
             project_id,
             &StaffSettings {

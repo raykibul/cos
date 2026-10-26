@@ -467,7 +467,10 @@ async fn only_you_set_its_identity_and_it_heads_its_prompt() {
     let identity = prompt
         .find("<identity>\nYou are Ada. Be terse.\n</identity>")
         .unwrap_or_else(|| panic!("{prompt}"));
-    assert!(identity < prompt.find("- You may create workspaces").unwrap(), "{prompt}");
+    assert!(
+        identity < prompt.find("- You may create workspaces").unwrap(),
+        "{prompt}"
+    );
     assert!(prompt.contains("Only the user can change it"), "{prompt}");
 
     // The chief has no tool for it.
@@ -495,7 +498,10 @@ async fn only_you_set_its_identity_and_it_heads_its_prompt() {
         .set_staff_identity(fixture.project_id, &"x".repeat(8193))
         .await
         .unwrap_err();
-    assert!(too_long.to_string().contains("keep it under 8192"), "{too_long:#}");
+    assert!(
+        too_long.to_string().contains("keep it under 8192"),
+        "{too_long:#}"
+    );
     assert_eq!(
         client.staff(fixture.project_id).await.unwrap().identity,
         "You are Ada. Explain your reasoning."
