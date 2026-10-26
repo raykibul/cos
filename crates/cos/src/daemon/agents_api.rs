@@ -165,7 +165,9 @@ async fn input(
 ) -> Result<StatusCode, ApiError> {
     let id = agent_id(id)?;
     let Json(body) = body?;
-    if body.attachments.is_empty() {
+    // One line is typed; several (a reply's quote, say) go as one paste, so
+    // Claude gets one message and doesn't send each line on its own.
+    if body.attachments.is_empty() && !body.text.contains('\n') {
         state.agents.input(id, &body.text).await?;
         return Ok(StatusCode::NO_CONTENT);
     }

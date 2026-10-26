@@ -21,12 +21,13 @@ import {
   Variable,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CLAUDE_CONFIG_DIR, envHint } from "../../api/env";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
 import { useFocusOnOpen } from "../../app/focus";
 import { models, pluralize } from "../../domain/labels";
 import { type PendingMessage, conversationItems } from "../../domain/transcript";
+import { type Reply, quotePreview, quoteText, replyLabel, withReply } from "../../domain/reply";
 import {
   chiefRequests,
   claudeAccount,
@@ -112,6 +113,9 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   const account = useCos((s) => claudeAccount(s, projectId));
   const env = envHint(envNames);
   const [draft, setDraft] = useState("");
+  // A quote belongs to its conversation: another one doesn't show it.
+  const [held, hold] = useState<{ on: number; reply: Reply } | null>(null);
+  const reply = held?.on === projectId ? held.reply : null;
   const target = useMemo(() => ({ kind: "staff" as const, projectId }), [projectId]);
   const files = useDraftFiles(canChange ? target : null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -155,14 +159,24 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   const running = staffRunning(state);
   const loading = agentId !== null && !transcript?.loaded && items.length === 0;
 
+  // Reply on a message: its quote goes on top of the composer, which takes the cursor.
+  const answer = useCallback(
+    (picked: Reply) => {
+      hold({ on: projectId, reply: picked });
+      requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+    },
+    [projectId],
+  );
+
   const send = () => {
     const text = draft.trim();
     const attached = files.ready;
     if ((!text && attached.length === 0) || files.uploading) return;
     setDraft("");
+    hold(null);
     files.clear();
     setJumps((n) => n + 1);
-    void cos.messageStaff(projectId, text, attached);
+    void cos.messageStaff(projectId, withReply(text, reply), attached);
   };
 
   const suggest = (text: string) => {
@@ -382,6 +396,7 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             inbox={inbox ?? []}
             working={state === "working" || (state === "starting" && pending.length > 0)}
             jumpSignal={jumps}
+            onReply={canChange ? answer : undefined}
             onRetry={(p) => void cos.retryPending(projectId, p.id)}
             onDiscard={(p) => cos.discardPending(projectId, p.id)}
             empty={
@@ -409,6 +424,15 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             onChange={setDraft}
             onSend={send}
             sending={sending}
+            reply={
+              reply
+                ? {
+                    label: replyLabel(reply, "the Chief of Staff"),
+                    text: quotePreview(quoteText(reply.text)),
+                  }
+                : null
+            }
+            onCancelReply={() => hold(null)}
             disabled={!canChange}
             files={canChange ? files : undefined}
             note={

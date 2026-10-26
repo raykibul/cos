@@ -196,6 +196,32 @@ describe("agent page", () => {
     expect(page().getByText("Also cover the refresh token")).toBeInTheDocument();
   });
 
+  it("replies to the part of Claude's message you selected", async () => {
+    const { user, daemon } = await renderApp({ kind: "agent", id: 7 });
+    const log = within(page().getByRole("log", { name: "Conversation with Claude" }));
+    const said = log.getByText(/Found it:/);
+    // Select "five minutes" in it, then Reply.
+    const node = [...said.childNodes].find((n) => n.textContent?.includes("five minutes"))!;
+    const at = node.textContent!.indexOf("five minutes");
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + "five minutes".length);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    const message = said.closest<HTMLElement>(".group\\/message")!;
+    await user.click(within(message).getByRole("button", { name: "Reply" }));
+    expect(page().getByRole("group", { name: "Replying to Claude" })).toHaveTextContent(
+      /^Replying to Claudefive minutes$/,
+    );
+    await user.type(page().getByRole("textbox", { name: "Message Fix login bug" }), "Hours{Enter}");
+    await act(() => settle());
+    const sent = daemon.requests.find((r) => r.path === "/v1/agents/7/input");
+    expect(sent?.body).toEqual({ text: "Replying to your message:\n> five minutes\n\nHours" });
+    expect(log.getByRole("figure", { name: "Replying to Claude" })).toHaveTextContent(
+      /five minutes/,
+    );
+  });
+
   it("keeps the chief's own agent page as its terminal", async () => {
     await renderApp({ kind: "agent", id: 40 });
     expect(page().queryByRole("log")).toBeNull();

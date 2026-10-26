@@ -56,6 +56,33 @@ const shots = [
     "page=chief:1",
     (page) => page.getByRole("list", { name: "Files sent" }).scrollIntoViewIfNeeded(),
   ],
+  [
+    "chief-reply",
+    "page=chief:1",
+    async (page) => {
+      const answer = page.locator(".group\\/message", { hasText: "Here's where things stand." });
+      await answer.hover();
+      await answer.getByRole("button", { name: "Reply" }).click();
+      await page
+        .getByRole("textbox", { name: "Message the Chief of Staff" })
+        .fill("Have it write the helper by hand, no new dependency.");
+      await answer.hover();
+    },
+  ],
+  [
+    "chief-replied",
+    "page=chief:1",
+    async (page) => {
+      await page
+        .locator(".group\\/message", { hasText: "Here's where things stand." })
+        .getByRole("button", { name: "Reply" })
+        .click();
+      const box = page.getByRole("textbox", { name: "Message the Chief of Staff" });
+      await box.fill("Have it write the helper by hand, no new dependency.");
+      await box.press("Enter");
+      await page.getByRole("figure", { name: "Replying to the Chief of Staff" }).waitFor();
+    },
+  ],
   ["chief-empty", "page=chief:2"],
   [
     "chief-memory",

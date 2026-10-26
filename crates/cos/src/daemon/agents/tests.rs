@@ -380,12 +380,9 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
     );
     assert_eq!(transcript.next, 2);
 
-    // A multi-line message is pasted, and a tool call has its result folded in.
-    fixture
-        .manager
-        .paste_message(agent.id, "first\nsecond")
-        .await
-        .unwrap();
+    // A message of several lines, typed through the route, goes in as one
+    // paste; and a tool call has its result folded in.
+    client.say(agent.id, "first\nsecond".into()).await.unwrap();
     fixture.until_idle_with(agent.id, "echo: first\nsecond").await;
     client.say(agent.id, "ask:Bash ls".into()).await.unwrap();
     let approval = fixture.pending_approval(agent.id).await;

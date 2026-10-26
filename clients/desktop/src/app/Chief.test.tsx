@@ -271,6 +271,50 @@ describe("chief page", () => {
     expect(screen.queryByText("Sending…")).not.toBeInTheDocument();
   });
 
+  it("replies to one of its messages: the quote shows in the composer and goes along", async () => {
+    const { user, daemon } = await renderApp({ kind: "chief", id: 1 });
+    const log = within(screen.getByRole("log"));
+    const answer = log
+      .getByText(/Here's where things stand/)
+      .closest<HTMLElement>(".group\\/message")!;
+    await user.click(within(answer).getByRole("button", { name: "Reply" }));
+    const quoted = screen.getByRole("group", { name: "Replying to the Chief of Staff" });
+    expect(quoted).toHaveTextContent(/Here's where things stand/);
+    const box = screen.getByRole("textbox", { name: "Message the Chief of Staff" });
+    expect(box).toHaveFocus();
+    await user.type(box, "Make it ten{Enter}");
+    await act(() => settle());
+    const sent = daemon.requests.find((r) => r.path === "/v1/projects/1/staff/message");
+    const text = (sent?.body as { text: string }).text;
+    expect(text).toMatch(
+      /^Replying to your message:\n> Here's where things stand\.\n>\n> \*\*The login/,
+    );
+    expect(text).toMatch(/\n\nMake it ten$/);
+    expect(screen.queryByRole("group", { name: /^Replying to/ })).not.toBeInTheDocument();
+    // Your bubble shows what you wrote, with the quote above it.
+    const reply = log.getByRole("figure", { name: "Replying to the Chief of Staff" });
+    expect(reply).toHaveTextContent(/You replied to the Chief of Staff/);
+    expect(log.getByText("Make it ten")).toBeInTheDocument();
+    expect(log.queryByText(/Replying to your message:/)).not.toBeInTheDocument();
+  });
+
+  it("drops a reply with × or Escape", async () => {
+    const { user } = await renderApp({ kind: "chief", id: 1 });
+    const log = within(screen.getByRole("log"));
+    // Your own ask, the first message.
+    const [first] = log.getAllByRole("button", { name: "Reply" });
+    await user.click(first!);
+    expect(screen.getByRole("group", { name: "Replying to yourself" })).toHaveTextContent(
+      /Logins expire after five minutes/,
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel reply" }));
+    expect(screen.queryByRole("group", { name: /^Replying to/ })).not.toBeInTheDocument();
+    await user.click(first!);
+    expect(screen.getByRole("group", { name: /^Replying to/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: /^Replying to/ })).not.toBeInTheDocument();
+  });
+
   it("shows Sending… while the daemon hasn't answered", async () => {
     const { user, bridge } = await renderApp({ kind: "chief", id: 1 });
     let release = () => undefined as void;
