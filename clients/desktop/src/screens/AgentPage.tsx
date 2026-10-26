@@ -11,13 +11,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { envHint, sortedNames } from "../api/env";
 import { type Agent, type Approval, workspaceName } from "../api/models";
 import type { InboxItem } from "../api/staff";
 import { useApp, useCanChange, useCos, useUi } from "../app/context";
 import { useFocusOnOpen } from "../app/focus";
 import { type PendingMessage, conversationItems } from "../domain/transcript";
+import { type Reply, quotePreview, quoteText, replyLabel, withReply } from "../domain/reply";
 import { Conversation, type Speaker } from "../pages/chief/Conversation";
 import { SplitDivider } from "../pages/chief/SplitDivider";
 import { ChatComposer } from "../ui/ChatComposer";
@@ -110,6 +111,9 @@ function AgentView({
     embedded ? ui.showSessionTerminal(open) : ui.toggleAgentTerminal(open);
   const [busy, setBusy] = useState<"stop" | "resume" | null>(null);
   const [draft, setDraft] = useState("");
+  // A quote belongs to its conversation: another one doesn't show it.
+  const [held, hold] = useState<{ on: number; reply: Reply } | null>(null);
+  const reply = held?.on === agent.id ? held.reply : null;
   const [jumps, setJumps] = useState(0);
   const target = useMemo(() => ({ kind: "agent" as const, agentId: agent.id }), [agent.id]);
   const files = useDraftFiles(canChange ? target : null);
@@ -176,14 +180,24 @@ function AgentView({
       .finally(() => setBusy(null));
   };
 
+  // Reply on a message: its quote goes on top of the composer, which takes the cursor.
+  const answer = useCallback(
+    (picked: Reply) => {
+      hold({ on: agent.id, reply: picked });
+      requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+    },
+    [agent.id],
+  );
+
   const send = () => {
     const text = draft.trim();
     const attached = files.ready;
     if ((!text && attached.length === 0) || files.uploading) return;
     setDraft("");
+    hold(null);
     files.clear();
     setJumps((n) => n + 1);
-    void cos.messageAgent(agent.id, text, attached);
+    void cos.messageAgent(agent.id, withReply(text, reply), attached);
   };
 
   const menu: MenuItem[] = [
@@ -355,6 +369,7 @@ function AgentView({
               agent.state === "working" || (agent.state === "starting" && pending.length > 0)
             }
             jumpSignal={jumps}
+            onReply={canChange ? answer : undefined}
             onRetry={(p) => void cos.retryAgentPending(agent.id, p.id)}
             onDiscard={(p) => cos.discardAgentPending(agent.id, p.id)}
             empty={
@@ -385,6 +400,12 @@ function AgentView({
             onChange={setDraft}
             onSend={send}
             sending={sending}
+            reply={
+              reply
+                ? { label: replyLabel(reply, "Claude"), text: quotePreview(quoteText(reply.text)) }
+                : null
+            }
+            onCancelReply={() => hold(null)}
             disabled={!canChange || blocked !== null}
             files={canChange ? files : undefined}
             note={

@@ -6,6 +6,7 @@ import {
   ArrowDown,
   Check,
   ChevronRight,
+  CornerUpLeft,
   Inbox,
   RotateCcw,
   SquareTerminal,
@@ -27,6 +28,7 @@ import {
   toolTitle,
   updateBody,
 } from "../../domain/transcript";
+import { type Reply, parseReply, quotePreview, replyText } from "../../domain/reply";
 import { cx } from "../../ui/cx";
 import { clockTime } from "../../ui/format";
 import { SentFiles } from "../../ui/attachments";
@@ -53,6 +55,11 @@ const chief: Speaker = {
   nameClass: "text-tone-amber",
   dotClass: "bg-tone-amber",
 };
+
+/** The speaker in a sentence: "the Chief of Staff", "Claude". */
+function speakerName(speaker: Speaker): string {
+  return speaker === chief ? "the Chief of Staff" : speaker.name;
+}
 
 /**
  * Keeps a scroller pinned to its bottom while the content grows, unless
@@ -105,6 +112,7 @@ export function Conversation({
   onDiscard,
   agentId = null,
   speaker = chief,
+  onReply,
 }: {
   items: ConversationItem[];
   /** The chief's agent, whose attachments the bubbles show. */
@@ -120,6 +128,8 @@ export function Conversation({
   onDiscard: (pending: PendingMessage) => void;
   /** Who answers; the chief unless given. */
   speaker?: Speaker;
+  /** Picks a message to answer; without it, messages have no Reply button. */
+  onReply?: (reply: Reply) => void;
 }) {
   const last = items[items.length - 1];
   const { scroller, content, away, pin, onScroll, jump } = useFollowBottom();
@@ -136,7 +146,7 @@ export function Conversation({
         // Text fades out under the header instead of being cut by it.
         className="min-h-0 flex-1 overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_24px)]"
         role="log"
-        aria-label={`Conversation with ${speaker.name === chief.name ? "the Chief of Staff" : speaker.name}`}
+        aria-label={`Conversation with ${speakerName(speaker)}`}
       >
         <div ref={content} className={cx(column, "pt-6 pb-8")}>
           {items.length === 0 ? empty : null}
@@ -152,6 +162,8 @@ export function Conversation({
                     text={item.message.text}
                     files={item.message.attachments}
                     agentId={agentId}
+                    speaker={speaker}
+                    onReply={item.fromChief ? undefined : onReply}
                   >
                     {item.fromChief ? (
                       <>
@@ -168,6 +180,7 @@ export function Conversation({
                     key={item.key}
                     className={gap}
                     pending={item.pending}
+                    speaker={speaker}
                     working={working}
                     onRetry={onRetry}
                     onDiscard={onDiscard}
@@ -181,6 +194,7 @@ export function Conversation({
                     messages={item.messages}
                     speaker={speaker}
                     chiefId={speaker === chief ? agentId : null}
+                    onReply={onReply}
                   />
                 );
               case "output":
@@ -221,6 +235,8 @@ function UserBubble({
   files = [],
   agentId = null,
   previews,
+  speaker,
+  onReply,
 }: {
   text: string;
   className?: string;
@@ -228,17 +244,76 @@ function UserBubble({
   files?: AttachedFile[];
   agentId?: number | null;
   previews?: Record<string, string | null>;
+  speaker: Speaker;
+  /** Answer this message; without it, it has no Reply button. */
+  onReply?: (reply: Reply) => void;
 }) {
+  const bubble = useRef<HTMLDivElement>(null);
+  const parsed = parseReply(text);
+  const body = parsed ? parsed.body : text;
   return (
-    <div className={cx("flex flex-col items-end", className)}>
+    <div className={cx("group/message flex flex-col items-end", className)}>
       <SentFiles files={files} agentId={agentId} previews={previews} />
-      {text ? (
-        <div className="max-w-[82%] rounded-[18px] rounded-br-md bg-subtle-2/80 px-4 py-2.5 text-[14.5px] leading-[1.55] whitespace-pre-wrap text-ink select-text">
-          {text}
+      {parsed ? <QuotedReply reply={parsed.reply} speaker={speaker} /> : null}
+      {body ? (
+        <div className="flex max-w-full items-center justify-end gap-1.5">
+          {onReply ? (
+            <ReplyButton
+              onReply={() => onReply({ from: "me", text: replyText(bubble.current, body) })}
+            />
+          ) : null}
+          <div
+            ref={bubble}
+            className="max-w-[82%] rounded-[18px] rounded-br-md bg-subtle-2/80 px-4 py-2.5 text-[14.5px] leading-[1.55] whitespace-pre-wrap text-ink select-text"
+          >
+            {body}
+          </div>
         </div>
       ) : null}
       {children ? <div className="mt-1 px-1 text-[11px] text-ink-3">{children}</div> : null}
     </div>
+  );
+}
+
+/** The message yours answers, small and muted above your bubble. */
+function QuotedReply({ reply, speaker }: { reply: Reply; speaker: Speaker }) {
+  const whom = reply.from === "me" ? "yourself" : speakerName(speaker);
+  return (
+    <figure aria-label={`Replying to ${whom}`} className="mb-1 flex max-w-[82%] flex-col items-end">
+      <figcaption className="mb-1 flex items-center gap-1 px-1 text-[11px] text-ink-3">
+        <CornerUpLeft className="size-3" strokeWidth={2} aria-hidden />
+        You replied to {whom}
+      </figcaption>
+      <blockquote
+        title={reply.text}
+        className="max-w-full rounded-[14px] border-l-2 border-line-strong bg-subtle/70 px-3 py-1.5 text-[13px] leading-snug text-ink-3 select-text"
+      >
+        <span className="line-clamp-2">{quotePreview(reply.text)}</span>
+      </blockquote>
+    </figure>
+  );
+}
+
+/**
+ * Reply, shown when the pointer is on the message (or the button has the
+ * focus). It keeps a selection in the message, so that part is quoted.
+ */
+function ReplyButton({ onReply, className }: { onReply: () => void; className?: string }) {
+  return (
+    <button
+      type="button"
+      aria-label="Reply"
+      title="Reply (select text first to quote part of it)"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onReply}
+      className={cx(
+        "flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 opacity-0 transition-opacity hover:bg-subtle hover:text-ink",
+        "group-hover/message:opacity-100 focus-visible:opacity-100",
+        className,
+      )}
+    >
+      <CornerUpLeft className="size-3.5" strokeWidth={2} aria-hidden />
+    </button>
   );
 }
 
@@ -285,12 +360,14 @@ function ShellOutput({ message }: { message: TranscriptMessage }) {
 
 function PendingBubble({
   pending,
+  speaker,
   working,
   className,
   onRetry,
   onDiscard,
 }: {
   pending: PendingMessage;
+  speaker: Speaker;
   working: boolean;
   className?: string;
   onRetry: (pending: PendingMessage) => void;
@@ -300,6 +377,7 @@ function PendingBubble({
     <div className={cx(pending.state === "sending" && "opacity-75", className)}>
       <UserBubble
         text={pending.text}
+        speaker={speaker}
         files={(pending.attachments ?? []).map((a) => ({
           name: a.name,
           path: a.path,
@@ -364,12 +442,14 @@ const Turn = memo(function Turn({
   className,
   speaker,
   chiefId,
+  onReply,
 }: {
   messages: TranscriptMessage[];
   className?: string;
   speaker: Speaker;
   /** The chief's agent, on its page: sessions it started show as cards. */
   chiefId: number | null;
+  onReply?: (reply: Reply) => void;
 }) {
   const first = messages[0];
   return (
@@ -396,15 +476,39 @@ const Turn = memo(function Turn({
           return tool ? (
             <ToolRow key={message.n} message={message} className={spacing} />
           ) : (
-            <div key={message.n} className={cx("prose-cos chief-prose select-text", spacing)}>
-              <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
-            </div>
+            <TurnText key={message.n} text={message.text} className={spacing} onReply={onReply} />
           );
         })}
       </div>
     </article>
   );
 });
+
+/** What the chief or Claude said, in markdown, with Reply on the right. */
+function TurnText({
+  text,
+  className,
+  onReply,
+}: {
+  text: string;
+  className?: string;
+  onReply?: (reply: Reply) => void;
+}) {
+  const prose = useRef<HTMLDivElement>(null);
+  return (
+    <div className={cx("group/message relative", className)}>
+      <div ref={prose} className="prose-cos chief-prose select-text">
+        <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+      </div>
+      {onReply ? (
+        <ReplyButton
+          onReply={() => onReply({ from: "them", text: replyText(prose.current, text) })}
+          className="absolute top-0 -right-8"
+        />
+      ) : null}
+    </div>
+  );
+}
 
 function ToolRow({ message, className }: { message: TranscriptMessage; className?: string }) {
   const [open, setOpen] = useState(false);

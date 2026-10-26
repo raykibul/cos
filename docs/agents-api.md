@@ -75,7 +75,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 | `GET /v1/agents?workspace_id=&state=` | | `{"agents": [Agent]}`, newest first |
 | `GET /v1/agents/{id}` | | Agent |
 | `POST /v1/workspaces/{id}/agents` | `{"prompt"?, "title"?, "model"?, "permission_mode"?, "user_settings"?, "rows"?, "cols"?, "attachments"?}` | 201 Agent (role `user`). A missing `title` becomes the first 60 characters of the prompt, else the first attachment's name, else "Agent N". `attachments` name files uploaded to the workspace (below). |
-| `POST /v1/agents/{id}/input` | `{"text": "…", "attachments"?: ["name"]}` | 204. Types the text and presses Return; with attachments, as one paste with their paths at the end. The text may be empty when there are attachments. 409 if exited. |
+| `POST /v1/agents/{id}/input` | `{"text": "…", "attachments"?: ["name"]}` | 204. Types the text and presses Return; text of several lines goes as one paste, and with attachments, as one paste with their paths at the end. The text may be empty when there are attachments. 409 if exited. |
 | `POST /v1/agents/{id}/attachments?name=` | the file's bytes | 201 Attachment (below) |
 | `POST /v1/workspaces/{id}/attachments?name=` | the file's bytes | 201 Attachment, for an agent you're about to start there |
 | `GET /v1/agents/{id}/attachments/{name}` | | The file, with its content type |
