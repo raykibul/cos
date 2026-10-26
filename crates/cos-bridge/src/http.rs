@@ -19,7 +19,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use crate::{Bridge, BridgeError, FileResponse, Response, Target};
 
 /// A connection to the daemon, whichever way it was made.
-trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+pub(crate) trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
 /// The methods `daemon_request` accepts. `PATCH` is here because renaming a
@@ -167,7 +167,7 @@ impl Bridge {
         Ok((response, connection))
     }
 
-    async fn connect(&self) -> Result<Box<dyn Stream>, BridgeError> {
+    pub(crate) async fn connect(&self) -> Result<Box<dyn Stream>, BridgeError> {
         match &self.target {
             Target::Unix(socket) => match UnixStream::connect(socket).await {
                 Ok(stream) => Ok(Box::new(stream)),
@@ -189,6 +189,9 @@ impl Bridge {
                 match tokio::time::timeout(self.connect_timeout, connect).await {
                     Ok(Ok(stream)) => {
                         let _ = stream.set_nodelay(true);
+                        // Streams and tunnels may sit quiet for long; this
+                        // notices a host that vanished.
+                        let _ = crate::forward::keep_alive(&stream);
                         Ok(Box::new(stream))
                     }
                     Ok(Err(error)) => Err(BridgeError::not_running(format!(
@@ -204,7 +207,7 @@ impl Bridge {
     }
 }
 
-async fn read_all(response: hyper::Response<Incoming>) -> Result<Bytes, BridgeError> {
+pub(crate) async fn read_all(response: hyper::Response<Incoming>) -> Result<Bytes, BridgeError> {
     Ok(response
         .into_body()
         .collect()
