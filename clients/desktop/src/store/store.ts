@@ -33,7 +33,7 @@ import {
   type Transcript,
   type TranscriptMessage,
 } from "../api/staff";
-import type { Bridge, DaemonInfo, EventMessage, Host, HostList } from "../bridge/types";
+import type { Bridge, DaemonInfo, EventMessage, Forward, Host, HostList } from "../bridge/types";
 import {
   agentOf,
   changesAgents,
@@ -125,6 +125,8 @@ export interface DaemonState {
   /** False when the daemon answers 404 for `/v1/judge`. */
   judgeSupported: boolean;
   judgeError: string | null;
+  /** The ports forwarded from the host in use, by remote port; always empty on This Mac. */
+  forwards: Forward[];
 }
 
 /** `global`, or `project:<id>`: where an environment list's error is kept. */
@@ -187,6 +189,7 @@ export function initialState(): DaemonState {
     judge: null,
     judgeSupported: true,
     judgeError: null,
+    forwards: [],
   };
 }
 
@@ -224,6 +227,8 @@ export class CosStore {
   private readonly keep: number;
   private readonly backlog: number;
   private streamId: number | null = null;
+  /** `follow_forwards`, while another machine is in use. */
+  private forwardsStreamId: number | null = null;
   private started = false;
   /**
    * Bumped by `stop` and on each switch of host, so answers and stream
@@ -390,6 +395,7 @@ export class CosStore {
     // Which host this is decides what's fetched (devices only on This Mac).
     await this.loadHosts();
     if (!current()) return;
+    if (!this.isThisMac()) void this.followForwards(current);
     // Start a backlog before the newest event, so the log has some history
     // without replaying all of it.
     const after = await this.client.status().then(
@@ -418,6 +424,8 @@ export class CosStore {
     this.generation += 1;
     if (this.streamId !== null) void this.bridge.closeStream(this.streamId);
     this.streamId = null;
+    if (this.forwardsStreamId !== null) void this.bridge.closeStream(this.forwardsStreamId);
+    this.forwardsStreamId = null;
   }
 
   /** Follows the same host again from scratch: "Try now" on a refusal. */
@@ -1421,6 +1429,67 @@ export class CosStore {
     );
     this.createRefreshes();
     await this.start();
+  }
+
+  // MARK: Ports forwarded from another machine
+
+  /**
+   * Follows the shell's forwards for the host in use. They live in the
+   * shell, not the daemon, so they're followed even while the host refuses
+   * this Mac. An older shell without forwarding leaves the list empty.
+   */
+  private async followForwards(current: () => boolean): Promise<void> {
+    const generation = this.generation;
+    let id: number;
+    try {
+      id = await this.bridge.followForwards((message) => {
+        if (this.generation === generation) this.set({ forwards: message.forwards });
+      });
+    } catch {
+      return;
+    }
+    if (current()) this.forwardsStreamId = id;
+    else void this.bridge.closeStream(id);
+  }
+
+  /**
+   * Forwards `remotePort` of the host in use to this Mac (the same port,
+   * `localPort`, or the next free one). A `too_old` code means its cos
+   * predates forwarding.
+   */
+  async addForward(remotePort: number, localPort?: number): Promise<Forward> {
+    let forward: Forward;
+    try {
+      forward = await this.bridge.forwardAdd(remotePort, localPort);
+    } catch (error) {
+      throw CosError.from(error);
+    }
+    this.set((state) => ({
+      forwards: [...state.forwards.filter((f) => f.remotePort !== remotePort), forward].sort(
+        (a, b) => a.remotePort - b.remotePort,
+      ),
+    }));
+    return forward;
+  }
+
+  /** Stops forwarding a port; its open connections drop. */
+  async removeForward(remotePort: number): Promise<void> {
+    let list;
+    try {
+      list = await this.bridge.forwardRemove(remotePort);
+    } catch (error) {
+      throw CosError.from(error);
+    }
+    this.set({ forwards: list.forwards });
+  }
+
+  /** Opens a forward's `http://localhost:{localPort}/` in the default browser. */
+  async openForward(remotePort: number): Promise<void> {
+    try {
+      await this.bridge.forwardOpen(remotePort);
+    } catch (error) {
+      throw CosError.from(error);
+    }
   }
 
   // MARK: jev, the judgment model in shadow mode

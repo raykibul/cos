@@ -43,8 +43,8 @@ describe("hosts", () => {
     await until(() => cos.get().connection === "running", "connected to Studio");
     await settle();
     expect(cos.get().projects.length).toBeGreaterThan(0);
-    // One stream, on Studio's daemon; This Mac's was closed.
-    expect(bridge.openStreams).toBe(1);
+    // Studio's events and its forwarded ports; This Mac's events were closed.
+    expect(bridge.openStreams).toBe(2);
     expect(bridge.daemon.followers.size).toBe(0);
     expect(studio.followers.size).toBe(1);
     expect(requestLines(studio)).toContain("GET /v1/projects");

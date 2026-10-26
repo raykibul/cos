@@ -1,6 +1,7 @@
 // The ⌘K switcher: type to jump to any project's chief, what waits on you,
-// an agent, a workspace or a page. Return opens it; Tab on a chief writes to
-// it right here, without leaving the page you're on.
+// an agent, a workspace or a page, or open a forwarded port. Return opens
+// it; Tab on a chief writes to it right here, without leaving the page
+// you're on.
 
 import { ArrowUp, CornerDownLeft, Search } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -37,7 +38,14 @@ export function QuickSwitch() {
   const close = () => ui.openSwitcher(false);
   const open = (item: SwitchItem) => {
     close();
-    ui.navigate(item.page);
+    const port = item.forward;
+    if (port !== undefined) {
+      void ui.perform(`Couldn't open ${item.title.replace(/^Open /, "")}`, () =>
+        cos.openForward(port),
+      );
+    } else if (item.page) {
+      ui.navigate(item.page);
+    }
   };
   const send = () => {
     const text = message.trim();

@@ -1,5 +1,6 @@
 // What the ⌘K switcher lists: every project's chief, what waits on you,
-// your agents, the workspaces, and the app's own pages. Pure, so the list
+// your agents, the workspaces, the ports forwarded from another machine,
+// and the app's own pages. Pure, so the list
 // and its filtering are tested without the dialog.
 
 import { workspaceName } from "../api/models";
@@ -17,18 +18,21 @@ import {
   trustAgents,
   workspace,
 } from "../store/selectors";
-import type { DaemonState } from "../store/store";
+import { type DaemonState, isThisMac } from "../store/store";
 import { approvalDetail } from "./approvals";
 import { agentLabel, isAlive, pluralize } from "./labels";
+import { portLabel } from "./ports";
 import { projectShortcut } from "./rail";
 
-export type SwitchSection = "Chiefs" | "Waiting on you" | "Agents" | "Workspaces" | "Go to";
+export type SwitchSection =
+  "Chiefs" | "Waiting on you" | "Agents" | "Workspaces" | "Ports" | "Go to";
 
 export const sections: SwitchSection[] = [
   "Chiefs",
   "Waiting on you",
   "Agents",
   "Workspaces",
+  "Ports",
   "Go to",
 ];
 
@@ -38,7 +42,10 @@ export interface SwitchItem {
   section: SwitchSection;
   title: string;
   detail: string;
-  page: Page;
+  /** Where Return goes; null for a port, which opens in the browser instead. */
+  page: Page | null;
+  /** A forwarded port (its remote port): Return opens it in the browser. */
+  forward?: number;
   /** The project whose chief this is: Tab writes to it without opening it. */
   chiefOf: number | null;
   shortcut: string | null;
@@ -149,6 +156,21 @@ export function switchItems(s: DaemonState): SwitchItem[] {
     }
   }
 
+  if (!isThisMac(s.host)) {
+    for (const f of s.forwards) {
+      items.push({
+        key: `port:${f.remotePort}`,
+        section: "Ports",
+        title: `Open localhost:${f.localPort}`,
+        detail: joined(`:${f.remotePort} on ${s.host?.name ?? "the machine in use"}`, portLabel(f)),
+        page: null,
+        forward: f.remotePort,
+        chiefOf: null,
+        shortcut: null,
+      });
+    }
+  }
+
   const go = (key: string, title: string, detail: string, page: Page) =>
     items.push({ key, section: "Go to", title, detail, page, chiefOf: null, shortcut: null });
   go("waiting", "Waiting on you", "Everything blocked on you", { kind: "waiting" });
@@ -164,6 +186,7 @@ const restingLimit: Record<SwitchSection, number> = {
   "Waiting on you": 5,
   Agents: 5,
   Workspaces: 0,
+  Ports: 3,
   "Go to": 3,
 };
 

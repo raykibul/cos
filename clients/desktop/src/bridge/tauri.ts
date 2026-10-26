@@ -5,6 +5,9 @@ import type {
   DaemonResponse,
   EventMessage,
   FileResponse,
+  Forward,
+  ForwardList,
+  ForwardMessage,
   Host,
   HostList,
   HttpMethod,
@@ -96,5 +99,27 @@ export class TauriBridge implements Bridge {
 
   openUrl(url: string): Promise<void> {
     return invoke("open_url", { url });
+  }
+
+  forwardsList(): Promise<ForwardList> {
+    return invoke<ForwardList>("forwards_list");
+  }
+
+  forwardAdd(remotePort: number, localPort?: number): Promise<Forward> {
+    return invoke<Forward>("forward_add", { remotePort, localPort: localPort ?? null });
+  }
+
+  forwardRemove(remotePort: number): Promise<ForwardList> {
+    return invoke<ForwardList>("forward_remove", { remotePort });
+  }
+
+  followForwards(onMessage: (message: ForwardMessage) => void): Promise<number> {
+    const channel = new Channel<ForwardMessage>();
+    channel.onmessage = onMessage;
+    return invoke<number>("follow_forwards", { onMessage: channel });
+  }
+
+  forwardOpen(remotePort: number): Promise<void> {
+    return invoke("forward_open", { remotePort });
   }
 }
