@@ -34,7 +34,7 @@ const tool = (n: number, name: string, summary = ""): TranscriptMessage => ({
   role: "assistant",
   kind: "tool",
   text: "",
-  tool: { name, summary, isError: false },
+  tool: { name, summary, isError: false, agentId: null },
   tsMs: n * 1000,
   attachments: [],
 });

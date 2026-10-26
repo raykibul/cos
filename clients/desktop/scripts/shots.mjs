@@ -29,7 +29,7 @@ const shots = [
     async (page) => {
       await page.getByRole("button", { name: "2 updates from agents" }).click();
       await page
-        .getByRole("button", { name: /Started an agent/ })
+        .getByRole("button", { name: /Checked on an agent/ })
         .first()
         .click();
     },
@@ -68,6 +68,15 @@ const shots = [
     (page) => page.getByRole("button", { name: "Edit release-process" }).click(),
   ],
   ["chief-terminal", "page=chief:1&terminal"],
+  ["chief-session", "page=chief:1&session=7"],
+  [
+    "chief-spawned-cards",
+    "page=chief:1",
+    (page) =>
+      page
+        .getByRole("button", { name: /^Session started: Fix login bug/ })
+        .scrollIntoViewIfNeeded(),
+  ],
   ["chief-paused", "page=chief:1&paused"],
   ["chief-context-high", "page=chief:1&context=92"],
   [

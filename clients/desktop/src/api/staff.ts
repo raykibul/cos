@@ -132,6 +132,12 @@ export interface ToolCall {
   name: string;
   summary: string;
   isError: boolean;
+  /**
+   * The agent one of cos's agent tools acted on: `agent_spawn`'s new agent
+   * (once its result is in), or the one `agent_send`, `agent_read` and
+   * `agent_stop` were given. Null from older daemons.
+   */
+  agentId: number | null;
 }
 
 export interface TranscriptMessage {
@@ -160,6 +166,7 @@ function decodeTool(value: unknown): ToolCall | null {
     name: str(value.name, "tool"),
     summary: str(value.summary),
     isError: bool(value.is_error, false),
+    agentId: optNum(value.agent_id),
   };
 }
 

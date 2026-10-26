@@ -37,6 +37,7 @@ import {
   staffState,
 } from "../../store/selectors";
 import { AgentTerminal } from "../../terminal/AgentTerminal";
+import { AgentPanel } from "../../screens/AgentPage";
 import { folderItems } from "../../screens/common";
 import { ChiefMark } from "../../screens/sidebar/ProjectSection";
 import { cx } from "../../ui/cx";
@@ -97,6 +98,16 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   const inbox = useCos((s) => s.inboxes[projectId]);
   const view = useCos((s) => ({ agents: s.agents, approvals: s.approvals, staffs: s.staffs }));
   const terminalOpen = useUi((s) => s.chiefTerminal);
+  const wanted = useUi((s) => s.chiefSession);
+  // Only a session of this project: another chief's page doesn't show it.
+  const session = useCos((s) => {
+    if (wanted === null) return null;
+    const a = s.agents.find((x) => x.id === wanted);
+    const ws = a
+      ? s.projects.flatMap((p) => p.workspaces).find((w) => w.id === a.workspaceId)
+      : null;
+    return a && ws?.projectId === projectId ? wanted : null;
+  });
   const envNames = useCos((s) => projectEnvNames(s, projectId));
   const account = useCos((s) => claudeAccount(s, projectId));
   const env = envHint(envNames);
@@ -406,6 +417,17 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         </div>
       </section>
 
+      {session !== null && !terminalOpen ? (
+        <SplitDivider label="Resize the session beside the chat" />
+      ) : null}
+      {session !== null && !terminalOpen ? (
+        <aside
+          aria-label="Session beside the chat"
+          className="flex w-[46%] max-w-full min-w-0 shrink-0 flex-col border-l border-line bg-page"
+        >
+          <AgentPanel agentId={session} onClose={() => ui.showChiefSession(null)} />
+        </aside>
+      ) : null}
       {terminalOpen && agentId !== null ? <SplitDivider /> : null}
       {terminalOpen && agentId !== null ? (
         <aside

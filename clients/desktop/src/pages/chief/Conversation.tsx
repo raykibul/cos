@@ -21,6 +21,7 @@ import type { InboxItem, TranscriptMessage } from "../../api/staff";
 import {
   type ConversationItem,
   type PendingMessage,
+  SPAWN_TOOL,
   isCosTool,
   itemsForUpdate,
   toolTitle,
@@ -31,6 +32,7 @@ import { clockTime } from "../../ui/format";
 import { SentFiles } from "../../ui/attachments";
 import { Spinner } from "../../ui/kit";
 import { ChiefMark } from "../../screens/sidebar/ProjectSection";
+import { SpawnedCard } from "./SpawnedCard";
 
 const column = "mx-auto w-full max-w-[740px] px-8";
 
@@ -173,7 +175,13 @@ export function Conversation({
                 );
               case "turn":
                 return (
-                  <Turn key={item.key} className={gap} messages={item.messages} speaker={speaker} />
+                  <Turn
+                    key={item.key}
+                    className={gap}
+                    messages={item.messages}
+                    speaker={speaker}
+                    chiefId={speaker === chief ? agentId : null}
+                  />
                 );
               case "update":
                 return (
@@ -312,10 +320,13 @@ const Turn = memo(function Turn({
   messages,
   className,
   speaker,
+  chiefId,
 }: {
   messages: TranscriptMessage[];
   className?: string;
   speaker: Speaker;
+  /** The chief's agent, on its page: sessions it started show as cards. */
+  chiefId: number | null;
 }) {
   const first = messages[0];
   return (
@@ -329,6 +340,16 @@ const Turn = memo(function Turn({
           const previous = messages[index - 1];
           const tool = message.kind === "tool";
           const spacing = !previous ? "" : tool && previous.kind === "tool" ? "mt-0.5" : "mt-3";
+          if (speaker === chief && message.tool?.name === SPAWN_TOOL && !message.tool.isError) {
+            return (
+              <SpawnedCard
+                key={message.n}
+                message={message}
+                chiefId={chiefId}
+                className={previous ? "mt-2" : ""}
+              />
+            );
+          }
           return tool ? (
             <ToolRow key={message.n} message={message} className={spacing} />
           ) : (

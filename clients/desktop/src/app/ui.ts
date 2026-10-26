@@ -77,6 +77,11 @@ export interface UiState {
   toasts: Toast[];
   /** Whether the chief page shows its agent's terminal in a split. */
   chiefTerminal: boolean;
+  /**
+   * A session the chief started, shown beside its chat (opened from its
+   * card); null for none. It and the chief's terminal share the right side.
+   */
+  chiefSession: number | null;
   /** Whether an agent's page shows its terminal beside the conversation. */
   agentTerminal: boolean;
   /**
@@ -157,6 +162,7 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     dialog: null,
     toasts: [],
     chiefTerminal: false,
+    chiefSession: null,
     agentTerminal: false,
     sidebar: "auto" as SidebarMode,
     project: null,
@@ -202,7 +208,17 @@ export function createUiStore(initial: Partial<UiState> = {}) {
       store.setState({ dialog: null });
     },
     toggleChiefTerminal(open?: boolean) {
-      store.setState((s) => ({ chiefTerminal: open ?? !s.chiefTerminal }));
+      store.setState((s) => {
+        const chiefTerminal = open ?? !s.chiefTerminal;
+        return { chiefTerminal, chiefSession: chiefTerminal ? null : s.chiefSession };
+      });
+    },
+    /** Shows a session the chief started beside its chat; null closes it. */
+    showChiefSession(agentId: number | null) {
+      store.setState((s) => ({
+        chiefSession: agentId,
+        chiefTerminal: agentId !== null ? false : s.chiefTerminal,
+      }));
     },
     toggleAgentTerminal(open?: boolean) {
       store.setState((s) => ({ agentTerminal: open ?? !s.agentTerminal }));
