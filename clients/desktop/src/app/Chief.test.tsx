@@ -138,7 +138,7 @@ describe("chief page", () => {
     expect(main().getByRole("heading", { level: 1 })).toHaveTextContent("Chief of Staff · cos");
     expect(main().getByText("Ready for your next message")).toBeInTheDocument();
     expect(log.getByText(/Logins expire after five minutes/)).toBeInTheDocument();
-    expect(log.getAllByRole("button", { name: /Started an agent/ })).toHaveLength(2);
+    expect(log.getAllByRole("button", { name: /^Session started: / })).toHaveLength(2);
     // The answer's numbered list, rendered as markdown.
     const items = log
       .getAllByRole("listitem")
@@ -202,15 +202,17 @@ describe("chief page", () => {
   it("expands a tool row and an update row", async () => {
     const { user } = await renderApp({ kind: "chief", id: 1 });
     const log = within(screen.getByRole("log"));
-    const [spawn] = log.getAllByRole("button", { name: /Started an agent/ });
-    expect(spawn).toHaveAttribute("aria-expanded", "false");
-    await user.click(spawn!);
-    expect(spawn).toHaveAttribute("aria-expanded", "true");
-    expect(log.getByText("mcp__cos__agent_spawn")).toBeInTheDocument();
+    const [read] = log.getAllByRole("button", { name: /Checked on an agent/ });
+    expect(read).toHaveAttribute("aria-expanded", "false");
+    await user.click(read!);
+    expect(read).toHaveAttribute("aria-expanded", "true");
+    expect(log.getByText("mcp__cos__agent_read")).toBeInTheDocument();
 
     const updates = log.getByRole("button", { name: "2 updates from agents" });
     await user.click(updates);
-    expect(log.getByText("Fix login bug")).toBeInTheDocument();
+    expect(
+      within(updates.parentElement!.parentElement!).getByText("Fix login bug"),
+    ).toBeInTheDocument();
     expect(
       log.getByText("Waiting for your approval: npm install left-pad --save"),
     ).toBeInTheDocument();
@@ -388,6 +390,56 @@ describe("chief page", () => {
     await user.click(within(strip).getByRole("button", { name: "Resume" }));
     await act(() => settle());
     expect(cos.get().staffs[1]).toMatchObject({ paused: false, updatesWaiting: 0 });
+  });
+});
+
+describe("sessions the chief started", () => {
+  it("shows each as a card with its live state, and opens it beside the chat", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    const log = within(screen.getByRole("log"));
+    const card = log.getByRole("button", { name: /^Session started: Fix login bug/ });
+    expect(card).toHaveTextContent("Fix the login flow · opus");
+    expect(card).toHaveTextContent("Working");
+    expect(card).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(card);
+    expect(ui.store.getState().chiefSession).toBe(7);
+    expect(card).toHaveAttribute("aria-pressed", "true");
+    const side = within(screen.getByRole("complementary", { name: "Session beside the chat" }));
+    expect(side.getByRole("heading", { name: "Fix login bug" })).toBeInTheDocument();
+    expect(side.getByRole("textbox", { name: "Message Fix login bug" })).toBeInTheDocument();
+    // The chief's page stays: the session is beside it, not instead of it.
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
+
+    // Another card swaps it; the chief's terminal takes its place; × closes.
+    await user.click(log.getByRole("button", { name: /^Session started: Add left-pad/ }));
+    expect(
+      side.getByRole("heading", { name: "Add left-pad to the formatter" }),
+    ).toBeInTheDocument();
+    await user.click(side.getByRole("button", { name: "Close the session" }));
+    expect(screen.queryByRole("complementary", { name: "Session beside the chat" })).toBeNull();
+  });
+
+  it("opens a session in a tab from its card", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.click(screen.getByRole("button", { name: "Open Fix login bug in a tab" }));
+    expect(ui.store.getState().page).toEqual({ kind: "agent", id: 7 });
+  });
+
+  it("gives the chief's terminal the right side, and the session back when it closes", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.click(screen.getByRole("button", { name: /^Session started: Fix login bug/ }));
+    await user.click(screen.getByRole("button", { name: "Show the chief's terminal" }));
+    expect(screen.queryByRole("complementary", { name: "Session beside the chat" })).toBeNull();
+    expect(screen.getByRole("complementary", { name: "The chief's terminal" })).toBeInTheDocument();
+    expect(ui.store.getState().chiefSession).toBeNull();
+  });
+
+  it("doesn't show one project's session beside another project's chief", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.click(screen.getByRole("button", { name: /^Session started: Fix login bug/ }));
+    act(() => ui.navigate({ kind: "chief", id: 2 }));
+    expect(screen.queryByRole("complementary", { name: "Session beside the chat" })).toBeNull();
   });
 });
 

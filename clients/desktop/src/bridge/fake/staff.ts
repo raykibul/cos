@@ -77,12 +77,18 @@ export function makeStaff(
     text: body,
     ts_ms: ms(ago),
   });
-  const tool = (ago: number, name: string, summary: string, isError = false): Raw => ({
+  const tool = (
+    ago: number,
+    name: string,
+    summary: string,
+    isError = false,
+    agentId?: number,
+  ): Raw => ({
     n: ++n,
     role: "assistant",
     kind: "tool",
     text: "",
-    tool: { name, summary, is_error: isError },
+    tool: { name, summary, is_error: isError, ...(agentId ? { agent_id: agentId } : {}) },
     ts_ms: ms(ago),
   });
 
@@ -115,17 +121,23 @@ export function makeStaff(
       930,
       "Nothing touches the login code or the formatter. Both fit in **lisbon**, which is already on the auth branch, so I'll give each its own agent there.",
     ),
-    tool(905, "mcp__cos__agent_spawn", "Fix login bug · in lisbon (opus)"),
-    tool(882, "mcp__cos__agent_spawn", "Add left-pad to the formatter · in lisbon"),
+    tool(905, "mcp__cos__agent_spawn", "Fix login bug", false, 7),
+    tool(882, "mcp__cos__agent_spawn", "Add left-pad to the formatter", false, 8),
     text(
       "assistant",
       878,
       "Both agents are working in **lisbon**. I'll report back when they finish or need you.",
     ),
     text("user", 17, update),
-    tool(15, "mcp__cos__agent_read", "agent 7 · idle"),
+    tool(15, "mcp__cos__agent_read", "agent 7 · idle", false, 7),
     tool(13, "Bash", "git log --oneline origin/main..cos/lisbon"),
-    tool(11, "mcp__cos__agent_send", "agent 7: run the whole suite before I call it ready"),
+    tool(
+      11,
+      "mcp__cos__agent_send",
+      "agent 7: run the whole suite before I call it ready",
+      false,
+      7,
+    ),
     text("assistant", 8, answer),
   ];
 

@@ -1,4 +1,5 @@
 import {
+  ArrowUpRight,
   Bot,
   KeyRound,
   MoreHorizontal,
@@ -59,7 +60,37 @@ export function AgentPage({ agentId }: { agentId: number }) {
   return <AgentView agent={agent} />;
 }
 
-function AgentView({ agent }: { agent: Agent }) {
+/**
+ * A session shown beside the chief's chat, opened from its card: the same
+ * conversation and composer as its page, under a compact header with Open
+ * in tab and close. Its terminal takes the panel's place instead of a
+ * second split.
+ */
+export function AgentPanel({ agentId, onClose }: { agentId: number; onClose: () => void }) {
+  const agent = useCos((s) => agentOf(s, agentId));
+  if (!agent) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex h-[52px] shrink-0 items-center justify-end px-3">
+          <IconButton icon={X} label="Close the session" onClick={onClose} />
+        </div>
+        <EmptyState icon={Bot} title="This session is gone" className="flex-1">
+          It was removed.
+        </EmptyState>
+      </div>
+    );
+  }
+  return <AgentView key={agent.id} agent={agent} embedded={{ onClose }} />;
+}
+
+function AgentView({
+  agent,
+  embedded,
+}: {
+  agent: Agent;
+  /** Shown beside the chief's chat rather than as a page. */
+  embedded?: { onClose: () => void };
+}) {
   const { cos, ui } = useApp();
   const canChange = useCanChange();
   const workspace = useCos((s) => workspaceOf(s, agent.workspaceId));
@@ -71,7 +102,11 @@ function AgentView({ agent }: { agent: Agent }) {
   const approval = useCos((s) => pendingApproval(s, agent.id));
   const transcript = useCos((s) => s.transcripts[agent.id]);
   const pending = useCos((s) => s.agentPending[agent.id] ?? noPending);
-  const terminalWanted = useUi((s) => s.agentTerminal);
+  const pageTerminal = useUi((s) => s.agentTerminal);
+  const [panelTerminal, setPanelTerminal] = useState(false);
+  const terminalWanted = embedded ? panelTerminal : pageTerminal;
+  const toggleTerminal = (open: boolean) =>
+    embedded ? setPanelTerminal(open) : ui.toggleAgentTerminal(open);
   const [busy, setBusy] = useState<"stop" | "resume" | null>(null);
   const [draft, setDraft] = useState("");
   const [jumps, setJumps] = useState(0);
@@ -88,13 +123,13 @@ function AgentView({ agent }: { agent: Agent }) {
   const terminalOnly = agent.role === "staff" || noTranscripts;
   // Logging in happens in the terminal, so it shows while Claude asks.
   const terminalOpen = terminalOnly || terminalWanted || agent.state === "needs_login";
-  useFocusOnOpen(input, !terminalOnly);
+  useFocusOnOpen(input, !terminalOnly && !embedded);
 
   useEffect(() => cos.watchTranscript(agent.id), [cos, agent.id]);
 
   // Ctrl-Shift-J shows and hides the terminal, as on the chief's page.
   useEffect(() => {
-    if (terminalOnly) return;
+    if (terminalOnly || embedded) return;
     const onKey = (event: KeyboardEvent) => {
       // Plain Ctrl-J opens a shell tab (App.tsx).
       if (
@@ -110,7 +145,7 @@ function AgentView({ agent }: { agent: Agent }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ui, terminalOnly]);
+  }, [ui, terminalOnly, embedded]);
 
   const items = useMemo(
     () => conversationItems(transcript?.messages ?? [], pending),
@@ -152,7 +187,41 @@ function AgentView({ agent }: { agent: Agent }) {
     },
   ];
 
-  const header = (
+  const header = embedded ? (
+    <div
+      data-tauri-drag-region
+      className="flex h-[52px] shrink-0 items-center gap-2 border-b border-line px-3 text-[12.5px] select-none"
+    >
+      <Bot className="size-4 shrink-0 text-tone-blue" strokeWidth={1.9} aria-hidden />
+      <h2 className="min-w-0 truncate text-[13px] font-semibold text-ink">{agent.title}</h2>
+      <StateBadge label={label} className="shrink-0" />
+      <span className="ml-auto flex shrink-0 items-center gap-0.5">
+        {terminalOnly ? null : (
+          <IconButton
+            icon={SquareTerminal}
+            label={terminalOpen ? "Show the conversation" : "Show the terminal"}
+            aria-pressed={terminalOpen}
+            onClick={() => toggleTerminal(!terminalOpen)}
+            className={cx(terminalOpen && "bg-subtle-2 text-ink")}
+          />
+        )}
+        {canResume(agent.state) ? (
+          <IconButton
+            icon={Play}
+            label="Resume"
+            disabled={!canChange || !agent.sessionId || busy !== null}
+            onClick={() => act("resume")}
+          />
+        ) : null}
+        <IconButton
+          icon={ArrowUpRight}
+          label="Open in a tab"
+          onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
+        />
+        <IconButton icon={X} label="Close the session" onClick={embedded.onClose} />
+      </span>
+    </div>
+  ) : (
     <PageHeader
       actions={
         <>
@@ -162,7 +231,7 @@ function AgentView({ agent }: { agent: Agent }) {
               label={terminalOpen ? "Hide the terminal" : "Show the terminal"}
               title={`${terminalOpen ? "Hide" : "Show"} Claude's terminal (Ctrl-Shift-J)`}
               aria-pressed={terminalOpen}
-              onClick={() => ui.toggleAgentTerminal(!terminalOpen)}
+              onClick={() => toggleTerminal(!terminalOpen)}
               className={cx("size-8", terminalOpen && "bg-subtle-2 text-ink")}
             />
           )}
@@ -244,11 +313,13 @@ function AgentView({ agent }: { agent: Agent }) {
     </PageHeader>
   );
 
-  if (terminalOnly) {
+  if (terminalOnly || (embedded && terminalOpen)) {
     return (
       <div className="@container flex min-h-0 flex-1 flex-col">
         {header}
-        <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 pb-4">
+        <div
+          className={cx("flex min-h-0 flex-1 flex-col gap-3 pb-4", embedded ? "px-3 pt-3" : "px-5")}
+        >
           {noTranscripts && agent.role !== "staff" ? (
             <p className="text-[12px] text-ink-3">{transcript?.error}</p>
           ) : null}
@@ -286,12 +357,17 @@ function AgentView({ agent }: { agent: Agent }) {
               <AgentWelcome
                 starting={agent.state === "starting"}
                 error={transcript?.error ?? null}
-                onTerminal={() => ui.toggleAgentTerminal(true)}
+                onTerminal={() => toggleTerminal(true)}
               />
             }
           />
         )}
-        <div className="mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-2.5 px-8 pb-4">
+        <div
+          className={cx(
+            "mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-2.5 pb-4",
+            embedded ? "px-4" : "px-8",
+          )}
+        >
           {agent.state === "needs_trust" ? <TrustBanner agent={agent} path={cwd} /> : null}
           {agent.state === "needs_login" ? (
             <LoginBanner agent={agent} where="on the right" />

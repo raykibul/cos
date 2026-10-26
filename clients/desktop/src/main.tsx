@@ -19,6 +19,7 @@ import { CosStore } from "./store/store";
 //   ?dialog=newAgent:3  open a sheet over it (envVar:1 adds a variable to project 1, envVar:all to all
 //                    projects; envVar:1:NAME edits one)
 //   ?terminal        open the chief's terminal split
+//   ?session=7       show session 7 beside the chief's chat
 //   ?host=h1         start on another machine (h1 Studio waits for approval, h2 can't be reached)
 //   ?firewall        this Mac's tailnet listener is blocked by the macOS firewall
 //   ?tailscale=off   Tailscale is off on this Mac, so its tailnet's devices can't be listed
@@ -99,6 +100,7 @@ async function main() {
     page: parsePage(params.get("page")) ?? { kind: "waiting" },
     dialog: parseDialog(params.get("dialog")),
     chiefTerminal: params.has("terminal"),
+    chiefSession: params.has("session") ? Number(params.get("session")) : null,
     agentTerminal: params.has("terminal"),
     sidebar: params.has("nosidebar") ? "hidden" : savedSidebar(),
   });

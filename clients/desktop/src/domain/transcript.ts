@@ -189,6 +189,9 @@ export function toolTitle(name: string): string {
 }
 
 /** Whether a tool is one of cos's own, which the chief uses to coordinate. */
+/** cos's `agent_spawn`: the chief started a session. */
+export const SPAWN_TOOL = "mcp__cos__agent_spawn";
+
 export function isCosTool(name: string): boolean {
   return name.startsWith("mcp__cos__");
 }
