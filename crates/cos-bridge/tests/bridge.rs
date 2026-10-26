@@ -1254,6 +1254,30 @@ async fn a_busy_local_port_moves_up() {
     let mut back = [0u8; 5];
     within("echo", stream.read_exact(&mut back)).await.unwrap();
     assert_eq!(&back, b"moved");
+
+    // A failure replaces the note, and a tunnel that works brings it back.
+    daemon.forward_mode("nothing");
+    let mut failed = connect(forward.local_port).await;
+    failed.write_all(b"\x16").await.unwrap();
+    let mut rest = Vec::new();
+    // Closed, or reset when the byte is left unread.
+    let _ = within("close", failed.read_to_end(&mut rest)).await;
+    let local = forward.local_port;
+    eventually("nothing listening", || {
+        set.get(port).unwrap().remote == RemoteState::NothingListening
+    })
+    .await;
+    assert!(!set.get(port).unwrap().message.unwrap().contains("was taken"));
+    daemon.forward_mode("echo");
+    let mut again = connect(local).await;
+    again.write_all(b"ok").await.unwrap();
+    let mut back = [0u8; 2];
+    within("echo", again.read_exact(&mut back)).await.unwrap();
+    eventually("listening", || {
+        set.get(port).unwrap().remote == RemoteState::Listening
+    })
+    .await;
+    assert_eq!(set.get(port).unwrap().message.as_deref(), Some(message.as_str()));
 }
 
 #[tokio::test]
