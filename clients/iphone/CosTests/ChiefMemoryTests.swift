@@ -55,7 +55,7 @@ import Testing
     @Test func aNewSessionStartsTheChatOver() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
         #expect(!chat.rows.isEmpty)
 

@@ -85,6 +85,11 @@ struct AgentView: View {
                 }
 
                 Section {
+                    if agent.role != .staff {
+                        NavigationLink(value: Route.session(agentId: agentId)) {
+                            Label("Chat", systemImage: "text.bubble")
+                        }
+                    }
                     NavigationLink(value: Route.terminal(agentId: agentId)) {
                         Label("Open its terminal", systemImage: "apple.terminal")
                     }

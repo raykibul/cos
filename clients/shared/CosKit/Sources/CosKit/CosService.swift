@@ -18,6 +18,8 @@ public protocol CosService: EventSource {
     func agent(id: Int) async throws -> Agent
     func createAgent(workspaceId: Int, _ request: NewAgent) async throws -> Agent
     func sendInput(agentId: Int, text: String) async throws
+    /// A message naming files uploaded with `uploadAttachment(to: .agent…)`.
+    func sendInput(agentId: Int, text: String, attachments: [String]) async throws
     func trustAgent(id: Int) async throws
     func stopAgent(id: Int) async throws
     func resumeAgent(id: Int) async throws -> Agent

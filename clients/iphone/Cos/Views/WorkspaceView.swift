@@ -1,10 +1,12 @@
 import CosKit
 import SwiftUI
 
-/// A workspace: its branch and its agents (state and last message).
+/// A workspace: its branch and its agents (state and last message). An
+/// agent opens its chat; swipe it for its terminal or details.
 struct WorkspaceView: View {
     var session: HostSession
     var workspaceId: Int
+    @Environment(Navigator.self) private var navigator
 
     var body: some View {
         let workspace = session.workspace(id: workspaceId)
@@ -32,8 +34,14 @@ struct WorkspaceView: View {
                         .foregroundStyle(Palette.ink3)
                 }
                 ForEach(agents) { agent in
-                    NavigationLink(value: Route.agent(id: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         AgentRow(agent: agent, waiting: session.pendingApproval(forAgent: agent.id)?.isForYou == true)
+                    }
+                    .swipeActions {
+                        Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
+                            .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
                     }
                 }
             }

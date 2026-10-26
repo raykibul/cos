@@ -12,6 +12,8 @@ enum Route: Hashable {
     case chiefMemory(projectId: Int)
     case workspace(id: Int)
     case agent(id: Int)
+    /// A session as a chat: its transcript and a composer.
+    case session(agentId: Int)
     /// An agent's live terminal, full screen: the chief's or a session's.
     case terminal(agentId: Int)
 }
@@ -48,6 +50,8 @@ final class Navigator {
         case "chief-terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 40)]
         case "workspace": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .workspace(id: 5)]
         case "agent": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 7)]
+        case "session": tab = .chiefs; chiefs = [.chief(projectId: 1), .session(agentId: 7)]
+        case "session-approval": tab = .chiefs; chiefs = [.chief(projectId: 1), .session(agentId: 8)]
         case "agent-approval": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 8)]
         case "hosts": tab = .hosts
         case "add-host": tab = .hosts; addingHost = true
@@ -122,6 +126,7 @@ struct RouteView: View {
             case .chiefMemory(let projectId): ChiefMemoryView(session: session, projectId: projectId)
             case .workspace(let id): WorkspaceView(session: session, workspaceId: id)
             case .agent(let id): AgentView(session: session, agentId: id)
+            case .session(let agentId): SessionChatView(session: session, agentId: agentId)
             case .terminal(let agentId): TerminalScreen(session: session, agentId: agentId)
             }
         }

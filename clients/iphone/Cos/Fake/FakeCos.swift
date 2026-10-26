@@ -10,6 +10,8 @@ import Foundation
 /// - atlas's Chief of Staff (agent 40) has a conversation, an identity,
 ///   a brief and three memory notes, and started agents 7 and 8; harbor's
 ///   hasn't started; opal's (agent 41) is idle with no conversation
+/// - transcripts for the sessions 7 (from the chief, working), 8 (from the
+///   chief, waiting on you) and 13 (yours, idle)
 /// - an approval waiting for you (agent 8)
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
@@ -200,14 +202,35 @@ actor FakeCos: CosService {
     }
 
     func sendInput(agentId: Int, text: String) async throws {
+        try await sendInput(agentId: agentId, text: text, attachments: [])
+    }
+
+    /// Types into the agent: your message goes in its transcript, and,
+    /// after a moment, a tool call and its answer.
+    func sendInput(agentId: Int, text: String, attachments names: [String]) async throws {
         try check("POST /v1/agents/\(agentId)/input")
         guard let index = agentList.firstIndex(where: { $0.id == agentId }) else { throw CosError.notFound("unknown agent \(agentId)") }
         guard agentList[index].state.isAlive else { throw CosError.conflict("agent \(agentId) has exited; resume it first") }
+        let folder = agentFolder(agentId)
+        let attached = try names.map { name -> AttachedFile in
+            guard let file = files[folder]?.first(where: { $0.attachment.name == name || $0.attachment.path == name }) else {
+                throw CosError.http(status: 400, message: "there is no attachment \(name)")
+            }
+            return file.attachment.attached
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attached.isEmpty else {
+            throw CosError.http(status: 400, message: "the message is empty")
+        }
+        append(agentId, role: .user, kind: .text, text: text, attachments: attached)
         setState(agentId, .working)
         if let replyDelay {
             Task {
                 try? await Task.sleep(for: replyDelay)
-                self.finishTurn(agentId, message: "Done. I looked into “\(text.prefix(60))” and left a summary in the terminal.")
+                self.append(agentId, role: .assistant, kind: .tool, tool: ToolCall(name: "Read", summary: "src/auth/session.ts"))
+                try? await Task.sleep(for: replyDelay)
+                let message = "Done. I looked into “\(text.prefix(60))” and left a summary in the terminal."
+                self.append(agentId, role: .assistant, kind: .text, text: message)
+                self.finishTurn(agentId, message: message)
             }
         }
     }

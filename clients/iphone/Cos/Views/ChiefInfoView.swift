@@ -17,7 +17,8 @@ enum ChiefInfoTab: String, Hashable, CaseIterable, Identifiable, Sendable {
 
 /// A chief's info page, as a chat app shows a contact's: its project, quick
 /// actions, and everything under it: each workspace with its sessions, and
-/// all sessions. Reached from the chat's ⋯ menu or its title.
+/// all sessions. A session opens its chat; swipe it for its terminal or
+/// details. Reached from the chat's ⋯ menu or its title.
 struct ChiefInfoView: View {
     var session: HostSession
     var projectId: Int
@@ -109,12 +110,14 @@ struct ChiefInfoView: View {
                     WorkspaceHeaderRow(workspace: workspace, waiting: agents.filter { needsYou($0) }.count)
                 }
                 ForEach(agents) { agent in
-                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: needsYou(agent))
                     }
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
                     }
                 }
             }
@@ -138,12 +141,14 @@ struct ChiefInfoView: View {
         if !waiting.isEmpty {
             Section("Needs you") {
                 ForEach(waiting) { agent in
-                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: true, place: session.workspaceName(agent.workspaceId))
                     }
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
                     }
                 }
             }
@@ -151,12 +156,14 @@ struct ChiefInfoView: View {
         if !others.isEmpty {
             Section(waiting.isEmpty ? "Sessions" : "Others") {
                 ForEach(others) { agent in
-                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: false, place: session.workspaceName(agent.workspaceId))
                     }
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
                     }
                 }
             }

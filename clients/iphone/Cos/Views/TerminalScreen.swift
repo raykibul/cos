@@ -15,6 +15,7 @@ struct TerminalScreen: View {
     @State private var error: String?
     @AppStorage("cos.terminal.fontSize") private var fontSize = 12.0
     @Environment(Navigator.self) private var navigator
+    @Environment(\.dismiss) private var dismiss
 
     init(session: HostSession, agentId: Int) {
         self.session = session
@@ -88,6 +89,9 @@ struct TerminalScreen: View {
             }
             .disabled(fontSize <= Self.fontSizes.lowerBound)
             Divider()
+            if let agent, agent.role != .staff {
+                Button("Chat", systemImage: "text.bubble") { openChat(agentId) }
+            }
             if let projectId = session.projectId(ofAgent: agentId) {
                 Button("Chat with the chief", systemImage: "bubble.left") { navigator.open(.chief(projectId: projectId)) }
             }
@@ -98,6 +102,16 @@ struct TerminalScreen: View {
             }
         } label: {
             Label("More", systemImage: "ellipsis.circle")
+        }
+    }
+
+    /// Back to the session's chat if it's the screen below (the chat's
+    /// terminal button), else to it.
+    private func openChat(_ id: Int) {
+        if navigator.chiefs.dropLast().last == Route.session(agentId: id) {
+            dismiss()
+        } else {
+            navigator.open(.session(agentId: id))
         }
     }
 

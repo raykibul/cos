@@ -172,7 +172,33 @@ struct FakeData {
                 TranscriptMessage(n: 10, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_read", summary: "{\"agent_id\":7}", agentId: 7), tsMs: ago(250)),
                 TranscriptMessage(n: 11, role: .assistant, kind: .text, text: after, tsMs: ago(240)),
             ],
+            7: [
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: Self.spawned("Sessions expire after five minutes instead of twelve hours. Find out why and fix it, with a test."), tsMs: ago(1_500)),
+                TranscriptMessage(n: 2, role: .assistant, kind: .text, text: "I'll start with the auth middleware, where sessions are checked.", tsMs: ago(1_495)),
+                TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Grep", summary: "SESSION_TTL"), tsMs: ago(1_490)),
+                TranscriptMessage(n: 4, role: .assistant, kind: .tool, tool: ToolCall(name: "Read", summary: "src/auth/session.ts"), tsMs: ago(1_480)),
+                TranscriptMessage(n: 5, role: .assistant, kind: .text, text: "Found it: `SESSION_TTL` is `12`, in minutes, but `expiresAt()` reads it as hours. That's 12 minutes, and the 5-minute idle check makes it look like five.", tsMs: ago(1_200)),
+                TranscriptMessage(n: 6, role: .assistant, kind: .tool, tool: ToolCall(name: "Edit", summary: "src/auth/session.ts"), tsMs: ago(1_100)),
+                TranscriptMessage(n: 7, role: .assistant, kind: .text, text: "Fixed, and running the whole suite now.", tsMs: ago(300)),
+                TranscriptMessage(n: 8, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "npm test"), tsMs: ago(20)),
+            ],
+            8: [
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: Self.spawned("The formatter pads with spaces. Use left-pad for it, and add a test."), tsMs: ago(1_400)),
+                TranscriptMessage(n: 2, role: .assistant, kind: .text, text: "I'll add left-pad first, then switch the formatter over.", tsMs: ago(1_390)),
+                TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "npm install left-pad --save"), tsMs: ago(90)),
+            ],
+            13: [
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: "Draft the release notes for 0.2 in CHANGELOG.md.", tsMs: ago(9_000)),
+                TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "git log --oneline v0.1.0..HEAD"), tsMs: ago(8_990)),
+                TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Edit", summary: "CHANGELOG.md"), tsMs: ago(8_700)),
+                TranscriptMessage(n: 4, role: .assistant, kind: .text, text: "Drafted the notes in CHANGELOG.md under 0.2.0. They don't mention the session fix yet.", tsMs: ago(3_000)),
+            ],
         ]
+    }
+
+    /// A first prompt as the chief's `agent_spawn` sends it, with cos's line.
+    static func spawned(_ prompt: String) -> String {
+        prompt + "\n\n[cos] The Chief of Staff of atlas started you. When you finish, end with a short summary of what you did and anything left open."
     }
 
     /// What Claude types into the chief when a subagent it ran finishes.

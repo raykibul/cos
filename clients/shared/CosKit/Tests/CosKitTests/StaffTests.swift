@@ -167,6 +167,13 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(TranscriptMessage(n: 2, role: .assistant, kind: .text, text: text).taskNotification == nil)
     }
 
+    @Test func readsTheChiefsPromptWithoutCosLine() {
+        let prompt = "Fix the flaky login test.\n\nRun it ten times.\n\n[cos] The Chief of Staff of atlas started you. When you finish, end with a short summary of what you did and anything left open."
+        #expect(TranscriptMessage(n: 1, role: .user, kind: .text, text: prompt).spawnedPrompt == "Fix the flaky login test.\n\nRun it ten times.")
+        #expect(TranscriptMessage(n: 1, role: .user, kind: .text, text: "Fix it").spawnedPrompt == nil)
+        #expect(TranscriptMessage(n: 2, role: .assistant, kind: .text, text: prompt).spawnedPrompt == nil)
+    }
+
     @Test func mergesPagesByNumber() {
         let first = [TranscriptMessage(n: 1, role: .user, kind: .text, text: "hi"), TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash"))]
         let second = [TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", isError: true)), TranscriptMessage(n: 3, role: .assistant, kind: .text, text: "done")]

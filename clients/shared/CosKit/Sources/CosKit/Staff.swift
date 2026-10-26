@@ -425,6 +425,16 @@ extension TranscriptMessage {
     public var taskNotification: TaskNotification? {
         role == .user ? TaskNotification(text) : nil
     }
+
+    /// For the first prompt of an agent a Chief of Staff started: the
+    /// prompt without the line cos appends to it ("[cos] The Chief of Staff
+    /// of <project> started you. …"); `nil` for anything else.
+    public var spawnedPrompt: String? {
+        guard role == .user, let match = text.firstMatch(of: /\s*\[cos\] The Chief of Staff of .+? started you\.(?s:.*)$/) else {
+            return nil
+        }
+        return String(text[..<match.range.lowerBound])
+    }
 }
 
 /// What Claude types into a session when a subagent or background command
