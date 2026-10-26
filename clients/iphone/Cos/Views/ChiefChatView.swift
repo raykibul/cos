@@ -390,6 +390,8 @@ struct ChatRowView: View {
             }
         case .updates(let message, let count):
             updatesRow(message, count: count)
+        case .shellOutput(_, let tool):
+            ShellOutput(tool: tool)
         }
     }
 
@@ -976,5 +978,38 @@ struct ReplyStrip: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 14)
         .padding(.top, 2)
+    }
+}
+
+/// What a `!` command you ran printed, under your bubble: its first lines,
+/// unfolding to all of it.
+struct ShellOutput: View {
+    var tool: ToolCall
+    @State private var expanded = false
+
+    var body: some View {
+        let output = tool.output ?? tool.summary
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).count
+        VStack(alignment: .trailing, spacing: 4) {
+            Text(output.isEmpty ? "(no output)" : output)
+                .font(.caption.monospaced())
+                .foregroundStyle(tool.isError ? Palette.red : Palette.ink2)
+                .lineLimit(expanded ? nil : 8)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Palette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if lines > 8 {
+                Button(expanded ? "Show less" : "Show all \(lines) lines") {
+                    withAnimation(.snappy) { expanded.toggle() }
+                }
+                .font(.caption)
+                .foregroundStyle(Palette.ink2)
+            }
+        }
+        .frame(maxWidth: 520, alignment: .trailing)
+        .padding(.leading, 44)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityLabel("Output: \(output)")
     }
 }

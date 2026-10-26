@@ -411,7 +411,26 @@ import Testing
         defer { session.stop() }
         let chat = Chat(agentId: 13, session: session)
         await chat.load()
-        if let last = chat.messages.last { chat.reply(to: last) }
+        if let last = chat.messages.last(where: { $0.role == .assistant }) { chat.reply(to: last) }
         #expect(chat.replyLabel == "Replying to Claude")
+    }
+}
+
+@MainActor
+@Suite struct ShellModeChatTests {
+    @Test func aBangCommandShowsOnceWithItsOutputUnderIt() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+
+        let tail = chat.rows.suffix(2)
+        guard case .user(let command, _) = tail.first, case .shellOutput(_, let output) = tail.last else {
+            Issue.record("your command, then what it printed: \(tail)")
+            return
+        }
+        #expect(command.text == "! git diff --stat")
+        #expect(output.output?.contains("1 file changed") == true)
+        #expect(chat.rows.filter { if case .user(let m, _) = $0 { m.text.contains("git diff") } else { false } }.count == 1)
     }
 }

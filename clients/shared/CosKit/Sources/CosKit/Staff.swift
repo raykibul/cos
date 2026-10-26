@@ -306,12 +306,15 @@ public struct ToolCall: Codable, Equatable, Sendable {
     /// started (once its result is in), or the one it messaged, read or
     /// stopped.
     public var agentId: Int?
+    /// What a `!` command printed (`shell_output`); `nil` for other tools.
+    public var output: String?
 
-    public init(name: String, summary: String = "", isError: Bool = false, agentId: Int? = nil) {
+    public init(name: String, summary: String = "", isError: Bool = false, agentId: Int? = nil, output: String? = nil) {
         self.name = name
         self.summary = summary
         self.isError = isError
         self.agentId = agentId
+        self.output = output
     }
 
     public init(from decoder: Decoder) throws {
@@ -320,7 +323,13 @@ public struct ToolCall: Codable, Equatable, Sendable {
         summary = c.string(.summary) ?? ""
         isError = c.optional(Bool.self, .isError) ?? false
         agentId = c.int(.agentId)
+        output = c.string(.output)
     }
+
+    /// The row for what a `!` command you ran in Claude's shell mode printed.
+    public static let shellOutputName = "shell_output"
+
+    public var isShellOutput: Bool { name == Self.shellOutputName }
 
     /// cos's `agent_spawn`: the chief started an agent.
     public var isSpawn: Bool { name == "mcp__cos__agent_spawn" }
@@ -395,9 +404,20 @@ public struct TranscriptMessage: Codable, Equatable, Sendable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         n = try c.id(.n)
         role = c.optional(MessageRole.self, .role) ?? .assistant
-        tool = c.optional(ToolCall.self, .tool)
-        text = c.string(.text) ?? ""
+        var tool = c.optional(ToolCall.self, .tool)
+        var text = c.string(.text) ?? ""
         var kind = c.optional(MessageKind.self, .kind) ?? (tool != nil ? .tool : .text)
+        // An older daemon sends Claude's shell mode raw: read it as the
+        // daemon now does, as you typed it and as an output row.
+        if role == .user, let shell = ShellMode(text) {
+            text = shell.text
+            if let output = shell.tool {
+                tool = output
+                kind = .tool
+            }
+        }
+        self.tool = tool
+        self.text = text
         // A wakeup the daemon didn't tag still reads as one.
         if kind == .text, role == .user, text.hasPrefix("[cos ·") { kind = .update }
         if kind == .text, role == .user, TaskNotification(text) != nil { kind = .task }
@@ -496,6 +516,49 @@ public struct TaskNotification: Equatable, Sendable {
 
     /// It ended well.
     public var succeeded: Bool { status == "completed" }
+}
+
+/// Claude's shell mode as an older daemon sends it: a `!` command you ran
+/// as `<bash-input>cmd</bash-input>`, and what it printed as
+/// `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`, escaped as
+/// HTML. Read as the daemon now reads it: `! cmd`, and a `shell_output` row.
+struct ShellMode {
+    var text: String
+    var tool: ToolCall?
+
+    init?(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("<bash-input>"), let input = Self.tag(trimmed, "bash-input") {
+            text = "! " + Self.unescape(input.trimmingCharacters(in: .whitespacesAndNewlines))
+            tool = nil
+            return
+        }
+        guard trimmed.hasPrefix("<bash-stdout>") || trimmed.hasPrefix("<bash-stderr>") else { return nil }
+        let stdout = Self.unescape(Self.tag(trimmed, "bash-stdout") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = Self.unescape(Self.tag(trimmed, "bash-stderr") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        text = ""
+        tool = ToolCall(
+            name: ToolCall.shellOutputName, summary: output.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "(no output)",
+            isError: stdout.isEmpty && !stderr.isEmpty, output: output.isEmpty ? nil : output
+        )
+    }
+
+    private static func tag(_ text: String, _ name: String) -> String? {
+        guard let open = text.range(of: "<\(name)>"),
+            let close = text.range(of: "</\(name)>", range: open.upperBound..<text.endIndex)
+        else { return nil }
+        return String(text[open.upperBound..<close.lowerBound])
+    }
+
+    private static func unescape(_ text: String) -> String {
+        text.replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#x27;", with: "'")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
 }
 
 /// `GET /v1/agents/{id}/transcript?after=N`.

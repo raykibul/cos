@@ -174,6 +174,30 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(TranscriptMessage(n: 2, role: .assistant, kind: .text, text: prompt).spawnedPrompt == nil)
     }
 
+    @Test func readsShellModeOnceWithItsOutput() throws {
+        // The daemon now: `! cmd` as your text, and the output as a row.
+        let json = #"{"messages":[{"n":1,"role":"user","kind":"text","text":"! git status","ts_ms":1},{"n":2,"role":"user","kind":"tool","tool":{"name":"shell_output","summary":"On branch main","is_error":false,"output":"On branch main\nnothing to commit"},"ts_ms":2}],"next":2}"#
+        let transcript = try decode(Transcript.self, json)
+        #expect(transcript.messages[0].text == "! git status")
+        let output = try #require(transcript.messages[1].tool)
+        #expect(output.isShellOutput)
+        #expect(output.output == "On branch main\nnothing to commit")
+
+        // An older daemon sends Claude's raw tags, escaped as HTML.
+        let raw = #"{"messages":[{"n":1,"role":"user","kind":"text","text":"<bash-input>grep -c &quot;a&amp;b&quot; x</bash-input>"},{"n":2,"role":"user","kind":"text","text":"<bash-stdout></bash-stdout><bash-stderr>grep: x: No such file</bash-stderr>"},{"n":3,"role":"assistant","kind":"text","text":"<bash-input>not yours</bash-input>"}],"next":3}"#
+        let older = try decode(Transcript.self, raw)
+        #expect(older.messages[0].text == "! grep -c \"a&b\" x")
+        #expect(older.messages[0].kind == .text)
+        #expect(older.messages[1].kind == .tool)
+        #expect(older.messages[1].text == "")
+        let failed = try #require(older.messages[1].tool)
+        #expect(failed.isShellOutput)
+        #expect(failed.isError)
+        #expect(failed.summary == "grep: x: No such file")
+        // Only your turns are read that way.
+        #expect(older.messages[2].text == "<bash-input>not yours</bash-input>")
+    }
+
     @Test func mergesPagesByNumber() {
         let first = [TranscriptMessage(n: 1, role: .user, kind: .text, text: "hi"), TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash"))]
         let second = [TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", isError: true)), TranscriptMessage(n: 3, role: .assistant, kind: .text, text: "done")]

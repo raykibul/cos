@@ -192,6 +192,15 @@ struct FakeData {
                 TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "git log --oneline v0.1.0..HEAD"), tsMs: ago(8_990)),
                 TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Edit", summary: "CHANGELOG.md"), tsMs: ago(8_700)),
                 TranscriptMessage(n: 4, role: .assistant, kind: .text, text: "Drafted the notes in CHANGELOG.md under 0.2.0. They don't mention the session fix yet.", tsMs: ago(3_000)),
+                TranscriptMessage(n: 5, role: .user, kind: .text, text: "! git diff --stat", tsMs: ago(2_900)),
+                TranscriptMessage(
+                    n: 6, role: .user, kind: .tool,
+                    tool: ToolCall(
+                        name: ToolCall.shellOutputName, summary: "CHANGELOG.md | 24 ++++++++++++++++++++++++",
+                        output: "CHANGELOG.md | 24 ++++++++++++++++++++++++\n 1 file changed, 24 insertions(+)"
+                    ),
+                    tsMs: ago(2_899)
+                ),
             ],
         ]
     }

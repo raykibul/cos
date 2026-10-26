@@ -107,12 +107,14 @@ enum ChatRow: Identifiable, Equatable {
     case task(TranscriptMessage, TaskNotification)
     /// A `[cos · N updates]` wakeup: news from its agents.
     case updates(TranscriptMessage, count: Int)
+    /// What a `!` command you ran in Claude's shell mode printed, under it.
+    case shellOutput(TranscriptMessage, ToolCall)
     case pending(PendingMessage)
 
     var id: String {
         switch self {
         case .user(let message, _), .fromChief(let message, _), .reply(let message), .tool(let message), .spawned(let message, _),
-            .task(let message, _), .updates(let message, _):
+            .task(let message, _), .updates(let message, _), .shellOutput(let message, _):
             "m\(message.n)"
         case .pending(let pending): "p\(pending.id)"
         }
@@ -483,6 +485,8 @@ final class Chat {
                     let seen = answered[message.n] != nil || (typing && message.n == lastTyped)
                     rows.append(.user(message, seen ? .seen : .delivered))
                 }
+            case (.user, .tool) where message.tool?.isShellOutput == true:
+                if let tool = message.tool { rows.append(.shellOutput(message, tool)) }
             case (.user, _):
                 // A tool result logged as a user turn, or something newer.
                 continue
