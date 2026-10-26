@@ -390,6 +390,60 @@ async fn the_brief_and_instructions_go_in_the_system_prompt() {
 }
 
 #[tokio::test]
+async fn you_can_set_its_brief_and_it_gets_it_on_its_next_start() {
+    let fixture = Fixture::start().await;
+    let client = &fixture.client;
+
+    // Before it ever starts: saved, and in its first prompt.
+    let view = client
+        .set_staff_brief(fixture.project_id, "  Release 0.2 by Friday.\n")
+        .await
+        .unwrap();
+    assert_eq!(view.brief, "Release 0.2 by Friday.");
+    let staff = fixture.idle_staff().await;
+    let stored_prompt = || {
+        fixture
+            .records
+            .get(staff.id)
+            .unwrap()
+            .and_then(|agent| agent.system_prompt)
+            .unwrap_or_default()
+    };
+    assert!(
+        stored_prompt().contains("Your brief:\nRelease 0.2 by Friday.\n"),
+        "{}",
+        stored_prompt()
+    );
+
+    // While it runs: saved for its next launch, and logged.
+    let changed = fixture.events(kind::STAFF_CHANGED).len();
+    let view = client
+        .set_staff_brief(fixture.project_id, "Only the login fix.")
+        .await
+        .unwrap();
+    assert_eq!(view.brief, "Only the login fix.");
+    assert!(stored_prompt().contains("Your brief:\nOnly the login fix.\n"));
+    assert_eq!(fixture.events(kind::STAFF_CHANGED).len(), changed + 1);
+
+    // Too long: refused, and the old one stays.
+    let too_long = client
+        .set_staff_brief(fixture.project_id, &"x".repeat(4097))
+        .await
+        .unwrap_err();
+    assert!(
+        too_long.to_string().contains("keep it under 4096"),
+        "{too_long:#}"
+    );
+    let view = client.staff(fixture.project_id).await.unwrap();
+    assert_eq!(view.brief, "Only the login fix.");
+
+    // Empty clears it.
+    let view = client.set_staff_brief(fixture.project_id, "  ").await.unwrap();
+    assert_eq!(view.brief, "");
+    assert!(stored_prompt().contains("Your brief:\n(empty)\n"));
+}
+
+#[tokio::test]
 async fn memory_notes_are_listed_in_its_prompt_and_you_can_edit_them_too() {
     let fixture = Fixture::start().await;
     let staff = fixture.idle_staff().await;

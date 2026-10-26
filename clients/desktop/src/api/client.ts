@@ -42,9 +42,12 @@ import {
 import {
   type InboxItem,
   type Staff,
+  type StaffNote,
   type Transcript,
   decodeInbox,
   decodeStaff,
+  decodeStaffMemory,
+  decodeStaffNote,
   decodeTranscript,
 } from "./staff";
 
@@ -352,11 +355,13 @@ export class DaemonClient {
 
   /**
    * Changes what's given and leaves the rest: `model` (`null` goes back to
-   * the default) and `paused` (coordination on hold).
+   * the default), `paused` (coordination on hold) and `brief` (replaced,
+   * trimmed; read from its next start). A daemon older than editable briefs
+   * ignores `brief` and answers the old one.
    */
   setStaff(
     projectId: number,
-    settings: { model?: string | null; paused?: boolean },
+    settings: { model?: string | null; paused?: boolean; brief?: string },
   ): Promise<Staff> {
     return this.send("PUT", `/v1/projects/${projectId}/staff`, settings, decodeStaff);
   }
@@ -380,6 +385,33 @@ export class DaemonClient {
       text,
       ...(attachments.length ? { attachments } : {}),
     });
+  }
+
+  /** Its memory notes, by name, with their bodies. 404 from a daemon older than notes. */
+  staffMemory(projectId: number): Promise<StaffNote[]> {
+    return this.get(`/v1/projects/${projectId}/staff/memory`, decodeStaffMemory);
+  }
+
+  /** Creates or replaces a note; it reads the new text from its next start. */
+  writeStaffNote(
+    projectId: number,
+    name: string,
+    note: { description: string; body: string },
+  ): Promise<StaffNote> {
+    return this.send(
+      "PUT",
+      `/v1/projects/${projectId}/staff/memory/${encodeURIComponent(name)}`,
+      note,
+      decodeStaffNote,
+    );
+  }
+
+  /** 404 if there is no such note. */
+  async deleteStaffNote(projectId: number, name: string): Promise<void> {
+    await this.request(
+      "DELETE",
+      `/v1/projects/${projectId}/staff/memory/${encodeURIComponent(name)}`,
+    );
   }
 
   /** What the agents it started reported, newest first. */

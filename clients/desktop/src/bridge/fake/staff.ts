@@ -194,7 +194,39 @@ export function makeStaff(
       },
     } as Record<number, Raw>,
     inboxes: { 1: inbox } as Record<number, Raw[]>,
+    memories: { 1: memory(ms) } as Record<number, Raw[]>,
   };
+}
+
+/** What cos's chief keeps in its memory notes. */
+function memory(ms: (agoSeconds: number) => number): Raw[] {
+  const note = (name: string, description: string, body: string, ago: number): Raw => ({
+    name,
+    description,
+    body,
+    created_ms: ms(ago + 86_400 * 3),
+    updated_ms: ms(ago),
+  });
+  return [
+    note(
+      "release-process",
+      "How a cos release is cut: version bump PR, then a v* tag pushed only with your OK",
+      "1. Bump the version in a PR (`chore: version X.Y.Z`).\n2. Once it's merged, ask before pushing the `v*` tag: the tag starts the release workflow.\n3. See docs/releasing.md.",
+      3_600 * 5,
+    ),
+    note(
+      "testing",
+      "Tests and lints run in Docker with make test; integration tests use cos-fake-claude",
+      "`make test`, `make lint` and `make fmt` run in the cos-dev image. When a test needs new Claude behaviour, extend cos-fake-claude instead of calling the real CLI.",
+      86_400,
+    ),
+    note(
+      "user-preferences",
+      "You like short replies, the chat as the main view, and PRs you can review the same day",
+      "- Keep replies short and lead with the result.\n- Small PRs, one goal each.\n- Ask before anything that can't be undone, like a tag push.",
+      600,
+    ),
+  ];
 }
 
 /** What agents 7 and 8, which the cos chief started in lisbon, have said so far. */
@@ -274,6 +306,8 @@ export class FakeStaffDesk {
   readonly staffs: Raw[];
   readonly transcripts: Record<number, Raw[]>;
   readonly inboxes: Record<number, Raw[]>;
+  /** Memory notes by project id. */
+  readonly memories: Record<number, Raw[]>;
   /** `{used_tokens, window_tokens}` by agent id. */
   readonly contexts: Record<number, Raw>;
 
@@ -284,6 +318,7 @@ export class FakeStaffDesk {
     this.staffs = fixtures.staffs;
     this.transcripts = fixtures.transcripts;
     this.inboxes = fixtures.inboxes;
+    this.memories = fixtures.memories;
     this.contexts = fixtures.contexts;
   }
 
@@ -306,6 +341,8 @@ export class FakeStaffDesk {
         context: this.contexts[id] ?? null,
       });
     }
+    p = path.match(/^\/v1\/projects\/(\d+)\/staff\/memory\/([^/]+)$/);
+    if (p) return this.note(method, Number(p[1]), decodeURIComponent(p[2]!), b);
     p = path.match(/^\/v1\/projects\/(\d+)\/staff(?:\/([a-z-]+))?$/);
     if (!p) return null;
     const projectId = Number(p[1]);
@@ -313,6 +350,12 @@ export class FakeStaffDesk {
     const staff = this.staff(projectId);
     if (!action && method === "GET") return ok(this.json(staff));
     if (!action && method === "PUT") {
+      if (typeof b.brief === "string") {
+        const brief = b.brief.trim();
+        if (new TextEncoder().encode(brief).length > 4096)
+          throw new StaffError(400, "the brief is too long; keep it under 4096 bytes");
+        staff.brief = brief;
+      }
       if ("model" in b) staff.model = typeof b.model === "string" && b.model ? b.model : null;
       if (typeof b.paused === "boolean" && b.paused !== staff.paused) {
         staff.paused = b.paused;
@@ -345,7 +388,50 @@ export class FakeStaffDesk {
     if (action === "inbox" && method === "GET") {
       return ok({ items: this.inboxes[projectId] ?? [] });
     }
+    if (action === "memory" && method === "GET") {
+      const notes = [...(this.memories[projectId] ?? [])].sort((x, y) =>
+        String(x.name).localeCompare(String(y.name)),
+      );
+      return ok({ notes });
+    }
     throw new StaffError(404, `no route for ${method} ${path}`);
+  }
+
+  /** `PUT` or `DELETE …/staff/memory/{name}`, checked as the daemon does. */
+  private note(method: string, projectId: number, name: string, b: Raw): DaemonResponse {
+    this.staff(projectId);
+    const notes = (this.memories[projectId] ??= []);
+    const index = notes.findIndex((n) => n.name === name.trim());
+    if (method === "DELETE") {
+      if (index < 0) throw new StaffError(404, `there is no note "${name}"`);
+      notes.splice(index, 1);
+    } else if (method === "PUT") {
+      const description = String(b.description ?? "").trim();
+      const body = String(b.body ?? "").trim();
+      if (!/^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/.test(name.trim()))
+        throw new StaffError(400, "a note's name is lowercase letters, digits and -");
+      if (!description || description.includes("\n") || description.length > 200)
+        throw new StaffError(400, "the description is one line of at most 200 characters");
+      if (!body) throw new StaffError(400, "the body is empty; delete the note instead");
+      if (index < 0 && notes.length >= 50)
+        throw new StaffError(400, "the chief keeps at most 50 notes");
+      const now = Date.now();
+      const note: Raw = {
+        name: name.trim(),
+        description,
+        body,
+        created_ms: index < 0 ? now : notes[index]!.created_ms,
+        updated_ms: now,
+      };
+      if (index < 0) notes.push(note);
+      else notes[index] = note;
+      this.host.log("staff.changed", { project_id: projectId });
+      return { status: 200, body: JSON.parse(JSON.stringify(note)) as unknown };
+    } else {
+      throw new StaffError(404, `no route for ${method}`);
+    }
+    this.host.log("staff.changed", { project_id: projectId });
+    return { status: 204, body: null };
   }
 
   /** The chief's worktree, where files attached for it go. */

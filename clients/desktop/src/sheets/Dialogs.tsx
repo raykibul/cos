@@ -175,7 +175,7 @@ function RemoveProject({ projectId }: { projectId: number }) {
         run(async () => {
           await cos.removeProject(projectId);
           ui.navigate({ kind: "waiting" });
-          for (const kind of ["chief", "project", "projectEnv"] as const)
+          for (const kind of ["chief", "project", "projectEnv", "chiefMemory"] as const)
             ui.closeTab({ kind, id: projectId });
         })
       }

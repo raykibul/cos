@@ -10,6 +10,7 @@ import {
   LayoutGrid,
   MoreHorizontal,
   MessageSquarePlus,
+  NotebookPen,
   Pause,
   Play,
   RotateCcw,
@@ -222,6 +223,12 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         },
     "separator",
     {
+      label: "Brief & memory…",
+      icon: NotebookPen,
+      detail: "What it keeps between sessions",
+      onSelect: () => ui.navigate({ kind: "chiefMemory", id: projectId }),
+    },
+    {
       label: "All workspaces",
       icon: LayoutGrid,
       onSelect: () => ui.navigate({ kind: "project", id: projectId }),
@@ -313,13 +320,24 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
               )}
             />
             <IconButton
+              icon={NotebookPen}
+              label="Brief & memory"
+              title={
+                staff?.brief
+                  ? `Brief & memory\n\nIts brief:\n${staff.brief}`
+                  : "Brief & memory: set what it should be working on"
+              }
+              onClick={() => ui.navigate({ kind: "chiefMemory", id: projectId })}
+              className="ml-1 size-8"
+            />
+            <IconButton
               icon={SquareTerminal}
               label={terminalOpen ? "Hide the chief's terminal" : "Show the chief's terminal"}
               title={`${terminalOpen ? "Hide" : "Show"} the chief's terminal (Ctrl-Shift-J)`}
               aria-pressed={terminalOpen}
               disabled={agentId === null}
               onClick={() => ui.toggleChiefTerminal()}
-              className={cx("ml-1 size-8", terminalOpen && "bg-subtle-2 text-ink")}
+              className={cx("size-8", terminalOpen && "bg-subtle-2 text-ink")}
             />
             <Menu
               align="end"
@@ -355,8 +373,10 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
             empty={
               <Welcome
                 projectName={projectName}
+                brief={staff?.brief ?? ""}
                 error={transcript?.error ?? null}
                 onSuggest={suggest}
+                onBrief={() => ui.navigate({ kind: "chiefMemory", id: projectId })}
               />
             }
           />
@@ -431,12 +451,16 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
 
 function Welcome({
   projectName,
+  brief,
   error,
   onSuggest,
+  onBrief,
 }: {
   projectName: string;
+  brief: string;
   error: string | null;
   onSuggest: (text: string) => void;
+  onBrief: () => void;
 }) {
   return (
     <div className="flex flex-col items-start gap-3 pt-[9vh] pb-6">
@@ -449,6 +473,24 @@ function Welcome({
         questions and results back here. It starts with your first message.
       </p>
       {error ? <p className="text-[13px] text-tone-red">{error}</p> : null}
+      <button
+        type="button"
+        onClick={onBrief}
+        className="group mt-1 flex w-full items-start gap-3 rounded-xl border border-dashed border-line-strong px-3.5 py-3 text-left transition-colors hover:border-accent/50 hover:bg-accent/6"
+      >
+        <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-subtle text-ink-3 group-hover:bg-accent/15 group-hover:text-accent">
+          <NotebookPen className="size-3.5" strokeWidth={1.9} aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13.5px] font-medium text-ink">
+            {brief ? "Its brief" : "Give it a brief first"}
+          </span>
+          <span className="mt-0.5 line-clamp-2 block text-[12.5px] leading-snug text-ink-2">
+            {brief ||
+              "What it should be working on, for whom, and what's open. It starts every session with it, along with its memory notes."}
+          </span>
+        </span>
+      </button>
       <div className="mt-3 flex w-full flex-col gap-1.5">
         {suggestions.map((text) => (
           <button

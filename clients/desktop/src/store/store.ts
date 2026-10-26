@@ -29,6 +29,7 @@ import {
   type ContextUsage,
   type InboxItem,
   type Staff,
+  type StaffNote,
   type Transcript,
   type TranscriptMessage,
 } from "../api/staff";
@@ -105,6 +106,8 @@ export interface DaemonState {
   inboxes: Record<number, InboxItem[]>;
   /** Conversations read from transcripts, by agent id, while a page shows them. */
   transcripts: Record<number, TranscriptState>;
+  /** Each chief's memory notes, by project id, while a page shows them. */
+  memories: Record<number, MemoryState>;
   /** What you sent each project's chief that its transcript doesn't show yet. */
   pending: Record<number, PendingMessage[]>;
   /** What you sent each agent (by agent id) that its transcript doesn't show yet. */
@@ -127,6 +130,14 @@ export interface DaemonState {
 /** `global`, or `project:<id>`: where an environment list's error is kept. */
 export function envKey(projectId: number | null): string {
   return projectId === null ? "global" : `project:${projectId}`;
+}
+
+export interface MemoryState {
+  /** By name; null until loaded. */
+  notes: StaffNote[] | null;
+  /** False when the daemon answers 404: it's older than memory notes. */
+  supported: boolean;
+  error: string | null;
 }
 
 export interface TranscriptState {
@@ -165,6 +176,7 @@ export function initialState(): DaemonState {
     staffs: {},
     staffSupported: true,
     inboxes: {},
+    memories: {},
     transcripts: {},
     pending: {},
     agentPending: {},
@@ -239,6 +251,7 @@ export class CosStore {
   /** Agents whose transcript restarted: the next fetch reads it from the top. */
   private readonly transcriptResets = new Set<number>();
   private readonly inboxWatches = new Map<number, Watch<InboxItem[]>>();
+  private readonly memoryWatches = new Map<number, Watch<StaffNote[]>>();
   private nextPendingId = 1;
   /** Attachments fetched to show, by `agentId/name`. */
   private readonly attachmentUrls = new Map<string, Promise<string>>();
@@ -456,6 +469,7 @@ export class CosStore {
         // What changed while away: the conversations and inboxes on screen.
         for (const watch of this.transcriptWatches.values()) watch.refresh.request();
         for (const watch of this.inboxWatches.values()) watch.refresh.request();
+        for (const watch of this.memoryWatches.values()) watch.refresh.request();
         this.refreshRemoteAccess();
         break;
       }
@@ -505,6 +519,10 @@ export class CosStore {
       const project = projectOf(event);
       if (project !== null) this.refreshStaff(project);
       else for (const p of this.get().projects) this.refreshStaff(p.id);
+      // `staff.changed` also means its brief or notes changed.
+      for (const [id, watch] of this.memoryWatches) {
+        if (project === null || project === id) watch.refresh.request();
+      }
     }
     if (changesEnv(kind)) {
       // A global change moves every project's merge too.
@@ -711,6 +729,31 @@ export class CosStore {
     );
   }
 
+  /** Keeps a project's chief's memory notes current until the returned function is called. */
+  watchMemory(projectId: number): () => void {
+    return this.watch(
+      this.memoryWatches,
+      projectId,
+      () =>
+        new CoalescedRefresh(
+          () => this.client.staffMemory(projectId),
+          (result) => {
+            if (result.ok) this.storeMemory(projectId, { notes: result.value, error: null });
+            else if (isNotFound(result.error)) this.storeMemory(projectId, { supported: false });
+            else this.storeMemory(projectId, { error: message(result.error) });
+          },
+        ),
+    );
+  }
+
+  private storeMemory(projectId: number, change: Partial<MemoryState>): void {
+    this.set((s) => {
+      const current = s.memories[projectId] ?? { notes: null, supported: true, error: null };
+      const next = { ...current, supported: true, ...change };
+      return { memories: { ...s.memories, [projectId]: next } };
+    });
+  }
+
   /** A counted watch: the first one creates and fetches; the last one disposes. */
   private watch<T>(
     watches: Map<number, Watch<T>>,
@@ -764,6 +807,46 @@ export class CosStore {
     const staff = await this.client.setStaff(projectId, { model });
     this.storeStaff(staff);
     return staff;
+  }
+
+  /**
+   * Replaces the chief's brief; it reads the new one from its next start or
+   * new session. Throws if the daemon is older than editable briefs, which
+   * ignores the field and answers the old one.
+   */
+  async setStaffBrief(projectId: number, brief: string): Promise<Staff> {
+    const staff = await this.client.setStaff(projectId, { brief });
+    this.storeStaff(staff);
+    if (staff.brief !== brief.trim()) {
+      throw new CosError(
+        "bad_response",
+        "This cos daemon can't change the brief yet. Update cos and restart the daemon.",
+      );
+    }
+    return staff;
+  }
+
+  /** Creates or replaces one of the chief's notes. */
+  async writeStaffNote(
+    projectId: number,
+    name: string,
+    note: { description: string; body: string },
+  ): Promise<StaffNote> {
+    const saved = await this.client.writeStaffNote(projectId, name, note);
+    const notes = (this.get().memories[projectId]?.notes ?? []).filter(
+      (n) => n.name !== saved.name,
+    );
+    notes.push(saved);
+    notes.sort((a, b) => a.name.localeCompare(b.name));
+    this.storeMemory(projectId, { notes });
+    return saved;
+  }
+
+  /** Deletes one of the chief's notes. */
+  async deleteStaffNote(projectId: number, name: string): Promise<void> {
+    await this.client.deleteStaffNote(projectId, name);
+    const notes = this.get().memories[projectId]?.notes;
+    if (notes) this.storeMemory(projectId, { notes: notes.filter((n) => n.name !== name) });
   }
 
   /**
@@ -1311,6 +1394,8 @@ export class CosStore {
     this.transcriptWatches.clear();
     for (const watch of this.inboxWatches.values()) watch.refresh.dispose();
     this.inboxWatches.clear();
+    for (const watch of this.memoryWatches.values()) watch.refresh.dispose();
+    this.memoryWatches.clear();
     this.transcriptResets.clear();
     this.pendingEvents = [];
     const host = list.hosts.find((h) => h.id === list.current) ?? null;

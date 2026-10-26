@@ -57,6 +57,19 @@ impl Client {
         .await
     }
 
+    /// Replaces its brief; it reads the new one from its next start or new session.
+    #[cfg(test)]
+    pub(crate) async fn set_staff_brief(&self, project_id: i64, brief: &str) -> anyhow::Result<StaffView> {
+        self.configure_staff(
+            project_id,
+            &StaffSettings {
+                brief: Some(brief.to_owned()),
+                ..StaffSettings::default()
+            },
+        )
+        .await
+    }
+
     async fn configure_staff(&self, project_id: i64, settings: &StaffSettings) -> anyhow::Result<StaffView> {
         let path = format!("/v1/projects/{project_id}/staff");
         read_json(self.send(Method::PUT, &path, Some(settings)).await?).await

@@ -3,7 +3,15 @@
 // each, newest first. Workspaces stay out of sight; sessions that share one
 // folder sit together, joined by a bracket in that folder's colour.
 
-import { GitBranch, LayoutGrid, MoreHorizontal, Plus, Trash2, Variable } from "lucide-react";
+import {
+  GitBranch,
+  LayoutGrid,
+  MoreHorizontal,
+  NotebookPen,
+  Plus,
+  Trash2,
+  Variable,
+} from "lucide-react";
 import { useMemo } from "react";
 import { envHint } from "../../api/env";
 import { type Agent, type Project, workspaceName } from "../../api/models";
@@ -50,6 +58,11 @@ export function ProjectPanel({ project }: { project: Project }) {
       label: "All workspaces",
       icon: LayoutGrid,
       onSelect: () => ui.navigate({ kind: "project", id: project.id }),
+    },
+    {
+      label: "Chief's brief & memory…",
+      icon: NotebookPen,
+      onSelect: () => ui.navigate({ kind: "chiefMemory", id: project.id }),
     },
     {
       label: "Environment…",

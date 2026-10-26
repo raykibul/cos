@@ -12,6 +12,7 @@ import {
   optNum,
   optStr,
   reqNum,
+  reqStr,
   str,
   time,
 } from "./decode";
@@ -52,6 +53,60 @@ export function decodeStaff(value: unknown): Staff {
     paused: bool(o.paused, false),
     updatesWaiting: num(o.updates_waiting, 0),
   };
+}
+
+/** The most bytes a brief holds; the daemon refuses more. */
+export const MAX_BRIEF_BYTES = 4 * 1024;
+/** The most bytes a memory note's body holds. */
+export const MAX_NOTE_BYTES = 8 * 1024;
+/** The most characters a note's one-line description holds. */
+export const MAX_NOTE_DESCRIPTION = 200;
+/** The most notes a project's chief keeps. */
+export const MAX_NOTES = 50;
+
+/** How many bytes `text` takes as UTF-8, as the daemon counts them. */
+export function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
+ * One of the chief's memory notes (docs/chief-of-staff.md, "Memory notes"):
+ * what lasts, one subject per note. Only the name and description go in its
+ * prompt; it reads the body when it needs it.
+ */
+export interface StaffNote {
+  name: string;
+  description: string;
+  body: string;
+  createdMs: number;
+  updatedMs: number;
+}
+
+export function decodeStaffNote(value: unknown): StaffNote {
+  const o = asObject(value, "note");
+  return {
+    name: reqStr(o, "name", "note"),
+    description: str(o.description),
+    body: str(o.body),
+    createdMs: num(o.created_ms, 0),
+    updatedMs: num(o.updated_ms, 0),
+  };
+}
+
+/** `{notes: [...]}`, by name. */
+export function decodeStaffMemory(value: unknown): StaffNote[] {
+  return list(asObject(value, "memory").notes, decodeStaffNote).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+}
+
+/** Why a note's name won't do, or null: 1 to 64 lowercase letters, digits and `-`, starting and ending with a letter or digit. */
+export function noteNameProblem(name: string): string | null {
+  if (!name) return "Give it a name.";
+  if (name.length > 64) return "Keep the name to 64 characters.";
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name))
+    return "Use lowercase letters, digits and dashes, starting and ending with a letter or digit.";
+  return null;
 }
 
 /** How full a conversation's context is, from Claude's latest usage. */

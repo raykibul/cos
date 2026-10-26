@@ -72,7 +72,7 @@ The brief says what the chief is doing now; memory notes keep what lasts: what y
 
 - **A note** is `{name, description, body, created_ms, updated_ms}`. The name is 1 to 64 lowercase letters, digits and `-`, starting and ending with a letter or digit, unique in the project. The description is one line of at most 200 characters. The body is at most 8 KiB. A project has at most 50 notes. Each is trimmed; an empty body is refused (delete the note instead).
 - **In the prompt:** only the list goes in, one `- name: description` line per note, by name, after the brief. The chief reads a body with `memory_read` when it needs it, so the prompt stays small.
-- **Who writes them:** the chief with its tools, and you from an app or the API. Either way the change is used from the chief's next start or new session (a running chief keeps the prompt it started with, and knows what it wrote itself), and logs `staff.changed`.
+- **Who writes them:** the chief with its tools, and you from an app or the API. The brief too: the chief with `brief_update`, you with `PUT …/staff {brief}`. Either way the change is used from the chief's next start or new session (a running chief keeps the prompt it started with, and knows what it wrote itself), and logs `staff.changed`.
 - **Scope:** one project's chief only. Agents it starts don't see the notes; it puts what they need in their prompts.
 
 ### New session
@@ -126,7 +126,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
 | Route | Body | Result |
 |---|---|---|
 | `GET /v1/projects/{id}/staff` | | `Staff` (below). It exists even before the chief starts. |
-| `PUT /v1/projects/{id}/staff` | `{model?, paused?}` | `Staff`. A field left out stays as it is. |
+| `PUT /v1/projects/{id}/staff` | `{model?, paused?, brief?}` | `Staff`. A field left out stays as it is. `brief` replaces its brief (trimmed, empty clears it, 400 over 4 KiB), used from its next start or new session. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; does nothing if it's running. |
 | `POST /v1/projects/{id}/staff/message` | `{text, attachments?}` | 202. Starts it if needed, then types the text in as a bracketed paste and presses Return. If it's working, the text waits in its inbox and is delivered first thing on the next wakeup. `attachments` names files uploaded to its worktree; the text may then be empty. |
 | `POST /v1/projects/{id}/staff/attachments?name=` | the file's bytes | 201 Attachment. Into the chief's worktree, made if needed; the chief isn't started. See [agents-api.md](agents-api.md#attachments). |
@@ -178,6 +178,7 @@ Selene's sidebar is the model (see `desktop/src/renderer/components/sidebar.tsx`
   - **Composer:** "What should we work on?", where Enter sends and Shift-Enter adds a line. It posts to `…/staff/message`.
   - **Before it starts:** an empty state with three suggestions that fill the composer: "Plan the next feature and split it across agents", "Review what every workspace is doing right now", "Collect the open questions from running agents".
   - **"Agents waiting on you":** a strip above the composer listing approvals and trust dialogs of the agents it started.
+- **Brief & memory page:** opened from the chief's header (a notebook button whose tooltip shows the brief), its ⋯ menu, the project's sidebar menu, and, before it starts, a "Give it a brief first" card in the empty state. It shows the brief in an editor with a byte count (Save, Revert, ⌘↩) and the memory notes as rows that unfold to their body, with Add note, Edit and Delete (with Undo) in a sheet that checks the name, the one-line description and the size. Changes reach the chief from its next start, so the page has New session once it has started. A daemon older than notes says so; one older than editable briefs ignores the field, which the app reports.
 - **Workspace page:** the title (or city) as the heading, the branch, and its agents as cards or tabs. New Agent stays as it is. New Workspace no longer requires a title.
 
 ## App: hosts and remote access

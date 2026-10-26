@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { shellPlace, shownProject } from "../store/selectors";
 import { type CosStore, isThisMac } from "../store/store";
+import { ChiefMemoryPage } from "../pages/chief/ChiefMemoryPage";
 import { ChiefPage } from "../pages/chief/ChiefPage";
 import { AgentPage } from "../screens/AgentPage";
 import { EventLogPage } from "../screens/EventLogPage";
@@ -149,6 +150,8 @@ function Content() {
       return <ChiefPage key={page.id} projectId={page.id} />;
     case "projectEnv":
       return <ProjectEnvPage key={page.id} projectId={page.id} />;
+    case "chiefMemory":
+      return <ChiefMemoryPage key={page.id} projectId={page.id} />;
     case "workspace":
       return <WorkspacePage key={page.id} workspaceId={page.id} />;
     case "agent":
