@@ -14,6 +14,8 @@
 //!   (deny), which kills the hook.
 //! - contains `hang forever`: never finishes and ignores whatever is typed, so only
 //!   a kill ends the session.
+//! - contains `late reply`: replies `echo: <prompt>`, but writes the reply to
+//!   the transcript 800 ms after the `Stop` hook, as Claude sometimes does.
 //! - `mcp tools`: lists the tools of the server in `--mcp-config` (see
 //!   [`crate::mcp`]) and replies with their names, comma-separated.
 //! - `mcp <tool> <json arguments>`: calls that tool, between `PreToolUse` and
@@ -180,11 +182,16 @@ impl Session {
             format!("echo: {prompt}")
         };
         show(&format!("⏺ {reply}"));
+        let stop = json!({ "last_assistant_message": reply, "stop_hook_active": false });
+        if prompt.contains("late reply") {
+            // Claude can write its reply to the transcript after `Stop` ran.
+            self.hook("Stop", stop);
+            std::thread::sleep(Duration::from_millis(800));
+            self.record("assistant", json!([{ "type": "text", "text": reply }]));
+            return;
+        }
         self.record("assistant", json!([{ "type": "text", "text": reply }]));
-        self.hook(
-            "Stop",
-            json!({ "last_assistant_message": reply, "stop_hook_active": false }),
-        );
+        self.hook("Stop", stop);
     }
 
     /// `tools`, or `<tool> <json arguments>`.

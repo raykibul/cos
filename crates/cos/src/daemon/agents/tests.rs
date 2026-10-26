@@ -448,6 +448,22 @@ async fn the_transcript_reads_as_a_chat_and_its_growth_is_logged() {
 }
 
 #[tokio::test]
+async fn a_reply_written_after_stop_is_still_logged() {
+    let fixture = Fixture::start().await;
+    let agent = fixture.start_agent("hello").await;
+    fixture.until_idle_with(agent.id, "echo: hello").await;
+    fixture.client.say(agent.id, "a late reply".into()).await.unwrap();
+    // The reply lands in the file 800 ms after `Stop`, with no hook after it:
+    // the apps still hear that the transcript grew to hold it.
+    until("agent.transcript up to 4", || async {
+        fixture.log.after(0, 1000).unwrap().into_iter().find(|event| {
+            event.kind == kind::AGENT_TRANSCRIPT && event.data == json!({ "agent_id": agent.id, "next": 4 })
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn an_agent_follows_its_terminal_into_a_new_session_after_clear() {
     use crate::daemon::transcript::{MessageKind, Speaker};
 
