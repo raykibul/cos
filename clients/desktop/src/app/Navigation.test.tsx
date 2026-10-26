@@ -127,6 +127,26 @@ describe("a session's right-click menu", () => {
     expect(ui.store.getState().tabs.some((t) => t.kind === "agent" && t.id === 5)).toBe(false);
   });
 
+  it("removes a shared folder with all its sessions, stopping the running ones", async () => {
+    const { user, daemon } = await renderApp({ kind: "chief", id: 1 });
+    await rightClick(user, /^Write the release notes/);
+    await user.click(menu().getByRole("menuitem", { name: /^Remove porto…/ }));
+    expect(
+      dialog().getByText(/sessions go with it: .*Write the release notes/),
+    ).toBeInTheDocument();
+    await user.click(dialog().getByRole("button", { name: /remove/i }));
+    await act(() => settle());
+    expect(requestLines(daemon)).toContain("DELETE /v1/workspaces/4");
+    expect(sidebar().queryByRole("treeitem", { name: /^Write the release notes/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers no folder removal for a session alone in it: Remove session does that", async () => {
+    const { user } = await renderApp({ kind: "chief", id: 2 });
+    await rightClick(user, /^Export invoices as CSV/);
+    expect(menu().queryByRole("menuitem", { name: /^Remove Billing export…/ })).toBeNull();
+  });
+
   it("deletes the folder with a session alone in it", async () => {
     const { user, ui, daemon } = await renderApp({ kind: "workspace", id: 8 });
     act(() => ui.navigate({ kind: "chief", id: 2 }));
