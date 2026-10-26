@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
+use axum::serve::ListenerExt;
 use cos_core::events::kind;
 use cos_core::{Device, DeviceState, Devices, EventLog, SeenDevice, Store, StoreError};
 use serde::{Deserialize, Serialize};
@@ -469,11 +470,29 @@ fn serve(
     let shutdown = async move {
         let _ = closing.wait_for(|closing| *closing).await;
     };
+    // A forwarded port is one connection that may sit quiet for hours, so
+    // a Mac that vanished (asleep, off the network) is only noticed by
+    // keepalive probes.
+    let listener = listener.tap_io(|stream| {
+        if let Err(error) = keep_alive(stream) {
+            tracing::debug!(%error, "could not turn on TCP keepalive");
+        }
+    });
     tokio::spawn(
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown)
             .into_future(),
     )
+}
+
+/// TCP keepalive: probes after 60 s of quiet, every 10 s, 3 times, so a dead
+/// peer's connections are dropped within about 90 s.
+pub(crate) fn keep_alive(stream: &tokio::net::TcpStream) -> std::io::Result<()> {
+    let params = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(10))
+        .with_retries(3);
+    socket2::SockRef::from(stream).set_tcp_keepalive(&params)
 }
 
 // ---- Who may connect ----

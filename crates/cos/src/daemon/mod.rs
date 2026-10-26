@@ -9,6 +9,7 @@ pub(crate) mod api;
 pub(crate) mod attachments;
 pub(crate) mod attachments_api;
 pub(crate) mod env_api;
+pub(crate) mod forward;
 pub(crate) mod judge;
 pub(crate) mod judge_api;
 pub(crate) mod peers;
@@ -110,6 +111,7 @@ pub(crate) async fn run_with(
     let shells = shells::Shells::new();
     let state = api::AppState {
         shells: shells.clone(),
+        forwards: forward::Forwards::new(),
         log: log.clone(),
         projects,
         devices,

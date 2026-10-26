@@ -73,6 +73,7 @@ impl TestServer {
         let (stop, stopping) = watch::channel(false);
         let judge = crate::daemon::judge::Judge::off_for_tests(&store, &log, &projects, &agents, dir.path());
         let state = api::AppState {
+            forwards: crate::daemon::forward::Forwards::new(),
             // A plain shell, whatever `$SHELL` the machine running the tests has.
             shells: crate::daemon::shells::Shells::with_program("/bin/sh".into()),
             log: log.clone(),
@@ -1347,4 +1348,276 @@ async fn env_routes_work_over_the_tailnet() {
     let (status, body) = tcp_request(addr, "GET", "/v1/env").await;
     assert_eq!((status, body["code"].as_str()), (403, Some("device_denied")));
     daemon.stop().await;
+}
+
+// ---- Port forwarding ----
+
+/// A loopback echo server: it sends back what it reads and closes its write
+/// side when the client does. Counts the connections it accepted.
+struct Echo {
+    port: u16,
+    accepted: Arc<AtomicUsize>,
+    task: JoinHandle<()>,
+}
+
+impl Echo {
+    async fn start(ip: &str) -> Option<Self> {
+        let listener = tokio::net::TcpListener::bind((ip, 0)).await.ok()?;
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = accepted.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let (mut read, mut write) = stream.into_split();
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+        Some(Self { port, accepted, task })
+    }
+
+    fn accepted(&self) -> usize {
+        self.accepted.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for Echo {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Asks for a tunnel to `port` on `stream`. Returns the status line's code,
+/// the JSON body for an error, and the stream, ready for raw bytes after a
+/// 101.
+async fn open_tunnel<S>(stream: S, port: &str) -> (u16, serde_json::Value, S)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    upgrade_to(stream, port, "cos-forward").await
+}
+
+/// [`open_tunnel`] with any `Upgrade` token.
+async fn upgrade_to<S>(mut stream: S, port: &str, upgrade: &str) -> (u16, serde_json::Value, S)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let request = format!(
+        "GET /v1/forward/{port} HTTP/1.1\r\nHost: cos\r\nConnection: upgrade\r\nUpgrade: {upgrade}\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    // Read the head one byte at a time, so nothing after it is consumed.
+    let mut head = Vec::new();
+    within("tunnel answer", async {
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0u8; 1];
+            if stream.read(&mut byte).await.unwrap() == 0 {
+                break;
+            }
+            head.push(byte[0]);
+        }
+    })
+    .await;
+    let head = String::from_utf8_lossy(&head).into_owned();
+    let status: u16 = head[9..12].parse().unwrap();
+    let mut body = json!(null);
+    if status != 101 {
+        let length: usize = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().ok())?
+            })
+            .unwrap_or(0);
+        let mut bytes = vec![0; length];
+        stream.read_exact(&mut bytes).await.unwrap();
+        body = serde_json::from_slice(&bytes).unwrap_or(json!(null));
+    } else {
+        assert!(
+            head.to_ascii_lowercase().contains("upgrade: cos-forward"),
+            "{head}"
+        );
+    }
+    (status, body, stream)
+}
+
+/// Sends `data` through a tunnel and reads back as much.
+async fn echo_through<S>(stream: &mut S, data: &[u8]) -> Vec<u8>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    stream.write_all(data).await.unwrap();
+    let mut back = vec![0; data.len()];
+    within("echo", stream.read_exact(&mut back)).await.unwrap();
+    back
+}
+
+/// Waits until a tunnel's stream is closed by the other end.
+async fn closed<S: tokio::io::AsyncRead + Unpin>(stream: &mut S) {
+    within("tunnel closed", async {
+        let mut buf = [0u8; 64];
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_tunnel_carries_bytes_both_ways_and_half_closes() {
+    let server = TestServer::start();
+    let echo = Echo::start("127.0.0.1").await.unwrap();
+
+    let socket = UnixStream::connect(&server.socket).await.unwrap();
+    let (status, _, mut tunnel) = open_tunnel(socket, &echo.port.to_string()).await;
+    assert_eq!(status, 101);
+    assert_eq!(echo_through(&mut tunnel, b"hello").await, b"hello");
+
+    // A megabyte each way at once.
+    let big: Vec<u8> = (0..1_048_576u32).map(|i| (i % 251) as u8).collect();
+    let (mut read, mut write) = tokio::io::split(tunnel);
+    let sent = big.clone();
+    let writer = tokio::spawn(async move {
+        write.write_all(&sent).await.unwrap();
+        // Half-close: the echo server sees EOF, and the reply still comes.
+        write.shutdown().await.unwrap();
+    });
+    let mut back = Vec::new();
+    within("big echo", read.read_to_end(&mut back)).await.unwrap();
+    writer.await.unwrap();
+    assert_eq!(back.len(), big.len());
+    assert!(back == big);
+}
+
+#[tokio::test]
+async fn the_probe_says_whether_anything_listens() {
+    let server = TestServer::start();
+    let echo = Echo::start("127.0.0.1").await.unwrap();
+    let (status, body) = get_json(&server.socket, &format!("/v1/forward/{}", echo.port)).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body,
+        json!({"port": echo.port, "listening": true, "address": format!("127.0.0.1:{}", echo.port)})
+    );
+
+    let port = echo.port;
+    drop(echo);
+    let (_, body) = get_json(&server.socket, &format!("/v1/forward/{port}")).await;
+    assert_eq!(body, json!({"port": port, "listening": false, "address": null}));
+}
+
+#[tokio::test]
+async fn tunnels_refuse_bad_ports_and_empty_ports() {
+    let server = TestServer::start();
+    for port in ["0", "65536", "abc"] {
+        let socket = UnixStream::connect(&server.socket).await.unwrap();
+        let (status, body, _) = open_tunnel(socket, port).await;
+        assert_eq!((status, body["code"].as_str()), (400, Some("bad_port")), "{port}");
+    }
+
+    let socket = UnixStream::connect(&server.socket).await.unwrap();
+    let (status, body, _) = open_tunnel(socket, &free_port().to_string()).await;
+    assert_eq!((status, body["code"].as_str()), (502, Some("nothing_listening")));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing is listening on port")
+    );
+
+    let socket = UnixStream::connect(&server.socket).await.unwrap();
+    let (status, body, _) = upgrade_to(socket, "80", "websocket").await;
+    assert_eq!((status, body["code"].as_str()), (400, Some("bad_upgrade")));
+}
+
+#[tokio::test]
+async fn a_tunnel_reaches_a_server_on_ipv6_loopback_only() {
+    let Some(echo) = Echo::start("::1").await else {
+        eprintln!("no IPv6 loopback here; skipped");
+        return;
+    };
+    let server = TestServer::start();
+    let socket = UnixStream::connect(&server.socket).await.unwrap();
+    let (status, _, mut tunnel) = open_tunnel(socket, &echo.port.to_string()).await;
+    assert_eq!(status, 101);
+    assert_eq!(echo_through(&mut tunnel, b"v6").await, b"v6");
+}
+
+#[tokio::test]
+async fn only_approved_devices_tunnel_and_deny_closes_them() {
+    let daemon = RemoteDaemon::start(FakeTailscale::new(), fast(Duration::ZERO)).await;
+    let addr = daemon.listen().await;
+    let echo = Echo::start("127.0.0.1").await.unwrap();
+    let port = echo.port.to_string();
+
+    // Pending: the guard answers first, so nothing reaches the dev server.
+    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (status, body, _) = open_tunnel(stream, &port).await;
+    assert_eq!((status, body["code"].as_str()), (403, Some("device_pending")));
+    assert_eq!(echo.accepted(), 0);
+
+    daemon.local().approve_device(1).await.unwrap();
+    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (status, _, mut tunnel) = open_tunnel(stream, &port).await;
+    assert_eq!(status, 101);
+    assert_eq!(
+        echo_through(&mut tunnel, b"over the tailnet").await,
+        b"over the tailnet"
+    );
+
+    // Denied mid-stream: the open tunnel closes at once, and new ones are refused.
+    daemon.local().deny_device(1).await.unwrap();
+    closed(&mut tunnel).await;
+    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (status, body, _) = open_tunnel(stream, &port).await;
+    assert_eq!((status, body["code"].as_str()), (403, Some("device_denied")));
+
+    // Removed: the same.
+    daemon.local().approve_device(1).await.unwrap();
+    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (_, _, mut tunnel) = open_tunnel(stream, &port).await;
+    assert_eq!(echo_through(&mut tunnel, b"again").await, b"again");
+    daemon.local().remove_device(1).await.unwrap();
+    closed(&mut tunnel).await;
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn turning_remote_access_off_closes_open_tunnels() {
+    let daemon = RemoteDaemon::start(FakeTailscale::new(), fast(Duration::ZERO)).await;
+    let addr = daemon.listen().await;
+    tcp_request(addr, "GET", "/v1/status").await;
+    daemon.local().approve_device(1).await.unwrap();
+    let echo = Echo::start("127.0.0.1").await.unwrap();
+
+    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (status, _, mut tunnel) = open_tunnel(stream, &echo.port.to_string()).await;
+    assert_eq!(status, 101);
+    assert_eq!(echo_through(&mut tunnel, b"x").await, b"x");
+    daemon.local().configure_tailnet(false, None).await.unwrap();
+    closed(&mut tunnel).await;
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn stopping_the_daemon_closes_open_tunnels() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = CosHome::new(dir.path().join("home"));
+    let (stop, task) = start_daemon(&home).await;
+    let echo = Echo::start("127.0.0.1").await.unwrap();
+
+    let socket = UnixStream::connect(home.socket()).await.unwrap();
+    let (status, _, mut tunnel) = open_tunnel(socket, &echo.port.to_string()).await;
+    assert_eq!(status, 101);
+    assert_eq!(echo_through(&mut tunnel, b"x").await, b"x");
+    stop.send("test".into()).unwrap();
+    closed(&mut tunnel).await;
+    within("daemon exit", task).await.unwrap().unwrap();
 }
