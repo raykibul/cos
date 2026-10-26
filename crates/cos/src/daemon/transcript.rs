@@ -7,7 +7,10 @@
 //! or an entry this module doesn't know, is skipped, never an error. Left out:
 //! thinking, system and meta entries, sidechains (subagents), bookkeeping
 //! entries (`attachment`, `file-history-snapshot`, `api-request-*`…), local
-//! command echoes and interruption markers. A message you sent while Claude
+//! command echoes and interruption markers. A `!` command you ran in
+//! Claude's shell mode, which Claude records as `<bash-input>`, shows as
+//! you typed it (`! git status`), and its output as one row of yours (a
+//! tool row named [`SHELL_OUTPUT`]). A message you sent while Claude
 //! was busy, which Claude records as a `queued_command` attachment when it
 //! reads it mid-turn, is shown as what you typed. A line still being written (no
 //! newline yet) waits for the next read, so message numbers never change.
@@ -42,6 +45,10 @@ const AGENT_TOOLS: [&str; 3] = [
     "mcp__cos__agent_read",
     "mcp__cos__agent_stop",
 ];
+/// The row for what a `!` command you ran printed.
+pub(crate) const SHELL_OUTPUT: &str = "shell_output";
+/// The most characters of a `!` command's output a row keeps.
+const OUTPUT_CHARS: usize = 8 * 1024;
 /// The attachment Claude records for a message typed while it was busy.
 const QUEUED_COMMAND: &str = "queued_command";
 /// How many transcripts the cache keeps parsed.
@@ -99,6 +106,10 @@ pub(crate) struct ToolCall {
     /// `agent_id`. Apps open that agent from the row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<i64>,
+    /// What a `!` command printed ([`SHELL_OUTPUT`]): its output, then its
+    /// errors, cut to 8 KiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
     #[serde(skip)]
     id: String,
     /// Its result is in.
@@ -285,6 +296,7 @@ impl Parser {
                                     .contains(&name)
                                     .then(|| block["input"]["agent_id"].as_i64())
                                     .flatten(),
+                                output: None,
                                 id: id.clone(),
                                 done: false,
                             };
@@ -477,6 +489,22 @@ fn settled(messages: &[Message]) -> usize {
 fn push_user_text(messages: &mut Vec<Message>, text: &str, ts_ms: i64) {
     let text = unwrap_pastes(text);
     let text = text.trim();
+    if let Some(command) = tag_body(text, "bash-input") {
+        let typed = format!("! {}", unescape(command.trim()));
+        push(
+            messages,
+            Speaker::User,
+            MessageKind::Text,
+            Some(&typed),
+            None,
+            ts_ms,
+        );
+        return;
+    }
+    if text.starts_with("<bash-stdout>") || text.starts_with("<bash-stderr>") {
+        push_shell_output(messages, text, ts_ms);
+        return;
+    }
     let noise = ["<command-", "<local-command-", "[Request interrupted"];
     if text.is_empty() || noise.iter().any(|prefix| text.starts_with(prefix)) {
         return;
@@ -494,6 +522,61 @@ fn push_user_text(messages: &mut Vec<Message>, text: &str, ts_ms: i64) {
     if let Some(message) = messages.last_mut() {
         message.attachments = attached;
     }
+}
+
+/// What a `!` command printed, `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`
+/// (escaped as HTML), as a tool row of yours: its first line as the
+/// summary, the whole of it as `output`. It failed if it printed only errors.
+fn push_shell_output(messages: &mut Vec<Message>, text: &str, ts_ms: i64) {
+    let stdout = tag_body(text, "bash-stdout").map(unescape).unwrap_or_default();
+    let stderr = tag_body(text, "bash-stderr").map(unescape).unwrap_or_default();
+    let (stdout, stderr) = (stdout.trim(), stderr.trim());
+    let output = [stdout, stderr]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = if output.is_empty() {
+        "(no output)".to_owned()
+    } else {
+        crate::try_cmd::first_line(&output, SUMMARY_CHARS)
+    };
+    let output = (!output.is_empty()).then(|| output.chars().take(OUTPUT_CHARS).collect());
+    let call = ToolCall {
+        name: SHELL_OUTPUT.to_owned(),
+        summary,
+        is_error: stdout.is_empty() && !stderr.is_empty(),
+        agent_id: None,
+        output,
+        id: String::new(),
+        done: true,
+    };
+    push(
+        messages,
+        Speaker::User,
+        MessageKind::Tool,
+        None,
+        Some(call),
+        ts_ms,
+    );
+}
+
+/// The text inside `<tag>…</tag>`, if `text` has it.
+fn tag_body<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&format!("</{tag}>"))? + start;
+    Some(&text[start..end])
+}
+
+/// Claude escapes a `!` command and its output as HTML.
+fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 fn push(

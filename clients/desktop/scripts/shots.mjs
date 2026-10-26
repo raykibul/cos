@@ -69,6 +69,7 @@ const shots = [
   ],
   ["chief-terminal", "page=chief:1&terminal"],
   ["chief-session", "page=chief:1&session=7"],
+  ["agent-shell-command", "page=agent:7"],
   [
     "chief-spawned-cards",
     "page=chief:1",

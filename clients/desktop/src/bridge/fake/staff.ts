@@ -288,6 +288,13 @@ function agentTranscripts(ms: (agoSeconds: number) => number): Record<number, Ra
         460,
         "Fixed. Sessions now last five hours, and `session.test.ts` checks the expiry. Running the whole suite before I call it ready.",
       ],
+      // A `!` command you ran in the terminal, as a daemon from before shell mode sends it.
+      ["user", 40, "<bash-input>git log --oneline -3</bash-input>"],
+      [
+        "user",
+        39,
+        "<bash-stdout>a1f3c9e Count TTL_MS in hours\n7d20b41 Test that a session lasts five hours\n55e0c12 Merge pull request #41 from cos/auth</bash-stdout><bash-stderr></bash-stderr>",
+      ],
       ["tool", 30, "Bash", "npm test -- --runInBand"],
     ]),
   };
