@@ -168,6 +168,11 @@ struct ChiefChatView: View {
             if let id = chat.agentId {
                 Button("Chief's terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: id)) }
             }
+            if session.shellsSupported, let root = chat.project?.root {
+                Button("New shell in \(chat.project?.name ?? "the project")", systemImage: "apple.terminal") {
+                    Task { error = await navigator.openShell(session: session, cwd: root, projectId: projectId) }
+                }
+            }
             if chat.staff?.hasStarted == true {
                 Divider()
                 Button("New session", systemImage: "plus.bubble") { confirmNewSession = true }

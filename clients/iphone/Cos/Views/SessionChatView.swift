@@ -143,7 +143,9 @@ struct SessionChatView: View {
             }
             if let agent {
                 Divider()
-                SessionFolderActions(session: session, agent: agent, starting: $starting, removing: $removing)
+                SessionFolderActions(session: session, agent: agent, starting: $starting, removing: $removing) {
+                    Task { error = await navigator.openShell(session: session, cwd: session.folder(ofAgent: agent), projectId: chat.projectId) }
+                }
                 if agent.state.canResume {
                     Divider()
                     Button("Resume", systemImage: "play.circle") { perform { try await session.resume(agentId: agentId) } }

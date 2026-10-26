@@ -54,12 +54,15 @@ extension CosClient: TerminalSource {
     /// `exit`, and throws `.connectionClosed` if the daemon drops it before
     /// then. It does not reconnect; `TerminalStream` does.
     public func terminal(agentId: Int) -> AsyncThrowingStream<TerminalEvent, Error> {
+        terminalStream("/v1/agents/\(agentId)/terminal")
+    }
+
+    /// The terminal SSE at `path`: an agent's or a shell's.
+    func terminalStream(_ path: String) -> AsyncThrowingStream<TerminalEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (connection, response) = try await request(
-                        "GET", "/v1/agents/\(agentId)/terminal", headers: [("Accept", "text/event-stream")]
-                    )
+                    let (connection, response) = try await request("GET", path, headers: [("Accept", "text/event-stream")])
                     defer { connection.close() }
                     var parser = SSEParser()
                     while let chunk = try await response.nextBodyChunk() {

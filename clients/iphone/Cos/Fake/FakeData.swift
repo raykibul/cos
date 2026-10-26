@@ -97,6 +97,11 @@ struct FakeData {
         ]
     }
 
+    /// A shell the Mac opened in atlas's root.
+    var shells: [Shell] {
+        [Shell(id: 1, projectId: 1, cwd: "/Users/me/code/atlas", pid: 52_001, startedMs: ago(5_400))]
+    }
+
     // MARK: The Chief of Staff
 
     var staffs: [Int: Staff] {

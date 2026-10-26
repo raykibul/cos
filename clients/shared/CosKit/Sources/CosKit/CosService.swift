@@ -54,6 +54,12 @@ public protocol CosService: EventSource {
     func globalEnv() async throws -> EnvVars
     func projectEnv(projectId: Int) async throws -> ProjectEnv
 
+    // Shells ("Shells" in docs/agents-api.md); their terminals come
+    // through `ShellTerminalSource`.
+    func shells() async throws -> [Shell]
+    func startShell(cwd: String, projectId: Int?, rows: Int?, cols: Int?) async throws -> Shell
+    func closeShell(id: Int) async throws
+
     // The tailnet: approved devices may list it too.
     func tailnetPeers(port: Int?) async throws -> TailnetPeers
 }

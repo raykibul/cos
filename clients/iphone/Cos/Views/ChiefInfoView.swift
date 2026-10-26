@@ -26,6 +26,7 @@ struct ChiefInfoView: View {
     @State private var tab: ChiefInfoTab
     @Environment(Navigator.self) private var navigator
     @Environment(\.dismiss) private var dismiss
+    @State private var error: String?
 
     init(session: HostSession, projectId: Int, tab: ChiefInfoTab = .workspaces) {
         self.session = session
@@ -83,12 +84,25 @@ struct ChiefInfoView: View {
             case .workspaces: workspaces(project)
             case .sessions: sessions()
             }
+
+            if session.shellsSupported, let project {
+                shells(project)
+            }
         }
         .pageBackground()
         .navigationTitle(project?.name ?? "Chief of Staff")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .refreshable { await session.refresh() }
+        .refreshable {
+            await session.refresh()
+            await session.loadShells()
+        }
+        .task { await session.loadShells() }
+        .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(error ?? "")
+        }
     }
 
     // MARK: Tabs
@@ -171,6 +185,37 @@ struct ChiefInfoView: View {
                     .sessionActions(session: session, agent: agent)
                 }
             }
+        }
+    }
+
+    /// The project's shells on the host (the Mac's Ctrl-J terminals
+    /// included), and New shell in its root.
+    @ViewBuilder
+    private func shells(_ project: Project) -> some View {
+        Section {
+            ForEach(session.shells(inProject: project.id)) { shell in
+                NavigationLink(value: Route.shell(id: shell.id)) {
+                    ShellRow(title: session.shellTitle(shell), shell: shell)
+                }
+                .swipeActions {
+                    Button("Close", systemImage: "xmark", role: .destructive) {
+                        Task {
+                            do {
+                                try await session.closeShell(id: shell.id)
+                            } catch {
+                                self.error = error.localizedDescription
+                            }
+                        }
+                    }
+                }
+            }
+            Button("New shell", systemImage: "plus") {
+                Task { error = await navigator.openShell(session: session, cwd: project.root, projectId: project.id) }
+            }
+        } header: {
+            Text("Shells on \(session.host.name)")
+        } footer: {
+            Text("Login shells in the project's folders, with its environment, as on the Mac's Ctrl-J. They keep running until you close them.")
         }
     }
 

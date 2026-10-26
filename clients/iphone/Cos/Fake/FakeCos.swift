@@ -14,6 +14,7 @@ import Foundation
 ///   chief, waiting on you) and 13 (yours, idle)
 /// - an approval waiting for you (agent 8)
 /// - porto (workspace 4) has uncommitted changes, so its folder can't go
+/// - a shell open in atlas's root (shell 1), as the Mac's Ctrl-J leaves one
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
 ///   saved, mini runs no cos, the iPhone itself, an offline iPad, and a
@@ -49,6 +50,9 @@ actor FakeCos: CosService {
     private var terminals: [Int: [UUID: AsyncThrowingStream<TerminalEvent, Error>.Continuation]] = [:]
     /// Keystrokes sent to each agent's terminal, for tests.
     private(set) var keys: [Int: [UInt8]] = [:]
+    private var shellList: [Shell] = []
+    /// Open shell terminal streams, by shell.
+    private var shellTerminals: [Int: [UUID: AsyncThrowingStream<TerminalEvent, Error>.Continuation]] = [:]
     private var nextId = 100
 
     /// Requests in order, as `METHOD path`, for tests.
@@ -74,6 +78,7 @@ actor FakeCos: CosService {
         transcripts = data.transcripts
         inboxes = data.inboxes
         notes = data.notes
+        shellList = data.shells
         for (projectId, seeded) in data.files {
             let folder = Self.staffFolder(projectId)
             files[folder] = seeded.map { file -> (attachment: Attachment, data: Data) in
@@ -575,6 +580,33 @@ actor FakeCos: CosService {
         return ProjectEnv(variables: own, global: ["CLAUDE_CONFIG_DIR": "~/.claude"])
     }
 
+    // MARK: Shells
+
+    func shells() async throws -> [Shell] {
+        try check("GET /v1/shells")
+        return shellList
+    }
+
+    func startShell(cwd: String, projectId: Int?, rows: Int?, cols: Int?) async throws -> Shell {
+        try check("POST /v1/shells")
+        guard cwd.hasPrefix("/") else { throw CosError.http(status: 400, message: "cwd must be an absolute path to a folder") }
+        if let projectId, !projectList.contains(where: { $0.id == projectId }) { throw CosError.notFound("unknown project \(projectId)") }
+        let shell = Shell(id: newId(), projectId: projectId, cwd: cwd, pid: 52_000 + nextId, startedMs: clock)
+        shellList.append(shell)
+        return shell
+    }
+
+    func closeShell(id: Int) async throws {
+        try check("DELETE /v1/shells/\(id)")
+        guard shellList.contains(where: { $0.id == id }) else { throw CosError.notFound("there is no such terminal") }
+        shellList.removeAll { $0.id == id }
+        for continuation in shellTerminals[id, default: [:]].values {
+            continuation.yield(.exit(code: nil))
+            continuation.finish()
+        }
+        shellTerminals[id] = nil
+    }
+
     // MARK: The tailnet
 
     func tailnetPeers(port: Int?) async throws -> TailnetPeers {
@@ -631,11 +663,64 @@ extension FakeCos: TerminalSource, TerminalControl {
         }
     }
 
+    private func followShell(_ shellId: Int, id: UUID, _ continuation: AsyncThrowingStream<TerminalEvent, Error>.Continuation) {
+        shellTerminals[shellId, default: [:]][id] = continuation
+    }
+
+    private func unfollowShell(_ shellId: Int, id: UUID) {
+        shellTerminals[shellId]?[id] = nil
+    }
+
+    private func shellPrompt(_ shellId: Int) throws -> TerminalEvent {
+        guard let shell = shellList.first(where: { $0.id == shellId }) else { throw CosError.notFound("there is no such terminal") }
+        let prompt = "Last login: today on ttys004\r\nme@\(hostName ?? "studio") \(shell.folderName) % "
+        return .snapshot(rows: 24, cols: 80, data: Array(prompt.utf8))
+    }
+
     private func follow(agentId: Int, id: UUID, _ continuation: AsyncThrowingStream<TerminalEvent, Error>.Continuation) {
         terminals[agentId, default: [:]][id] = continuation
     }
 
     private func unfollow(agentId: Int, id: UUID) {
         terminals[agentId]?[id] = nil
+    }
+}
+
+extension FakeCos: ShellTerminalSource {
+    /// A shell's prompt as a snapshot, then whatever is typed, echoed back.
+    nonisolated func shellTerminal(id shellId: Int) -> AsyncThrowingStream<TerminalEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let id = UUID()
+            let task = Task {
+                do {
+                    let prompt = try await self.shellPrompt(shellId)
+                    // Following first, so nothing typed after the prompt is lost.
+                    await self.followShell(shellId, id: id, continuation)
+                    continuation.yield(prompt)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task { await self.unfollowShell(shellId, id: id) }
+            }
+        }
+    }
+
+    func sendShellKeys(id: Int, _ bytes: [UInt8]) async throws {
+        try check("POST /v1/shells/\(id)/keys")
+        guard shellList.contains(where: { $0.id == id }) else { throw CosError.notFound("there is no such terminal") }
+        let echo = bytes.flatMap { $0 == 0x0D ? [0x0D, 0x0A] : [$0] }
+        for continuation in shellTerminals[id, default: [:]].values {
+            continuation.yield(.output(echo))
+        }
+    }
+
+    func resizeShell(id: Int, rows: Int, cols: Int) async throws {
+        try check("POST /v1/shells/\(id)/resize")
+        for continuation in shellTerminals[id, default: [:]].values {
+            continuation.yield(.resize(rows: rows, cols: cols))
+        }
     }
 }

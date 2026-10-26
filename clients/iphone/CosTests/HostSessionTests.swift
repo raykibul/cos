@@ -181,3 +181,52 @@ import Testing
         #expect(navigator.chiefs == [.chief(projectId: 1)])
     }
 }
+
+@MainActor
+@Suite struct ShellSessionTests {
+    @Test func listsOpensNamesAndClosesShells() async throws {
+        let session = await liveSession()
+        defer { session.stop() }
+        await session.loadShells()
+        #expect(session.shellsSupported)
+        #expect(session.shells(inProject: 1).map(\.id) == [1])
+        #expect(session.shellTitle(session.shells[0]) == "Shell 1")
+
+        let root = try await session.openShell(cwd: "/Users/me/code/atlas", projectId: 1)
+        #expect(session.shellTitle(root) == "Shell 2")
+        let lisbon = try #require(session.agent(id: 7))
+        let folder = try #require(session.folder(ofAgent: lisbon))
+        let there = try await session.openShell(cwd: folder, projectId: 1)
+        #expect(session.shellTitle(there) == "lisbon shell")
+        #expect(session.shells(inProject: 1).count == 3)
+
+        try await session.closeShell(id: root.id)
+        #expect(session.shells(inProject: 1).map(\.id) == [1, there.id])
+        // Closing one that's gone already is fine.
+        try await session.closeShell(id: root.id)
+
+        await #expect(throws: CosError.self) { try await session.openShell(cwd: "relative", projectId: nil) }
+    }
+
+    @Test func typingInAShellEchoesThroughItsTerminal() async throws {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let shell = try await session.openShell(cwd: "/Users/me/code/atlas", projectId: 1)
+        let plumbing = ShellTerminal(shells: fake)
+
+        var events: [TerminalEvent] = []
+        let stream = plumbing.terminal(agentId: shell.id)
+        var iterator = stream.makeAsyncIterator()
+        if let first = try await iterator.next() { events.append(first) }
+        try await plumbing.sendKeys(agentId: shell.id, Array("ls\r".utf8))
+        if let echo = try await iterator.next() { events.append(echo) }
+
+        guard case .snapshot(_, _, let prompt) = events.first else {
+            Issue.record("a shell starts with its prompt: \(events)")
+            return
+        }
+        #expect(String(decoding: prompt, as: UTF8.self).hasSuffix("atlas % "))
+        #expect(events.last == .output(Array("ls\r\n".utf8)))
+    }
+}

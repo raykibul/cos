@@ -16,6 +16,8 @@ enum Route: Hashable {
     case session(agentId: Int)
     /// An agent's live terminal, full screen: the chief's or a session's.
     case terminal(agentId: Int)
+    /// A login shell on the host, full screen.
+    case shell(id: Int)
 }
 
 enum AppTab: Hashable {
@@ -60,6 +62,7 @@ final class Navigator {
         case "chief-memory": tab = .chiefs; chiefs = [.chief(projectId: 1), .chiefMemory(projectId: 1)]
         case "terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 7)]
         case "chief-terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 40)]
+        case "shell": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .shell(id: 1)]
         case "workspace": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .workspace(id: 5)]
         case "agent": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 7)]
         case "session": tab = .chiefs; chiefs = [.chief(projectId: 1), .session(agentId: 7)]
@@ -140,6 +143,7 @@ struct RouteView: View {
             case .agent(let id): AgentView(session: session, agentId: id)
             case .session(let agentId): SessionChatView(session: session, agentId: agentId)
             case .terminal(let agentId): TerminalScreen(session: session, agentId: agentId)
+            case .shell(let id): ShellScreen(session: session, shellId: id)
             }
         }
     }

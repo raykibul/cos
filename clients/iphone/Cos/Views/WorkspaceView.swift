@@ -8,6 +8,7 @@ struct WorkspaceView: View {
     var session: HostSession
     var workspaceId: Int
     @Environment(Navigator.self) private var navigator
+    @State private var error: String?
 
     var body: some View {
         let workspace = session.workspace(id: workspaceId)
@@ -51,6 +52,20 @@ struct WorkspaceView: View {
         .pageBackground()
         .refreshable { await session.refresh() }
         .navigationTitle(workspace?.displayName ?? "Workspace")
+        .toolbar {
+            if session.shellsSupported, let workspace {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New shell", systemImage: "apple.terminal") {
+                        Task { error = await navigator.openShell(session: session, cwd: workspace.path, projectId: workspace.projectId) }
+                    }
+                }
+            }
+        }
+        .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(error ?? "")
+        }
     }
 }
 

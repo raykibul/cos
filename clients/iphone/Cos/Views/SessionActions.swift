@@ -3,7 +3,8 @@ import SwiftUI
 
 extension View {
     /// A session row's long-press menu (Chat, Terminal, Details, New
-    /// session in its folder, Remove session…) and the sheets it opens.
+    /// session and New shell in its folder, Remove session…) and the
+    /// sheets it opens.
     func sessionActions(session: HostSession, agent: Agent) -> some View {
         modifier(SessionActions(session: session, agent: agent))
     }
@@ -14,6 +15,7 @@ private struct SessionActions: ViewModifier {
     var agent: Agent
     @State private var starting = false
     @State private var removing = false
+    @State private var error: String?
     @Environment(Navigator.self) private var navigator
 
     func body(content: Content) -> some View {
@@ -23,22 +25,33 @@ private struct SessionActions: ViewModifier {
                 Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
                 Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                 Divider()
-                SessionFolderActions(session: session, agent: agent, starting: $starting, removing: $removing)
+                SessionFolderActions(session: session, agent: agent, starting: $starting, removing: $removing) {
+                    Task { error = await navigator.openShell(session: session, cwd: session.folder(ofAgent: agent), projectId: session.projectId(ofAgent: agent.id)) }
+                }
             }
             .sessionSheets(session: session, agent: agent, starting: $starting, removing: $removing)
+            .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(error ?? "")
+            }
     }
 }
 
-/// New session in its folder, and Remove session…, for a menu.
+/// New session and New shell in its folder, and Remove session…, for a menu.
 struct SessionFolderActions: View {
     var session: HostSession
     var agent: Agent
     @Binding var starting: Bool
     @Binding var removing: Bool
+    var openShell: () -> Void
 
     var body: some View {
         if agent.workspaceId != nil, agent.role != .staff {
             Button("New session in \(session.workspaceName(agent.workspaceId))", systemImage: "plus.bubble") { starting = true }
+            if session.shellsSupported {
+                Button("New shell in \(session.workspaceName(agent.workspaceId))", systemImage: "apple.terminal") { openShell() }
+            }
             Button("Remove session…", systemImage: "trash", role: .destructive) { removing = true }
         }
     }

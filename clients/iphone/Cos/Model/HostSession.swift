@@ -40,6 +40,10 @@ final class HostSession {
     private(set) var approvals: [Approval] = []
     /// Each project's Chief of Staff, by project id.
     private(set) var staffs: [Int: Staff] = [:]
+    /// The daemon's shells as last listed (`loadShells`): they log no events.
+    private(set) var shells: [Shell] = []
+    /// `false` on a daemon without shells.
+    private(set) var shellsSupported = true
 
     /// Bumped per agent when its transcript grows (`agent.transcript`), so
     /// a chat on screen reads what's new.
@@ -386,6 +390,63 @@ final class HostSession {
             agents.removeAll { $0.id == agent.id }
         }
         request(.agents)
+    }
+
+    // MARK: Shells
+
+    /// Lists the daemon's shells, the ones the Mac opened included.
+    func loadShells() async {
+        do {
+            shells = try await service.shells()
+            shellsSupported = true
+        } catch CosError.notFound {
+            shellsSupported = false
+        } catch {
+            // The follower shows connection trouble; keep the last list.
+        }
+    }
+
+    /// Opens a login shell on the host in `cwd`, with `projectId`'s
+    /// environment, as the daemon's user.
+    func openShell(cwd: String, projectId: Int?) async throws -> Shell {
+        do {
+            let shell = try await service.startShell(cwd: cwd, projectId: projectId, rows: nil, cols: nil)
+            shells.append(shell)
+            return shell
+        } catch let error as CosError where error.code == .hostOnly {
+            throw CosError.http(status: 403, message: "The cos on \(host.name) is too old to open shells from this iPhone. Run `cos upgrade` there.")
+        }
+    }
+
+    /// Ends a shell (killing it if it still runs) and forgets it.
+    func closeShell(id: Int) async throws {
+        do {
+            try await service.closeShell(id: id)
+        } catch CosError.notFound {
+            // Gone already.
+        }
+        shells.removeAll { $0.id == id }
+    }
+
+    /// A project's shells, oldest first.
+    func shells(inProject id: Int) -> [Shell] {
+        shells.filter { $0.projectId == id }.sorted { $0.id < $1.id }
+    }
+
+    /// "Shell 2" in its project's root, numbered by start, else "lisbon shell".
+    func shellTitle(_ shell: Shell) -> String {
+        if let projectId = shell.projectId, let root = project(id: projectId)?.root, root == shell.cwd {
+            let inRoot = shells(inProject: projectId).filter { $0.cwd == root }
+            let number = (inRoot.firstIndex { $0.id == shell.id } ?? inRoot.count) + 1
+            return "Shell \(number)"
+        }
+        return "\(shell.folderName) shell"
+    }
+
+    /// The folder an agent works in: its own `cwd` (a chief's worktree),
+    /// else its workspace's.
+    func folder(ofAgent agent: Agent) -> String? {
+        agent.cwd ?? workspace(id: agent.workspaceId)?.path
     }
 
     /// After a Chief of Staff action, its record changes.
