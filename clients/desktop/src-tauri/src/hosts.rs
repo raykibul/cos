@@ -23,6 +23,10 @@ pub(crate) struct Host {
     pub name: String,
     /// `host:port` over Tailscale; null for this Mac.
     pub address: Option<String>,
+    /// The ports forwarded from it, started again when it's selected. Left
+    /// out when there are none, so older apps read the file as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forwards: Vec<u16>,
 }
 
 impl Host {
@@ -32,6 +36,7 @@ impl Host {
             id: THIS_MAC.to_owned(),
             name: name.unwrap_or(THIS_MAC_NAME).to_owned(),
             address: None,
+            forwards: Vec::new(),
         }
     }
 
@@ -89,10 +94,14 @@ impl Hosts {
             if host.id == THIS_MAC || name.is_empty() || hosts.iter().any(|h| h.id == host.id) {
                 continue;
             }
+            let mut forwards: Vec<u16> = host.forwards.into_iter().filter(|port| *port != 0).collect();
+            forwards.sort_unstable();
+            forwards.dedup();
             hosts.push(Host {
                 id: host.id,
                 name: name.to_owned(),
                 address: Some(address),
+                forwards,
             });
         }
         let current = saved
@@ -157,6 +166,7 @@ impl Hosts {
             id: format!("h{next}"),
             name: name.to_owned(),
             address: Some(address),
+            forwards: Vec::new(),
         };
         self.change(|hosts| hosts.saved.push(host.clone()))?;
         Ok(host)
@@ -223,6 +233,21 @@ impl Hosts {
             }
         })?;
         Ok(was_current)
+    }
+
+    /// Saves the ports forwarded from host `id`. This Mac has none.
+    pub(crate) fn set_forwards(&mut self, id: &str, ports: Vec<u16>) -> Result<(), BridgeError> {
+        if id == THIS_MAC {
+            return Ok(());
+        }
+        if self.find(id).is_none() {
+            return Err(BridgeError::bad_request(format!("no saved host {id}")));
+        }
+        self.change(|hosts| {
+            if let Some(host) = hosts.saved.iter_mut().find(|h| h.id == id) {
+                host.forwards = ports;
+            }
+        })
     }
 
     /// Makes `id` the host in use, and remembers it for the next launch.
@@ -323,7 +348,8 @@ pub(crate) mod tests {
             Host {
                 id: "h1".into(),
                 name: "Studio".into(),
-                address: Some("studio:7700".into())
+                address: Some("studio:7700".into()),
+                forwards: Vec::new(),
             }
         );
         let mini = hosts.add("Mini", "fd7a:115c:a1e0::5").unwrap();
@@ -476,6 +502,45 @@ pub(crate) mod tests {
             ["local", "h1"]
         );
         assert_eq!(list.hosts[1].address.as_deref(), Some("studio:7700"));
+    }
+
+    #[test]
+    fn forwards_are_saved_per_host_and_old_files_load() {
+        let scratch = Scratch::new();
+        let mut hosts = Hosts::load(Some(scratch.file()));
+        hosts.add("Studio", "studio").unwrap();
+        hosts.set_forwards("h1", vec![3343, 5173]).unwrap();
+        hosts.set_forwards(THIS_MAC, vec![80]).unwrap();
+        assert_eq!(
+            hosts.set_forwards("h9", vec![1]).unwrap_err().kind,
+            ErrorKind::BadRequest
+        );
+
+        let again = Hosts::load(Some(scratch.file()));
+        assert_eq!(again.list().hosts[1].forwards, [3343, 5173]);
+        assert!(again.list().hosts[0].forwards.is_empty());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(scratch.file()).unwrap()).unwrap();
+        assert_eq!(saved["hosts"][0]["forwards"], serde_json::json!([3343, 5173]));
+
+        // A file from before forwards, and junk in the list.
+        std::fs::write(
+            scratch.file(),
+            serde_json::json!({"hosts": [
+                {"id": "h1", "name": "Studio", "address": "studio"},
+                {"id": "h2", "name": "Mini", "address": "mini", "forwards": [8080, 0, 8080, 3000]}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let list = Hosts::load(Some(scratch.file())).list();
+        assert!(list.hosts[1].forwards.is_empty());
+        assert_eq!(list.hosts[2].forwards, [3000, 8080]);
+        // No forwards: the field is left out, as older apps wrote it.
+        assert_eq!(
+            serde_json::to_value(&list.hosts[1]).unwrap(),
+            serde_json::json!({"id": "h1", "name": "Studio", "address": "studio:7700"})
+        );
     }
 
     #[test]
