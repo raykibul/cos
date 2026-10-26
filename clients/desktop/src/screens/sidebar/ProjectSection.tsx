@@ -4,6 +4,7 @@
 // folder sit together, joined by a bracket in that folder's colour.
 
 import {
+  FolderX,
   GitBranch,
   LayoutGrid,
   MoreHorizontal,
@@ -241,6 +242,19 @@ function SessionRow({
       disabled: !canChange,
       onSelect: () => ui.open({ kind: "removeAgent", agentId: agent.id }),
     },
+    // Alone in its folder, Remove session already deletes the folder.
+    ...(others.length > 0
+      ? [
+          {
+            label: `Remove ${name}…`,
+            icon: FolderX,
+            danger: true,
+            detail: `The folder and its ${others.length + 1} sessions`,
+            disabled: !canChange,
+            onSelect: () => ui.open({ kind: "removeWorkspace", workspaceId: group.workspace.id }),
+          } satisfies MenuItem,
+        ]
+      : []),
   ];
   return (
     <li role="none">

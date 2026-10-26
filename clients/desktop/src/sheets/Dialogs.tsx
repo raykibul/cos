@@ -334,31 +334,61 @@ function RenameWorkspace({ workspaceId }: { workspaceId: number }) {
   );
 }
 
+/**
+ * Removes a workspace: its folder (unless it has uncommitted changes) and
+ * every session in it. Running sessions are stopped first.
+ */
 function RemoveWorkspace({ workspaceId }: { workspaceId: number }) {
   const { cos, ui } = useApp();
   const workspace = useCos((s) => workspaceOf(s, workspaceId));
+  const agents = useCos((s) => s.agents);
   const { busy, error, run, close } = useAction();
   if (!workspace) return null;
+  const sessions = agents.filter((a) => a.workspaceId === workspace.id);
+  const running = sessions.filter((a) => isAlive(a.state));
+
+  const remove = async () => {
+    for (const agent of running) await cos.stopAgent(agent.id);
+    for (const agent of running) await cos.untilStopped(agent.id);
+    await cos.removeWorkspace(workspace);
+    // Its tabs go: the folder's, its sessions' and its terminals'.
+    const gone = (page: Page) =>
+      (page.kind === "workspace" && page.id === workspace.id) ||
+      (page.kind === "agent" && sessions.some((a) => a.id === page.id)) ||
+      (page.kind === "shell" && isUnder(page.cwd, workspace.path));
+    const page = ui.store.getState().page;
+    if (gone(page)) ui.navigate({ kind: "project", id: workspace.projectId });
+    for (const tab of ui.store.getState().tabs.filter(gone)) ui.closeTab(tab);
+  };
+
   return (
     <Dialog
       width="sm"
       title={`Remove ${workspaceName(workspace)}?`}
       description={
         <>
+          {sessions.length > 0 ? (
+            <>
+              Its {sessions.length === 1 ? "session goes" : `${sessions.length} sessions go`} with
+              it: {sessions.map((a) => a.title).join(", ")}.
+              {running.length > 0 ? " Running ones stop first." : null}{" "}
+            </>
+          ) : null}
           The folder is deleted only if it has no uncommitted changes. The branch{" "}
           <code className="font-mono text-[12.5px]">{workspace.branch}</code> is kept, so no commit
           is lost.
         </>
       }
       onClose={close}
-      onSubmit={() =>
-        run(async () => {
-          await cos.removeWorkspace(workspace);
-          ui.navigate({ kind: "project", id: workspace.projectId });
-          ui.closeTab({ kind: "workspace", id: workspace.id });
-        })
+      onSubmit={() => run(remove)}
+      footer={
+        <Footer
+          busy={busy}
+          label={running.length > 0 ? "Stop and remove" : "Remove"}
+          danger
+          onCancel={close}
+        />
       }
-      footer={<Footer busy={busy} label="Remove" danger onCancel={close} />}
     >
       <ErrorText>{error}</ErrorText>
     </Dialog>
