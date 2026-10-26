@@ -183,6 +183,8 @@ export function Conversation({
                     chiefId={speaker === chief ? agentId : null}
                   />
                 );
+              case "output":
+                return <ShellOutput key={item.key} message={item.message} />;
               case "update":
                 return (
                   <UpdateRow
@@ -236,6 +238,47 @@ function UserBubble({
         </div>
       ) : null}
       {children ? <div className="mt-1 px-1 text-[11px] text-ink-3">{children}</div> : null}
+    </div>
+  );
+}
+
+/** How many lines of a `!` command's output show before "Show all". */
+const OUTPUT_LINES = 8;
+
+/** What a `!` command you ran printed, under your bubble. */
+function ShellOutput({ message }: { message: TranscriptMessage }) {
+  const [all, setAll] = useState(false);
+  const tool = message.tool;
+  const output = tool?.output ?? "";
+  const lines = output.split("\n");
+  const cut = !all && lines.length > OUTPUT_LINES;
+  return (
+    <div className="mt-1.5 flex flex-col items-end" aria-label="Command output">
+      <div
+        className={cx(
+          "max-w-[82%] min-w-0 overflow-x-auto rounded-xl border border-line bg-subtle/70 px-3 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre text-ink-2 select-text",
+          tool?.isError && "text-tone-red",
+        )}
+      >
+        {output ? (
+          cut ? (
+            lines.slice(0, OUTPUT_LINES).join("\n")
+          ) : (
+            output
+          )
+        ) : (
+          <span className="text-ink-3 italic">no output</span>
+        )}
+      </div>
+      {lines.length > OUTPUT_LINES ? (
+        <button
+          type="button"
+          onClick={() => setAll((value) => !value)}
+          className="mt-0.5 rounded px-1 text-[11px] text-ink-3 hover:bg-subtle hover:text-ink"
+        >
+          {all ? "Show less" : `Show all ${lines.length} lines`}
+        </button>
+      ) : null}
     </div>
   );
 }

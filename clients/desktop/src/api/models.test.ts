@@ -165,6 +165,7 @@ describe("staff decoding", () => {
       summary: "npm test",
       isError: false,
       agentId: null,
+      output: null,
     });
     expect(transcript.messages[3]!.kind).toBe("thinking_v2");
     expect(transcript.next).toBe(4);

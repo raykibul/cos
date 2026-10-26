@@ -3,7 +3,7 @@
 // transcript caught up to, and grouping messages into what the page shows.
 
 import type { SentAttachment } from "../api/attachments";
-import type { InboxItem, TranscriptMessage } from "../api/staff";
+import { type InboxItem, SHELL_OUTPUT, type TranscriptMessage } from "../api/staff";
 
 /** Adds a page of messages, dropping ones already there (by `n`), oldest first. */
 export function mergeMessages(
@@ -87,7 +87,9 @@ export type ConversationItem =
   | { type: "user"; key: string; message: TranscriptMessage; fromChief?: boolean }
   | { type: "turn"; key: string; messages: TranscriptMessage[]; tsMs: number }
   | { type: "update"; key: string; message: TranscriptMessage; count: number; sinceMs: number }
-  | { type: "pending"; key: string; pending: PendingMessage };
+  | { type: "pending"; key: string; pending: PendingMessage }
+  /** What a `!` command you ran printed, under it. */
+  | { type: "output"; key: string; message: TranscriptMessage };
 
 /** The line cos appends to the first prompt of an agent the chief starts (`spawned_line` in the daemon). */
 const SPAWNED_LINE = /\s*\[cos\] The Chief of Staff of .+? started you\.[\s\S]*$/;
@@ -121,6 +123,9 @@ export function conversationItems(
         sinceMs: lastUpdateMs,
       });
       lastUpdateMs = message.tsMs;
+    } else if (message.role === "user" && message.tool?.name === SHELL_OUTPUT) {
+      turn = null;
+      items.push({ type: "output", key: `o${message.n}`, message });
     } else if (message.role === "user") {
       // A tool result Claude logs as a user turn has no text; skip it.
       if (message.kind !== "text" || !message.text.trim()) continue;
@@ -188,10 +193,10 @@ export function toolTitle(name: string): string {
   return name;
 }
 
-/** Whether a tool is one of cos's own, which the chief uses to coordinate. */
 /** cos's `agent_spawn`: the chief started a session. */
 export const SPAWN_TOOL = "mcp__cos__agent_spawn";
 
+/** Whether a tool is one of cos's own, which the chief uses to coordinate. */
 export function isCosTool(name: string): boolean {
   return name.startsWith("mcp__cos__");
 }

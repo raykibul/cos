@@ -243,6 +243,60 @@ fn a_message_read_mid_turn_shows_as_yours() {
     assert_eq!(transcript.messages[2].ts_ms, 1_792_939_080_000);
 }
 
+#[test]
+fn a_shell_command_you_ran_shows_as_typed_with_its_output_in_one_row() {
+    let lines = [
+        user_line("<bash-input>git push origin a -> b</bash-input>"),
+        user_line(
+            "<bash-stdout>To https://github.com/x/y.git\n + 6599...6194 a -&gt; b (forced update)</bash-stdout><bash-stderr></bash-stderr>",
+        ),
+        user_line("<bash-input>false</bash-input>"),
+        user_line("<bash-stdout></bash-stdout><bash-stderr>fatal: &#x27;x&#x27; isn&#x27;t a repo</bash-stderr>"),
+        user_line("<bash-input>true</bash-input>"),
+        user_line("<bash-stdout></bash-stdout><bash-stderr></bash-stderr>"),
+    ]
+    .concat();
+    let transcript = parse(lines.as_bytes());
+    assert_eq!(
+        texts(&transcript),
+        vec![
+            (
+                Speaker::User,
+                MessageKind::Text,
+                "! git push origin a -> b".to_owned()
+            ),
+            (
+                Speaker::User,
+                MessageKind::Tool,
+                "shell_output: To https://github.com/x/y.git…".to_owned()
+            ),
+            (Speaker::User, MessageKind::Text, "! false".to_owned()),
+            (
+                Speaker::User,
+                MessageKind::Tool,
+                "shell_output: fatal: 'x' isn't a repo (error)".to_owned()
+            ),
+            (Speaker::User, MessageKind::Text, "! true".to_owned()),
+            (
+                Speaker::User,
+                MessageKind::Tool,
+                "shell_output: (no output)".to_owned()
+            ),
+        ]
+    );
+    let output = transcript.messages[1]
+        .tool
+        .as_ref()
+        .and_then(|tool| tool.output.as_deref());
+    assert_eq!(
+        output,
+        Some("To https://github.com/x/y.git\n + 6599...6194 a -> b (forced update)")
+    );
+    assert_eq!(transcript.messages[5].tool.as_ref().unwrap().output, None);
+    // Every row is final: nothing waits for a result.
+    assert_eq!(transcript.next, 6);
+}
+
 fn user_line(text: &str) -> String {
     serde_json::json!({"type": "user", "message": {"role": "user", "content": text}}).to_string() + "\n"
 }

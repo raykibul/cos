@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { InboxItem, TranscriptMessage } from "../api/staff";
+import {
+  type InboxItem,
+  SHELL_OUTPUT,
+  type TranscriptMessage,
+  decodeTranscript,
+} from "../api/staff";
 import {
   type PendingMessage,
   conversationItems,
@@ -34,7 +39,7 @@ const tool = (n: number, name: string, summary = ""): TranscriptMessage => ({
   role: "assistant",
   kind: "tool",
   text: "",
-  tool: { name, summary, isError: false, agentId: null },
+  tool: { name, summary, isError: false, agentId: null, output: null },
   tsMs: n * 1000,
   attachments: [],
 });
@@ -145,5 +150,47 @@ describe("conversation rows", () => {
     expect(toolTitle("mcp__cos__agent_spawn")).toBe("Started an agent");
     expect(toolTitle("mcp__cos__something_new")).toBe("something new");
     expect(toolTitle("Bash")).toBe("Bash");
+  });
+});
+
+describe("commands you ran in Claude's shell mode", () => {
+  const raw = (n: number, text: string) => ({ n, role: "user", kind: "text", text, ts_ms: n });
+
+  it("reads an older daemon's <bash-input> as you typed it, and its output as one row", () => {
+    const { messages } = decodeTranscript({
+      messages: [
+        raw(1, "<bash-input>git push origin a -> b</bash-input>"),
+        raw(
+          2,
+          "<bash-stdout>To github.com\n + 1...2 a -&gt; b (forced update)</bash-stdout><bash-stderr></bash-stderr>",
+        ),
+        raw(3, "<bash-stdout></bash-stdout><bash-stderr>fatal: nope</bash-stderr>"),
+      ],
+      next: 3,
+    });
+    expect(messages[0]).toMatchObject({ kind: "text", text: "! git push origin a -> b" });
+    expect(messages[1]).toMatchObject({
+      kind: "tool",
+      tool: {
+        name: SHELL_OUTPUT,
+        summary: "To github.com",
+        output: "To github.com\n + 1...2 a -> b (forced update)",
+        isError: false,
+      },
+    });
+    expect(messages[2]!.tool).toMatchObject({ output: "fatal: nope", isError: true });
+    const items = conversationItems(messages);
+    expect(items.map((item) => item.type)).toEqual(["user", "output", "output"]);
+  });
+
+  it("settles what you sent with ! once the transcript has it, so it shows once", () => {
+    const pending: PendingMessage[] = [
+      { id: 1, text: "! git push origin a", sentMs: 0, afterN: 0, state: "sent" },
+    ];
+    const { messages } = decodeTranscript({
+      messages: [raw(1, "<bash-input>git push origin a</bash-input>")],
+      next: 1,
+    });
+    expect(reconcilePending(pending, messages)).toEqual([]);
   });
 });

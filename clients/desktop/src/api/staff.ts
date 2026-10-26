@@ -138,7 +138,12 @@ export interface ToolCall {
    * `agent_stop` were given. Null from older daemons.
    */
   agentId: number | null;
+  /** What a `!` command printed ([`SHELL_OUTPUT`]); null for other tools. */
+  output: string | null;
 }
+
+/** The row for what a `!` command you ran in Claude's shell mode printed. */
+export const SHELL_OUTPUT = "shell_output";
 
 export interface TranscriptMessage {
   /** Its position in the transcript; `after=n` asks for what follows. */
@@ -167,14 +172,63 @@ function decodeTool(value: unknown): ToolCall | null {
     summary: str(value.summary),
     isError: bool(value.is_error, false),
     agentId: optNum(value.agent_id),
+    output: optStr(value.output),
+  };
+}
+
+/** Claude escapes a `!` command and its output as HTML. */
+function unescapeHtml(text: string): string {
+  return text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+function tagBody(text: string, tag: string): string | null {
+  const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text);
+  return match ? match[1]! : null;
+}
+
+/**
+ * A daemon from before cos read Claude's shell mode sends a `!` command as
+ * `<bash-input>…</bash-input>` and its output as `<bash-stdout>…`: read them
+ * as the daemon now does, as you typed it and as an output row.
+ */
+function shellMode(text: string): { text: string; tool: ToolCall | null } | null {
+  const trimmed = text.trim();
+  const input = tagBody(trimmed, "bash-input");
+  if (input !== null && trimmed.startsWith("<bash-input>")) {
+    return { text: `! ${unescapeHtml(input.trim())}`, tool: null };
+  }
+  if (!trimmed.startsWith("<bash-stdout>") && !trimmed.startsWith("<bash-stderr>")) return null;
+  const stdout = unescapeHtml(tagBody(trimmed, "bash-stdout") ?? "").trim();
+  const stderr = unescapeHtml(tagBody(trimmed, "bash-stderr") ?? "").trim();
+  const output = [stdout, stderr].filter(Boolean).join("\n");
+  return {
+    text: "",
+    tool: {
+      name: SHELL_OUTPUT,
+      summary: output.split("\n")[0] || "(no output)",
+      isError: !stdout && !!stderr,
+      agentId: null,
+      output: output || null,
+    },
   };
 }
 
 export function decodeMessage(value: unknown): TranscriptMessage {
   const o = asObject(value, "message");
-  const tool = decodeTool(o.tool);
-  const text = str(o.text);
-  let kind = str(o.kind) || (tool ? "tool" : "text");
+  let tool = decodeTool(o.tool);
+  let text = str(o.text);
+  const shell = str(o.role) === "user" ? shellMode(text) : null;
+  if (shell) {
+    text = shell.text;
+    if (shell.tool) tool = shell.tool;
+  }
+  let kind = shell?.tool ? "tool" : str(o.kind) || (tool ? "tool" : "text");
   // A wakeup the daemon didn't tag still reads as one.
   if (kind === "text" && str(o.role) === "user" && text.startsWith("[cos ·")) kind = "update";
   return {
