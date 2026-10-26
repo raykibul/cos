@@ -23,6 +23,11 @@ public protocol CosService: EventSource {
     func trustAgent(id: Int) async throws
     func stopAgent(id: Int) async throws
     func resumeAgent(id: Int) async throws -> Agent
+    /// Forgets an exited agent; `.conflict` while it runs.
+    func removeAgent(id: Int) async throws
+    /// Deletes a workspace's folder (keeping its branch) and forgets its
+    /// exited agents; `.conflict` with uncommitted changes or a running agent.
+    func removeWorkspace(id: Int) async throws
     func screen(agentId: Int) async throws -> AgentScreen
     func approvals(state: ApprovalState?) async throws -> [Approval]
     func decide(approvalId: Int, _ decision: ApprovalDecision, message: String?) async throws -> Approval

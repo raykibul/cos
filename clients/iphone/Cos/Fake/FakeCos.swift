@@ -13,6 +13,7 @@ import Foundation
 /// - transcripts for the sessions 7 (from the chief, working), 8 (from the
 ///   chief, waiting on you) and 13 (yours, idle)
 /// - an approval waiting for you (agent 8)
+/// - porto (workspace 4) has uncommitted changes, so its folder can't go
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
 ///   saved, mini runs no cos, the iPhone itself, an offline iPad, and a
@@ -289,6 +290,34 @@ actor FakeCos: CosService {
         setState(id, .idle)
         return agentList[index]
     }
+
+    func removeAgent(id: Int) async throws {
+        try check("DELETE /v1/agents/\(id)")
+        guard let agent = agentList.first(where: { $0.id == id }) else { throw CosError.notFound("unknown agent \(id)") }
+        guard !agent.state.isAlive else { throw CosError.conflict("agent \(id) is still running; stop it first") }
+        agentList.removeAll { $0.id == id }
+        transcripts[id] = nil
+        emit("agent.removed", ["agent_id": .number(Double(id))])
+    }
+
+    func removeWorkspace(id: Int) async throws {
+        try check("DELETE /v1/workspaces/\(id)")
+        guard let index = projectList.firstIndex(where: { $0.workspaces.contains { $0.id == id } }),
+            let workspace = projectList[index].workspaces.first(where: { $0.id == id })
+        else { throw CosError.notFound("unknown workspace \(id)") }
+        if agentList.contains(where: { $0.workspaceId == id && $0.state.isAlive }) {
+            throw CosError.conflict("an agent is running in \(workspace.displayName); stop it first")
+        }
+        if Self.uncommitted.contains(id) {
+            throw CosError.conflict("\(workspace.displayName) has uncommitted changes. Commit or discard them first.")
+        }
+        projectList[index].workspaces.removeAll { $0.id == id }
+        agentList.removeAll { $0.workspaceId == id }
+        emit("workspace.removed", ["workspace_id": .number(Double(id)), "project_id": .number(Double(projectList[index].id))])
+    }
+
+    /// Workspaces whose folder has uncommitted changes: porto.
+    static let uncommitted: Set<Int> = [4]
 
     func screen(agentId: Int) async throws -> AgentScreen {
         try check("GET /v1/agents/\(agentId)/screen")

@@ -2,7 +2,8 @@ import CosKit
 import SwiftUI
 
 /// A workspace: its branch and its agents (state and last message). An
-/// agent opens its chat; swipe it for its terminal or details.
+/// agent opens its chat; swipe it for its terminal or details, or
+/// long-press it to start another session here or remove it.
 struct WorkspaceView: View {
     var session: HostSession
     var workspaceId: Int
@@ -43,6 +44,7 @@ struct WorkspaceView: View {
                         Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
                             .tint(Palette.blue)
                     }
+                    .sessionActions(session: session, agent: agent)
                 }
             }
         }

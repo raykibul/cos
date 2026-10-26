@@ -38,6 +38,18 @@ final class Navigator {
         chiefs.append(route)
     }
 
+    /// Drops the screens of a session that was removed, and of its
+    /// workspace when that went too.
+    func forget(agentId: Int, workspaceId: Int?) {
+        chiefs.removeAll { route in
+            switch route {
+            case .session(let id), .terminal(let id), .agent(let id): id == agentId
+            case .workspace(let id): id == workspaceId
+            default: false
+            }
+        }
+    }
+
     /// `-screen <name>`: the screen a screenshot wants, with the fake data's ids.
     func apply(screen: String?) {
         switch screen {

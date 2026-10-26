@@ -16,6 +16,8 @@ struct SessionChatView: View {
     @Environment(Navigator.self) private var navigator
     @Environment(\.scenePhase) private var scenePhase
     @State private var confirmStop = false
+    @State private var starting = false
+    @State private var removing = false
     @State private var error: String?
 
     init(session: HostSession, agentId: Int) {
@@ -110,6 +112,9 @@ struct SessionChatView: View {
         } message: {
             Text(error ?? "")
         }
+        .background {
+            if let agent { Color.clear.sessionSheets(session: session, agent: agent, starting: $starting, removing: $removing) }
+        }
         .task { await chat.load() }
         .task { await chat.keepInSync() }
         .onChange(of: chat.agent?.state) { old, new in
@@ -137,6 +142,8 @@ struct SessionChatView: View {
                 Button("Chat with the chief", systemImage: "bubble.left") { navigator.open(.chief(projectId: projectId)) }
             }
             if let agent {
+                Divider()
+                SessionFolderActions(session: session, agent: agent, starting: $starting, removing: $removing)
                 if agent.state.canResume {
                     Divider()
                     Button("Resume", systemImage: "play.circle") { perform { try await session.resume(agentId: agentId) } }

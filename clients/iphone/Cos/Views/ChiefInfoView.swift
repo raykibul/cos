@@ -18,7 +18,8 @@ enum ChiefInfoTab: String, Hashable, CaseIterable, Identifiable, Sendable {
 /// A chief's info page, as a chat app shows a contact's: its project, quick
 /// actions, and everything under it: each workspace with its sessions, and
 /// all sessions. A session opens its chat; swipe it for its terminal or
-/// details. Reached from the chat's ⋯ menu or its title.
+/// details, or long-press it for those and New session in its folder and
+/// Remove session. Reached from the chat's ⋯ menu or its title.
 struct ChiefInfoView: View {
     var session: HostSession
     var projectId: Int
@@ -119,6 +120,7 @@ struct ChiefInfoView: View {
                         Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
                             .tint(Palette.blue)
                     }
+                    .sessionActions(session: session, agent: agent)
                 }
             }
         }
@@ -150,6 +152,7 @@ struct ChiefInfoView: View {
                         Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
                             .tint(Palette.blue)
                     }
+                    .sessionActions(session: session, agent: agent)
                 }
             }
         }
@@ -165,6 +168,7 @@ struct ChiefInfoView: View {
                         Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
                             .tint(Palette.blue)
                     }
+                    .sessionActions(session: session, agent: agent)
                 }
             }
         }

@@ -342,6 +342,52 @@ final class HostSession {
         request(.agents)
     }
 
+    /// Starts a session in a workspace's folder, beside the ones there.
+    func startSession(workspaceId: Int, prompt: String) async throws -> Agent {
+        let agent = try await service.createAgent(workspaceId: workspaceId, NewAgent(prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines)))
+        upsert(agent)
+        request(.agents)
+        return agent
+    }
+
+    /// The other sessions in `agent`'s folder, whatever their state.
+    func sessionsSharingFolder(with agent: Agent) -> [Agent] {
+        guard let workspaceId = agent.workspaceId else { return [] }
+        return agents(inWorkspace: workspaceId).filter { $0.id != agent.id }
+    }
+
+    /// Removes a session, as the desktop does: a running one is stopped
+    /// first (waiting up to `timeout` for it to exit), then its folder goes
+    /// too when `withFolder` (which forgets the agent and keeps the branch),
+    /// else just the session. A folder with uncommitted changes stays, with
+    /// the daemon's 409.
+    func removeSession(_ agent: Agent, withFolder: Bool, timeout: Duration = .seconds(15)) async throws {
+        if self.agent(id: agent.id)?.state.isAlive ?? agent.state.isAlive {
+            try await service.stopAgent(id: agent.id)
+            let deadline = ContinuousClock.now + timeout
+            while true {
+                let current = try await service.agent(id: agent.id)
+                if !current.state.isAlive {
+                    upsert(current)
+                    break
+                }
+                if ContinuousClock.now >= deadline {
+                    throw CosError.conflict("\(agent.title) didn't stop in time. Try again in a moment.")
+                }
+                try await Task.sleep(for: .milliseconds(300))
+            }
+        }
+        if withFolder, let workspaceId = agent.workspaceId {
+            try await service.removeWorkspace(id: workspaceId)
+            agents.removeAll { $0.workspaceId == workspaceId }
+            request(.projects)
+        } else {
+            try await service.removeAgent(id: agent.id)
+            agents.removeAll { $0.id == agent.id }
+        }
+        request(.agents)
+    }
+
     /// After a Chief of Staff action, its record changes.
     func refreshStaff() {
         request(.staffs)
