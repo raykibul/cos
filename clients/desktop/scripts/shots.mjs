@@ -57,6 +57,16 @@ const shots = [
     (page) => page.getByRole("list", { name: "Files sent" }).scrollIntoViewIfNeeded(),
   ],
   ["chief-empty", "page=chief:2"],
+  [
+    "chief-memory",
+    "page=chiefMemory:1",
+    (page) => page.getByRole("button", { name: "Show user-preferences" }).click(),
+  ],
+  [
+    "chief-memory-note",
+    "page=chiefMemory:1",
+    (page) => page.getByRole("button", { name: "Edit release-process" }).click(),
+  ],
   ["chief-terminal", "page=chief:1&terminal"],
   ["chief-paused", "page=chief:1&paused"],
   ["chief-context-high", "page=chief:1&context=92"],
