@@ -681,7 +681,8 @@ function ViewSwitch({
         )}
       >
         <Icon className="size-3.5" strokeWidth={1.9} aria-hidden />
-        {label}
+        {/* Icons only in a narrow pane, so the session's title keeps its room. */}
+        <span className="sr-only @min-[34rem]:not-sr-only">{label}</span>
       </button>
     );
   };
