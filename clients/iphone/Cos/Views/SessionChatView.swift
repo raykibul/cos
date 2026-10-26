@@ -113,6 +113,9 @@ struct SessionChatView: View {
         .onChange(of: session.transcriptTicks[agentId]) {
             Task { await chat.read() }
         }
+        .onChange(of: chat.replyingTo) { _, reply in
+            if reply != nil { composing = true }
+        }
     }
 
     private func menu(_ agent: Agent?) -> some View {

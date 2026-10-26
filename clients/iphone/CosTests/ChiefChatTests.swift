@@ -375,3 +375,43 @@ import Testing
         #expect(login.blocked == "Log in to Claude first")
     }
 }
+
+@MainActor
+@Suite struct ReplyChatTests {
+    @Test func aReplyCarriesItsQuoteAndShowsIt() async throws {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(projectId: 1, session: session)
+        await chat.load()
+        let theirs = try #require(chat.messages.last { $0.role == .assistant && $0.kind == .text })
+
+        chat.reply(to: theirs)
+        #expect(chat.replyLabel == "Replying to the Chief of Staff")
+        chat.draft = "Allow it."
+        await chat.send()
+
+        #expect(chat.replyingTo == nil)
+        guard case .user(let message, _) = chat.rows.last else {
+            Issue.record("the last row is your reply: \(String(describing: chat.rows.last))")
+            return
+        }
+        let parsed = try #require(ChatReply.parse(message.text))
+        #expect(parsed.reply.from == .them)
+        #expect(parsed.reply.text.hasPrefix("Good news from **lisbon**"))
+        #expect(parsed.body == "Allow it.")
+
+        // Replying to that reply quotes what you wrote, not its quote.
+        chat.reply(to: message)
+        #expect(chat.replyingTo == ChatReply(from: .me, text: "Allow it."))
+        #expect(chat.replyLabel == "Replying to yourself")
+    }
+
+    @Test func inASessionTheyAreClaude() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+        if let last = chat.messages.last { chat.reply(to: last) }
+        #expect(chat.replyLabel == "Replying to Claude")
+    }
+}

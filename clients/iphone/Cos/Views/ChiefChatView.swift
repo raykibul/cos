@@ -130,6 +130,9 @@ struct ChiefChatView: View {
         .onChange(of: chat.agentId) {
             Task { await chat.read() }
         }
+        .onChange(of: chat.replyingTo) { _, reply in
+            if reply != nil { composing = true }
+        }
     }
 
     /// The three dots: where its workspaces and sessions are.
@@ -314,17 +317,21 @@ struct ChatRowView: View {
     var body: some View {
         switch row {
         case .user(let message, let receipt):
+            let parsed = ChatReply.parse(message.text)
+            let shown = parsed?.body ?? message.text
             Bubble(outgoing: true, time: message.tsMs, receipt: receipt) {
+                if let parsed { QuotedReply(reply: parsed.reply, theirName: chat.theirName) }
                 SentFiles(chat: chat, files: message.attachments)
-                if !message.text.isEmpty {
-                    Text(message.text)
+                if !shown.isEmpty {
+                    Text(shown)
                         .font(.body)
                         .foregroundStyle(Palette.ink)
                 }
             }
             .contextMenu {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") { chat.reply(to: message) }
                 Button("Info", systemImage: "info.circle") { info = message }
-                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = shown }
             }
             .sheet(item: $info) { message in
                 MessageInfo(message: message, times: chat.receiptTimes(for: message))
@@ -346,10 +353,13 @@ struct ChatRowView: View {
             }
         case .pending(let pending):
             VStack(alignment: .trailing, spacing: 4) {
+                let parsed = ChatReply.parse(pending.text)
+                let shown = parsed?.body ?? pending.text
                 Bubble(outgoing: true, time: pending.createdMs, receipt: pending.receipt) {
+                    if let parsed { QuotedReply(reply: parsed.reply, theirName: chat.theirName) }
                     SentFiles(chat: chat, files: pending.attachments)
-                    if !pending.text.isEmpty {
-                        Text(pending.text)
+                    if !shown.isEmpty {
+                        Text(shown)
                             .font(.body)
                             .foregroundStyle(Palette.ink)
                     }
@@ -365,6 +375,10 @@ struct ChatRowView: View {
                 MarkdownView(markdown: message.text)
                     .foregroundStyle(Palette.ink)
                     .textSelection(.enabled)
+            }
+            .contextMenu {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") { chat.reply(to: message) }
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
             }
         case .tool(let message):
             toolRow(message.tool ?? ToolCall(name: "tool"))
@@ -634,6 +648,9 @@ struct Composer: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
             }
+            if let reply = chat.replyingTo, let label = chat.replyLabel {
+                ReplyStrip(label: label, text: ChatReply.preview(reply.text)) { chat.replyingTo = nil }
+            }
             if !chat.files.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -897,5 +914,67 @@ struct SentImage: View {
                 }
             }
         }
+    }
+}
+
+/// The quote a message of yours replies to, muted, above its text:
+/// "↩ You replied to the Chief of Staff".
+struct QuotedReply: View {
+    var reply: ChatReply
+    var theirName: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(reply.from == .me ? "You replied to yourself" : "You replied to \(theirName)", systemImage: "arrowshape.turn.up.left")
+                .labelStyle(.tight)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Palette.ink3)
+            Text(ChatReply.preview(reply.text))
+                .font(.footnote)
+                .foregroundStyle(Palette.ink2)
+                .lineLimit(3)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.page.opacity(0.55), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Palette.claude.opacity(0.6)).frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 1.5))
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// What the composer replies to, on top of it, with × to drop it.
+struct ReplyStrip: View {
+    var label: String
+    var text: String
+    var dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle().fill(Palette.claude).frame(width: 3).clipShape(RoundedRectangle(cornerRadius: 1.5))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Palette.claude)
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(Palette.ink2)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Button(action: dismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Palette.ink3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Don't reply")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 14)
+        .padding(.top, 2)
     }
 }

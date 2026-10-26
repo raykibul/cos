@@ -149,6 +149,8 @@ final class Chat {
     private(set) var isLoading = false
     private(set) var error: String?
     var draft = ""
+    /// The message the composer answers, quoted on top of it.
+    var replyingTo: ChatReply?
     /// The files on the composer, in the order you picked them.
     private(set) var files: [DraftFile] = []
     /// Pictures you sent, by attachment name (names are unique in the
@@ -291,15 +293,39 @@ final class Chat {
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || files.contains { $0.attachment != nil }
     }
 
-    /// Sends the draft and its files, starting the chief if needed.
-    /// Files that failed to upload stay on the composer.
+    /// Sends the draft and its files, with the quote it replies to,
+    /// starting the chief if needed. Files that failed to upload stay on
+    /// the composer.
     func send() async {
         guard canSend else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = ChatReply.compose(draft.trimmingCharacters(in: .whitespacesAndNewlines), replyingTo: replyingTo)
         let attachments = files.compactMap(\.attachment).map(\.attached)
         draft = ""
+        replyingTo = nil
         files.removeAll { $0.attachment != nil }
         await send(text, attachments: attachments)
+    }
+
+    // MARK: Replies
+
+    /// Who "them" is in this chat: "the Chief of Staff", or "Claude".
+    var theirName: String { isChief ? "the Chief of Staff" : "Claude" }
+
+    /// Quotes a message on top of the composer: theirs, or one of yours
+    /// (what you wrote, without the quote it replied to).
+    func reply(to message: TranscriptMessage) {
+        if message.role == .user {
+            let text = ChatReply.parse(message.text)?.body ?? message.text
+            replyingTo = ChatReply(from: .me, text: text)
+        } else {
+            replyingTo = ChatReply(from: .them, text: message.text)
+        }
+    }
+
+    /// "Replying to the Chief of Staff", "Replying to yourself".
+    var replyLabel: String? {
+        guard let replyingTo else { return nil }
+        return "Replying to \(replyingTo.from == .me ? "yourself" : theirName)"
     }
 
     func send(_ text: String, attachments: [AttachedFile] = []) async {
