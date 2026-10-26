@@ -651,7 +651,9 @@ mod tests {
         let (books, _, project) = books();
         assert_eq!(books.record(project).unwrap().identity, "");
         assert_eq!(
-            books.set_identity(project, "\n  You are Ada, terse and careful. \n").unwrap(),
+            books
+                .set_identity(project, "\n  You are Ada, terse and careful. \n")
+                .unwrap(),
             "You are Ada, terse and careful."
         );
         books.set_brief(project, "ship v2").unwrap();
@@ -663,7 +665,11 @@ mod tests {
             .set_identity(project, &"x".repeat(MAX_IDENTITY_BYTES + 1))
             .unwrap_err();
         assert!(matches!(error, StaffError::Invalid(_)), "{error}");
-        assert!(books.set_identity(project, &"x".repeat(MAX_IDENTITY_BYTES)).is_ok());
+        assert!(
+            books
+                .set_identity(project, &"x".repeat(MAX_IDENTITY_BYTES))
+                .is_ok()
+        );
         books.set_identity(project, "  ").unwrap();
         assert_eq!(books.record(project).unwrap().identity, "", "empty clears it");
     }

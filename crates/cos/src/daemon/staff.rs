@@ -539,7 +539,12 @@ impl Inner {
     /// Its standing instructions, with its brief and notes as they are now.
     fn system_prompt(&self, project: &str, record: &StaffRecord) -> Result<String, ApiError> {
         let notes = self.books.notes(record.project_id)?;
-        Ok(prompt::system_prompt(project, &record.identity, &record.brief, &notes))
+        Ok(prompt::system_prompt(
+            project,
+            &record.identity,
+            &record.brief,
+            &notes,
+        ))
     }
 
     /// After its brief or notes changed: the chief gets them on its next
