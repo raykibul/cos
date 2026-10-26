@@ -15,7 +15,7 @@ import { CosStore } from "./store/store";
 // parameters set it up for development and screenshots:
 //   ?daemon=off      start with the daemon stopped
 //   ?static          no simulated activity
-//   ?page=agent:7    open a page (waiting, events, settings, project:1, chief:1, projectEnv:1, workspace:3, agent:7)
+//   ?page=agent:7    open a page (waiting, events, settings, project:1, chief:1, projectEnv:1, chiefMemory:1, workspace:3, agent:7)
 //   ?dialog=newAgent:3  open a sheet over it (envVar:1 adds a variable to project 1, envVar:all to all
 //                    projects; envVar:1:NAME edits one)
 //   ?terminal        open the chief's terminal split
@@ -37,6 +37,7 @@ function parsePage(value: string | null): Page | undefined {
     kind === "project" ||
     kind === "chief" ||
     kind === "projectEnv" ||
+    kind === "chiefMemory" ||
     kind === "workspace" ||
     kind === "agent"
   ) {

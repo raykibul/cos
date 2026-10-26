@@ -340,7 +340,7 @@ Each project can have a Chief of Staff: one permanent Claude session you talk to
 | Route | Body | Result |
 |---|---|---|
 | `GET /v1/projects/{id}/staff` | | `Staff`, even before it first starts |
-| `PUT /v1/projects/{id}/staff` | `{model?, paused?}` | `Staff`. A field left out stays as it is. A null or empty model goes back to the default, used from the next start. `paused` pauses or resumes its coordination at once. |
+| `PUT /v1/projects/{id}/staff` | `{model?, paused?, brief?}` | `Staff`. A field left out stays as it is. A null or empty model goes back to the default, used from the next start. `paused` pauses or resumes its coordination at once. `brief` replaces its brief (trimmed; at most 4 KiB, else 400 and nothing changes), used from its next start or new session, and logs `staff.changed`. |
 | `POST /v1/projects/{id}/staff/start` | | `Staff`. Starts or resumes it; nothing if it's running. |
 | `POST /v1/projects/{id}/staff/message` | `{text, attachments?}` | 202. Starts it if needed; the text goes in as soon as it's idle, with the files `attachments` names listed at the end. 400 if empty (no text and no files) or a file is unknown. |
 | `POST /v1/projects/{id}/staff/attachments?name=` | the file's bytes | 201 Attachment, into its worktree (made if needed, without starting it). See "Attachments" in [agents-api.md](agents-api.md#attachments). |

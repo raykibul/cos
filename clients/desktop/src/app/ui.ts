@@ -15,6 +15,8 @@ export type Page =
   | { kind: "agent"; id: number }
   /** A project's environment variables for its agents; `id` is the project's. */
   | { kind: "projectEnv"; id: number }
+  /** A project's Chief of Staff's brief and memory notes; `id` is the project's. */
+  | { kind: "chiefMemory"; id: number }
   /** Settings: your machines, environment variables for all projects, and remote access to this one. */
   | { kind: "settings" }
   /** A shell the daemon runs in `cwd` (`id` is the shell's), opened with Ctrl-J. */

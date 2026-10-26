@@ -208,7 +208,12 @@ export function workspaceOfPage(s: DaemonState, page: Page): number | null {
 
 /** The project a page belongs to, for unfolding it in the sidebar. */
 export function projectOfPage(s: DaemonState, page: Page): number | null {
-  if (page.kind === "chief" || page.kind === "project" || page.kind === "projectEnv")
+  if (
+    page.kind === "chief" ||
+    page.kind === "project" ||
+    page.kind === "projectEnv" ||
+    page.kind === "chiefMemory"
+  )
     return page.id;
   if (page.kind === "shell") return page.projectId;
   const ws = workspace(s, workspaceOfPage(s, page));
@@ -241,6 +246,7 @@ export function shellPlace(
     case "chief":
     case "project":
     case "projectEnv":
+    case "chiefMemory":
       return root(page.id);
     case "workspace": {
       const ws = workspace(s, page.id);

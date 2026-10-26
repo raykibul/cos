@@ -391,6 +391,128 @@ describe("chief page", () => {
   });
 });
 
+describe("brief & memory page", () => {
+  it("opens from the chief's header and shows its brief and notes", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.click(screen.getByRole("button", { name: "Brief & memory" }));
+    expect(ui.store.getState().page).toEqual({ kind: "chiefMemory", id: 1 });
+    await act(() => settle());
+    expect(screen.getByRole("textbox", { name: "Brief" })).toHaveValue(
+      "Ship 0.2: login fix, left-pad, release notes.",
+    );
+    const notes = screen.getByRole("list", { name: "Memory notes" });
+    expect(
+      within(notes)
+        .getAllByRole("listitem")
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual(["release-process", "testing", "user-preferences"]);
+    await user.click(within(notes).getByRole("button", { name: "Show testing" }));
+    expect(within(notes).getByText(/extend cos-fake-claude/)).toBeInTheDocument();
+  });
+
+  it("saves the brief you write, and Revert puts the old one back", async () => {
+    const { user, daemon, cos } = await renderApp({ kind: "chiefMemory", id: 1 });
+    const brief = screen.getByRole("textbox", { name: "Brief" });
+    const save = screen.getByRole("button", { name: "Save brief" });
+    expect(save).toBeDisabled();
+
+    await user.clear(brief);
+    await user.type(brief, "Only the login fix");
+    await user.click(screen.getByRole("button", { name: "Revert" }));
+    expect(brief).toHaveValue("Ship 0.2: login fix, left-pad, release notes.");
+
+    await user.clear(brief);
+    await user.type(brief, "  Only the login fix this week.  ");
+    await user.click(save);
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "PUT",
+      path: "/v1/projects/1/staff",
+      body: { brief: "  Only the login fix this week.  " },
+    });
+    expect(cos.get().staffs[1]?.brief).toBe("Only the login fix this week.");
+    expect(brief).toHaveValue("Only the login fix this week.");
+    expect(screen.getByText(/Saved\. It reads the new brief/)).toBeInTheDocument();
+  });
+
+  it("refuses a brief over 4 KiB before sending it", async () => {
+    const { user } = await renderApp({ kind: "chiefMemory", id: 1 });
+    const brief = screen.getByRole("textbox", { name: "Brief" });
+    await user.click(brief);
+    await user.paste("x".repeat(4100));
+    expect(screen.getByText(/\/ 4,096 bytes/)).toHaveClass("text-tone-red");
+    expect(screen.getByRole("button", { name: "Save brief" })).toBeDisabled();
+  });
+
+  it("adds a note, edits it, deletes it and undoes the delete", async () => {
+    const { user, daemon } = await renderApp({ kind: "chiefMemory", id: 1 });
+    await user.click(screen.getByRole("button", { name: "Add note" }));
+    const sheet = within(screen.getByRole("dialog", { name: "Add a memory note" }));
+    await user.type(sheet.getByRole("textbox", { name: "Name" }), "Deploys");
+    await user.type(sheet.getByRole("textbox", { name: "Description" }), "Where cos deploys");
+    await user.type(sheet.getByRole("textbox", { name: "Note" }), "Nowhere yet: releases only.");
+    await user.click(sheet.getByRole("button", { name: "Add note" }));
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "PUT",
+      path: "/v1/projects/1/staff/memory/deploys",
+      body: { description: "Where cos deploys", body: "Nowhere yet: releases only." },
+    });
+    const notes = () => within(screen.getByRole("list", { name: "Memory notes" }));
+    expect(notes().getByRole("listitem", { name: "deploys" })).toHaveTextContent(
+      "Where cos deploys",
+    );
+
+    await user.click(notes().getByRole("button", { name: "Edit deploys" }));
+    const edit = within(screen.getByRole("dialog", { name: "Edit deploys" }));
+    expect(edit.getByRole("textbox", { name: "Name" })).toHaveAttribute("readonly");
+    const description = edit.getByRole("textbox", { name: "Description" });
+    await user.clear(description);
+    await user.type(description, "Where cos is deployed");
+    await user.click(edit.getByRole("button", { name: "Save" }));
+    await act(() => settle());
+    expect(notes().getByRole("listitem", { name: "deploys" })).toHaveTextContent(
+      "Where cos is deployed",
+    );
+
+    await user.click(notes().getByRole("button", { name: "Delete deploys" }));
+    await act(() => settle());
+    expect(daemon.requests).toContainEqual({
+      method: "DELETE",
+      path: "/v1/projects/1/staff/memory/deploys",
+      body: null,
+    });
+    expect(notes().queryByRole("listitem", { name: "deploys" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await act(() => settle());
+    expect(notes().getByRole("listitem", { name: "deploys" })).toHaveTextContent(
+      "Where cos is deployed",
+    );
+  });
+
+  it("checks a new note before sending it", async () => {
+    const { user, daemon } = await renderApp({ kind: "chiefMemory", id: 1 });
+    await user.click(screen.getByRole("button", { name: "Add note" }));
+    const sheet = within(screen.getByRole("dialog", { name: "Add a memory note" }));
+    await user.type(sheet.getByRole("textbox", { name: "Name" }), "-bad-");
+    await user.click(sheet.getByRole("button", { name: "Add note" }));
+    expect(sheet.getByText(/Use lowercase letters, digits and dashes/)).toBeInTheDocument();
+    expect(sheet.getByText(/Say in a line what the note holds/)).toBeInTheDocument();
+    expect(sheet.getByText(/Write what the chief should know/)).toBeInTheDocument();
+    expect(daemon.requests.some((r) => r.path.includes("/staff/memory/"))).toBe(false);
+  });
+
+  it("offers a brief on a chief that hasn't started, and says when there are no notes", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 2 });
+    await user.click(screen.getByRole("button", { name: /Give it a brief first/ }));
+    expect(ui.store.getState().page).toEqual({ kind: "chiefMemory", id: 2 });
+    await act(() => settle());
+    expect(screen.getByRole("textbox", { name: "Brief" })).toHaveValue("");
+    expect(screen.getByText(/No notes yet/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New session" })).toBeNull();
+  });
+});
+
 describe("the terminal split", () => {
   afterEach(() => {
     localStorage.clear();

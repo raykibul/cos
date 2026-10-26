@@ -135,6 +135,9 @@ pub(crate) struct StaffSettings {
     pub model: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<bool>,
+    /// Replaces its brief, trimmed; empty clears it. At most 4 KiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
 }
 
 /// A field that is there, even as null, is `Some`.
@@ -260,8 +263,9 @@ impl Staff {
         })
     }
 
-    /// Sets the project's model, used from its next start, and pauses or
-    /// resumes its coordination. Fields left out stay as they are.
+    /// Sets the project's model and its brief, both used from its next start
+    /// or new session, and pauses or resumes its coordination. Fields left
+    /// out stay as they are.
     pub(crate) async fn configure(
         &self,
         project_id: i64,
@@ -280,6 +284,10 @@ impl Staff {
                 "that model name is too long".into(),
             ));
         }
+        // First, as it's the one that can be refused (over 4 KiB).
+        if let Some(brief) = &settings.brief {
+            inner.books.set_brief(project.id, brief)?;
+        }
         if let Some(model) = &model {
             inner.books.set_model(project.id, model.as_deref())?;
         }
@@ -290,7 +298,10 @@ impl Staff {
                 inner.wake.notify_one();
             }
         }
-        if model.is_some() || settings.paused.is_some() {
+        if settings.brief.is_some() {
+            // Logs `staff.changed` too, and saves the new prompt for its next launch.
+            inner.brief_or_notes_changed(project.id).await?;
+        } else if model.is_some() || settings.paused.is_some() {
             inner.log_changed(project.id)?;
         }
         self.view(project.id).await
