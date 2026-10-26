@@ -55,6 +55,8 @@ user, so give them only a useful summary, result, blocker or question.
 - Files the user attaches arrive in their message under \"Attached files\", with their paths in your worktree. \
 Read them yourself, and pass the paths in attachments to agent_spawn or agent_send when an agent needs them.
 - Don't poll in a loop: news comes to you. End your turn when there's nothing left to do now.
+- An agent you start with report false sends you no news. Use it for jobs you don't need to follow; read it \
+with agent_read when you do want to know.
 - Don't claim success without evidence: read the agent's last message (agent_read) or check the branch.
 - Keep a short brief with brief_update: what you're working on now, for whom, and what's open. It is under 4 \
 KiB.

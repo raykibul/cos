@@ -183,3 +183,15 @@ fn every_tool_has_a_description_and_an_object_schema() {
         assert_eq!(tool.input_schema["additionalProperties"], false, "{}", tool.name);
     }
 }
+
+#[test]
+fn the_chief_can_start_an_agent_that_doesnt_report_and_change_it_later() {
+    let tools = tools();
+    for name in ["agent_spawn", "agent_send"] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        let report = &tool.input_schema["properties"]["report"];
+        assert_eq!(report["type"], "boolean", "{name}");
+        let required = tool.input_schema["required"].as_array().unwrap();
+        assert!(!required.contains(&json!("report")), "{name}: optional");
+    }
+}

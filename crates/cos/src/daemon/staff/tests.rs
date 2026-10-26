@@ -967,6 +967,115 @@ async fn a_spawned_agents_news_wakes_the_chief_through_its_inbox() {
 }
 
 #[tokio::test]
+async fn an_agent_started_with_report_false_sends_the_chief_no_news() {
+    let mut fixture = Fixture::start().await;
+    let staff = fixture.idle_staff().await;
+    let inbox_len = |fixture: &Fixture| {
+        let books = &fixture.books;
+        books.recent(fixture.project_id, 100).unwrap().len()
+    };
+
+    // A silent agent's turn ends: nothing reaches the inbox.
+    let spawn = json!({ "prompt": "quiet job", "workspace_id": fixture.workspace_id, "report": false });
+    let spawned = fixture.say(staff.id, &format!("mcp agent_spawn {spawn}")).await;
+    let silent = serde_json::from_str::<Value>(&spawned).unwrap()["agent_id"]
+        .as_i64()
+        .unwrap();
+    let agent = fixture.until_says(silent, "echo: quiet job").await;
+    assert_eq!((agent.spawned_by, agent.report), (Some(staff.id), false));
+
+    // A default one's does, and wakes the chief with its update alone.
+    let spawned = fixture
+        .tool_json(
+            staff.id,
+            "agent_spawn",
+            json!({ "prompt": "say hi", "workspace_id": fixture.workspace_id }),
+        )
+        .await;
+    let loud = spawned["agent_id"].as_i64().unwrap();
+    assert!(fixture.client.agent(loud).await.unwrap().report);
+    let woken = fixture.until_says(staff.id, "[cos · 1 updates]").await;
+    assert!(
+        woken
+            .last_message
+            .unwrap()
+            .contains(&format!("### Agent {loud} \"say hi\"")),
+        "only the default agent's news"
+    );
+    let inbox = fixture.client.staff_inbox(fixture.project_id).await.unwrap();
+    assert_eq!(
+        inbox.iter().map(|item| item.agent_id).collect::<Vec<_>>(),
+        [Some(loud)]
+    );
+
+    // The chief still sees it, and which one is silent.
+    let list = fixture.tool_json(staff.id, "workspaces_list", json!({})).await;
+    let agents = list["workspaces"][0]["agents"].as_array().unwrap();
+    let report_of = |id: i64| agents.iter().find(|agent| agent["id"] == json!(id)).unwrap()["report"].clone();
+    assert_eq!(
+        (report_of(silent), report_of(loud)),
+        (json!(false), json!(true)),
+        "{list}"
+    );
+
+    // An approval and an exit are no news either.
+    fixture.client.say(silent, "ask:Bash ls".into()).await.unwrap();
+    fixture.until_state(silent, AgentState::WaitingApproval).await;
+    let approval = fixture
+        .client
+        .agent(silent)
+        .await
+        .unwrap()
+        .pending_approval_id
+        .unwrap();
+    fixture
+        .client
+        .answer_approval(approval, false, None)
+        .await
+        .unwrap();
+    fixture.until_says(silent, "denied").await;
+    fixture.client.stop_agent(silent).await.unwrap();
+    fixture.until_state(silent, AgentState::Exited).await;
+
+    // It stays silent across a daemon restart and a resume.
+    fixture.restart().await;
+    fixture.staff.resume_chiefs().await.unwrap();
+    fixture.until_state(staff.id, AgentState::Idle).await;
+    assert!(!fixture.client.agent(silent).await.unwrap().report);
+    let sent = fixture
+        .tool(
+            staff.id,
+            "agent_send",
+            json!({ "agent_id": silent, "message": "still quiet" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent, format!("Resumed agent {silent} and sent the message."));
+    fixture.until_says(silent, "echo: still quiet").await;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    assert_eq!(inbox_len(&fixture), 1);
+
+    // agent_send can make it report again.
+    let sent = fixture
+        .tool(
+            staff.id,
+            "agent_send",
+            json!({ "agent_id": silent, "message": "speak up", "report": true }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent, format!("Sent to agent {silent}. It reports to you again."));
+    fixture
+        .until_says(
+            staff.id,
+            &format!("### Agent {silent} \"quiet job\" finished a turn\necho: speak up"),
+        )
+        .await;
+    assert!(fixture.client.agent(silent).await.unwrap().report);
+    assert_eq!(inbox_len(&fixture), 2);
+}
+
+#[tokio::test]
 async fn your_messages_go_in_alone_and_before_news() {
     let fixture = Fixture::start().await;
     // News waiting before the chief ever started.

@@ -49,6 +49,9 @@ struct AgentSpawn {
     /// agent's workspace and named in its prompt.
     #[serde(default)]
     attachments: Vec<String>,
+    /// False: its news skips the chief's inbox.
+    #[serde(default = "yes")]
+    report: bool,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +61,13 @@ struct AgentSend {
     message: String,
     #[serde(default)]
     attachments: Vec<String>,
+    /// Changes whether it reports to the chief, from this message on.
+    #[serde(default)]
+    report: Option<bool>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -157,6 +167,7 @@ impl Staff {
                         "state": agent.state,
                         "model": agent.model,
                         "spawned_by": agent.spawned_by,
+                        "report": agent.report,
                         "last_message": agent.last_message.as_deref().map(|text| cut_chars(text, LIST_MESSAGE_CHARS)),
                     })
                 })
@@ -226,6 +237,7 @@ impl Staff {
         };
         let launch = cos_core::Launch {
             spawned_by: Some(staff_id),
+            report: spawn.report,
             ..cos_core::Launch::default()
         };
         let agent = inner
@@ -249,16 +261,26 @@ impl Staff {
         let attached = self.hand_over(staff_id, &send.attachments, &inner.agents.folder(agent.id)?)?;
         let message = attachments::with_attachments(message, &attached);
         let message = message.as_str();
+        // Before the message goes in, so the turn it starts follows the new setting.
+        let report = send.report.filter(|&report| report != agent.report);
+        if let Some(report) = report {
+            inner.agents.set_report(agent.id, report)?;
+        }
         let resumed = !agent.state.is_running();
         if resumed {
             inner.agents.resume(agent.id)?;
         }
         self.until_ready(agent.id).await?;
         inner.agents.paste_message(agent.id, message).await?;
-        Ok(if resumed {
+        let sent = if resumed {
             format!("Resumed agent {} and sent the message.", agent.id)
         } else {
             format!("Sent to agent {}.", agent.id)
+        };
+        Ok(match report {
+            Some(true) => format!("{sent} It reports to you again."),
+            Some(false) => format!("{sent} It no longer reports to you."),
+            None => sent,
         })
     }
 

@@ -52,6 +52,10 @@ pub struct Agent {
     /// The agent that started this one: a Chief of Staff.
     #[serde(default)]
     pub spawned_by: Option<i64>,
+    /// Whether its news (turns, exits, waits) goes to the inbox of the chief
+    /// that started it. False for a chief's fire-and-forget agents.
+    #[serde(default = "yes")]
+    pub report: bool,
     /// Claude's transcript (JSONL), from the hooks.
     #[serde(default)]
     pub transcript_path: Option<PathBuf>,
@@ -69,7 +73,7 @@ pub struct Agent {
 
 /// How an agent is started beyond [`NewAgent`]: recorded with
 /// [`Agents::set_launch`] and used again on every resume.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Launch {
     /// `None`: the workspace's folder.
     pub cwd: Option<PathBuf>,
@@ -77,6 +81,24 @@ pub struct Launch {
     pub mcp_config: Option<String>,
     /// The Chief of Staff that started it.
     pub spawned_by: Option<i64>,
+    /// Whether its news goes to that chief's inbox.
+    pub report: bool,
+}
+
+impl Default for Launch {
+    fn default() -> Self {
+        Self {
+            cwd: None,
+            system_prompt: None,
+            mcp_config: None,
+            spawned_by: None,
+            report: true,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Who started an agent.
@@ -272,7 +294,7 @@ impl Agents {
     /// between [`Self::create`] and the launch. Logs nothing.
     pub fn set_launch(&self, id: i64, launch: &Launch) -> Result<Agent, StoreError> {
         self.store.lock().execute(
-            "UPDATE agents SET cwd = ?2, system_prompt = ?3, mcp_config = ?4, spawned_by = ?5
+            "UPDATE agents SET cwd = ?2, system_prompt = ?3, mcp_config = ?4, spawned_by = ?5, report = ?6
              WHERE id = ?1",
             params![
                 id,
@@ -280,9 +302,19 @@ impl Agents {
                 launch.system_prompt,
                 launch.mcp_config,
                 launch.spawned_by,
+                launch.report,
             ],
         )?;
         self.require(id)
+    }
+
+    /// Sets whether the agent's news goes to the chief that started it, from
+    /// now on. Logs nothing.
+    pub fn set_report(&self, id: i64, report: bool) -> Result<(), StoreError> {
+        self.store
+            .lock()
+            .execute("UPDATE agents SET report = ?2 WHERE id = ?1", params![id, report])?;
+        Ok(())
     }
 
     /// Replaces `--append-system-prompt` for the next launch. Logs nothing.
@@ -666,7 +698,7 @@ const AGENT_SELECT: &str =
         a.model, a.permission_mode, a.user_settings, a.term_rows, a.term_cols, a.started_ms, a.last_activity_ms, a.exited_ms,
         a.exit_code, a.last_message,
         (SELECT MAX(p.id) FROM approvals p WHERE p.agent_id = a.id AND p.state = 'pending'),
-        a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path, a.env_names
+        a.cwd, a.system_prompt, a.mcp_config, a.spawned_by, a.transcript_path, a.env_names, a.report
     FROM agents a";
 
 const APPROVAL_COLUMNS: &str =
@@ -710,6 +742,7 @@ fn read_agent(row: &Row<'_>) -> rusqlite::Result<Agent> {
             .get::<_, Option<String>>(23)?
             .and_then(|names| serde_json::from_str(&names).ok())
             .unwrap_or_default(),
+        report: row.get(24)?,
     })
 }
 

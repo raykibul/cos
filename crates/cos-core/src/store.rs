@@ -418,6 +418,11 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     -- its system prompt, and only the user can change it.
     ALTER TABLE staff ADD COLUMN identity TEXT NOT NULL DEFAULT '';
 ",
+    "
+    -- 0: a Chief of Staff started it fire-and-forget, so its news (turns,
+    -- exits, waits) doesn't go to the chief's inbox.
+    ALTER TABLE agents ADD COLUMN report INTEGER NOT NULL DEFAULT 1;
+",
 ];
 
 #[derive(Debug, thiserror::Error)]

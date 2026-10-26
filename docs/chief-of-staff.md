@@ -47,10 +47,10 @@ Change it only together with all sides.
 
 | Tool | Arguments | Effect |
 |---|---|---|
-| `workspaces_list` | – | This project's workspaces, each with `id`, `title`, `city`, `branch`, `path`, and its agents: `id`, `title`, `state`, `model`, `spawned_by`, and `last_message` cut to 500 characters. |
+| `workspaces_list` | – | This project's workspaces, each with `id`, `title`, `city`, `branch`, `path`, and its agents: `id`, `title`, `state`, `model`, `spawned_by`, `report`, and `last_message` cut to 500 characters. |
 | `workspace_create` | `{title?, from?: "origin" \| "head"}` | Creates a workspace; returns it. |
-| `agent_spawn` | `{prompt, workspace_id?, new_workspace?: {title?, from?}, title?, model?, permission_mode?, attachments?}` | Starts an agent. Give exactly one of `workspace_id` or `new_workspace`. Returns `{agent_id, workspace_id}`. The agent has `role: "user"` and `spawned_by` set to the chief's agent id. |
-| `agent_send` | `{agent_id, message, attachments?}` | Types a message into the agent, as one bracketed paste. A stopped agent is resumed first. |
+| `agent_spawn` | `{prompt, workspace_id?, new_workspace?: {title?, from?}, title?, model?, permission_mode?, attachments?, report?: bool}` | Starts an agent. Give exactly one of `workspace_id` or `new_workspace`. Returns `{agent_id, workspace_id}`. The agent has `role: "user"` and `spawned_by` set to the chief's agent id. `report` (default true) false starts it fire-and-forget: none of its news goes to the inbox. It is still the chief's to list, read, message and stop. |
+| `agent_send` | `{agent_id, message, attachments?, report?: bool}` | Types a message into the agent, as one bracketed paste. A stopped agent is resumed first. `report` changes whether it reports, before the message goes in. |
 | `agent_read` | `{agent_id, screen?: bool}` | `{state, last_message}` with the full last message, plus the screen text if asked. |
 | `agent_stop` | `{agent_id}` | Stops the agent. |
 | `brief_update` | `{brief}` | Saves the brief. At most 4 KiB. |
@@ -91,6 +91,8 @@ Since the brief and notes carry what matters, the chief doesn't need to keep one
 These go into the chief's inbox:
 - an agent it started finishes a turn (`Stop`), with that turn's last message;
 - an agent it started exits, or has an approval waiting for you.
+
+Not from an agent it started with `report: false`, until `agent_send` sets `report: true`. The setting is stored with the agent (`agents.report`), so it holds across resumes and daemon restarts.
 
 Wakeups are delivered only while the chief is idle, at most 20 items or 24 KiB per wakeup, and at most 30 wakeups an hour. Messages you type go straight in and are never batched.
 
@@ -146,7 +148,7 @@ The app shows the chief as a chat, read from Claude's own transcript. Every hook
  "paused": false, "updates_waiting": 0}               // coordination paused; news not delivered yet
 ```
 
-**Agent JSON gains** `spawned_by` (an agent id or null) and `transcript_path`. **Workspace JSON gains** `city` and `branch`; `title` may now be null.
+**Agent JSON gains** `spawned_by` (an agent id or null), `report` (true unless a chief started it fire-and-forget) and `transcript_path`. **Workspace JSON gains** `city` and `branch`; `title` may now be null.
 
 **Events:**
 - `staff.started` with `{project_id, agent_id}`;
