@@ -86,6 +86,62 @@ pub enum TerminalMessage {
     },
 }
 
+/// One forwarded port of a [`crate::ForwardSet`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    /// The port on the host's loopback.
+    pub remote_port: u16,
+    /// The port on this Mac's loopback; another one when that was busy.
+    pub local_port: u16,
+    /// This Mac's listener.
+    pub state: ListenState,
+    /// What the host said last: from the probe, then from each tunnel.
+    pub remote: RemoteState,
+    /// The daemon's code when it refused (`device_pending`, `too_old`, …).
+    pub code: Option<String>,
+    /// The latest problem, in words, or a note that the local port moved.
+    pub message: Option<String>,
+    /// Tunnels open now.
+    pub connections: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListenState {
+    Listening,
+    /// No local port could be bound.
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteState {
+    Unknown,
+    /// Something answered there.
+    Listening,
+    /// Nothing runs on that port on the host.
+    NothingListening,
+    /// The host refused this Mac (see `code`).
+    Refused,
+    /// The host couldn't be reached.
+    Unreachable,
+}
+
+/// `forwards_list`'s answer: the forwards of the host in use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardList {
+    pub host: String,
+    pub forwards: Vec<Forward>,
+}
+
+/// One message of [`crate::ForwardSet::follow`]: the whole list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ForwardMessage {
+    Forwards { host: String, forwards: Vec<Forward> },
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -161,6 +217,30 @@ mod tests {
                 code: None,
             }),
             json!({"type": "disconnected", "reason": "gone", "code": null})
+        );
+    }
+
+    #[test]
+    fn forward_messages_match_the_contract() {
+        let forward = Forward {
+            remote_port: 3343,
+            local_port: 3344,
+            state: ListenState::Listening,
+            remote: RemoteState::NothingListening,
+            code: None,
+            message: Some("Nothing is listening on 3343 on ec2-box.".into()),
+            connections: 0,
+        };
+        assert_eq!(
+            to_json(ForwardMessage::Forwards {
+                host: "ec2-box".into(),
+                forwards: vec![forward]
+            }),
+            json!({"type": "forwards", "host": "ec2-box", "forwards": [{
+                "remotePort": 3343, "localPort": 3344, "state": "listening",
+                "remote": "nothing_listening", "code": null,
+                "message": "Nothing is listening on 3343 on ec2-box.", "connections": 0
+            }]})
         );
     }
 

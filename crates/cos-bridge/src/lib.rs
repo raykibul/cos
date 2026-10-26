@@ -4,11 +4,13 @@
 //! socket or another Mac's tailnet listener ([`Target`]), follows the event
 //! log ([`Bridge::follow_events`]) and attaches to agents' terminals
 //! ([`Bridge::attach_terminal`]). Both streams reconnect by themselves until
-//! their [`StreamHandle`] is closed. The contract with the UI is in
+//! their [`StreamHandle`] is closed. [`ForwardSet`] forwards a host's
+//! loopback ports to this Mac's. The contract with the UI is in
 //! `docs/desktop.md`.
 
 mod error;
 mod events;
+mod forward;
 mod http;
 mod messages;
 mod sse;
@@ -20,7 +22,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use error::{BridgeError, ErrorKind};
-pub use messages::{DaemonInfo, EventMessage, FileResponse, Response, TerminalMessage};
+pub use forward::{ForwardSet, Tunnel, UPGRADE, too_old};
+pub use messages::{
+    DaemonInfo, EventMessage, FileResponse, Forward, ForwardList, ForwardMessage, ListenState, RemoteState,
+    Response, TerminalMessage,
+};
 pub use stream::{Sink, StreamHandle};
 pub use target::{DEFAULT_PORT, Target, parse_address};
 

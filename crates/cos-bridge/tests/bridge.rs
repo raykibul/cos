@@ -20,9 +20,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use cos_bridge::{Backoff, Bridge, ErrorKind, EventMessage, StreamHandle, Target, TerminalMessage};
+use cos_bridge::{
+    Backoff, Bridge, ErrorKind, EventMessage, ForwardMessage, ForwardSet, RemoteState, StreamHandle, Target,
+    TerminalMessage,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::{broadcast, watch};
@@ -95,6 +99,12 @@ struct FakeState {
     /// While set, an event stream opens and then sends nothing, not even a
     /// keep-alive, like a host that vanished without closing the connection.
     silent: AtomicBool,
+    /// How `/v1/forward/{port}` answers: "echo" (an echo server listens
+    /// there), "nothing" (502 nothing_listening) or "old" (a daemon without
+    /// the route: 404).
+    forward: Mutex<&'static str>,
+    /// Tunnels the fake has opened, in all.
+    tunnels: AtomicUsize,
 }
 
 impl FakeState {
@@ -111,6 +121,8 @@ impl FakeState {
             refusal: Mutex::default(),
             guarded: AtomicUsize::new(0),
             silent: AtomicBool::new(false),
+            forward: Mutex::new("echo"),
+            tunnels: AtomicUsize::new(0),
         })
     }
 }
@@ -227,6 +239,7 @@ impl FakeDaemon {
             .route("/v1/agents/{id}/terminal", get(terminal))
             .route("/v1/shells/{id}/terminal", get(terminal))
             .route("/v1/host", get(host))
+            .route("/v1/forward/{port}", get(forward))
             .fallback(echo)
             .layer(middleware::from_fn_with_state(self.state.clone(), guard))
             .with_state(self.state.clone());
@@ -416,6 +429,46 @@ async fn terminal(State(state): State<Arc<FakeState>>, Path(id): Path<i64>) -> R
         }
     });
     sse(receiver)
+}
+
+/// Like the daemon's forward route, with an echo server behind every port.
+async fn forward(
+    State(state): State<Arc<FakeState>>,
+    Path(port): Path<u16>,
+    mut request: Request,
+) -> Response {
+    let mode = *state.forward.lock().unwrap();
+    if mode == "old" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let upgrade = request.headers().get("upgrade").cloned();
+    let Some(upgrade) = upgrade else {
+        let listening = mode == "echo";
+        let address = listening.then(|| format!("127.0.0.1:{port}"));
+        return axum::Json(json!({"port": port, "listening": listening, "address": address})).into_response();
+    };
+    assert_eq!(upgrade, "cos-forward");
+    if mode == "nothing" {
+        return (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(json!({"error": format!("nothing is listening on port {port} on studio"), "code": "nothing_listening"})),
+        )
+            .into_response();
+    }
+    state.tunnels.fetch_add(1, Ordering::SeqCst);
+    let on_upgrade = hyper::upgrade::on(&mut request);
+    tokio::spawn(async move {
+        let Ok(upgraded) = on_upgrade.await else { return };
+        let io = hyper_util::rt::TokioIo::new(upgraded);
+        let (mut read, mut write) = tokio::io::split(io);
+        let _ = tokio::io::copy(&mut read, &mut write).await;
+        let _ = tokio::io::AsyncWriteExt::shutdown(&mut write).await;
+    });
+    (
+        StatusCode::SWITCHING_PROTOCOLS,
+        [("connection", "upgrade"), ("upgrade", "cos-forward")],
+    )
+        .into_response()
 }
 
 /// The `Host` header the bridge sent.
@@ -1084,4 +1137,268 @@ async fn a_refused_terminal_carries_the_code_until_approved() {
     );
     daemon.admit();
     assert_eq!(next(&mut messages).await, snapshot(1));
+}
+
+// Port forwarding
+
+impl FakeDaemon {
+    fn forward_mode(&self, mode: &'static str) {
+        *self.state.forward.lock().unwrap() = mode;
+    }
+}
+
+#[tokio::test]
+async fn a_tunnel_echoes_over_the_socket_and_tcp() {
+    for daemon in [FakeDaemon::start(), FakeDaemon::start_tcp()] {
+        let mut tunnel = daemon.bridge().open_tunnel(5173).await.unwrap();
+        tunnel.write_all(b"hello").await.unwrap();
+        let mut back = [0u8; 5];
+        within("echo", tunnel.read_exact(&mut back)).await.unwrap();
+        assert_eq!(&back, b"hello");
+        tunnel.shutdown().await.unwrap();
+        let mut rest = Vec::new();
+        within("eof", tunnel.read_to_end(&mut rest)).await.unwrap();
+        assert!(rest.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn tunnel_errors_keep_their_codes() {
+    let daemon = FakeDaemon::start_tcp();
+    daemon.forward_mode("old");
+    let error = daemon.bridge().open_tunnel(5173).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("too_old"));
+
+    daemon.forward_mode("nothing");
+    let error = daemon.bridge().open_tunnel(5173).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("nothing_listening"));
+
+    daemon.refuse(StatusCode::FORBIDDEN, "device_pending", "wait for approval");
+    let error = daemon.bridge().open_tunnel(5173).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("device_pending"));
+
+    let error = FakeDaemon::stopped_tcp()
+        .bridge()
+        .open_tunnel(5173)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::NotRunning);
+    let error = daemon.bridge().open_tunnel(0).await.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::BadRequest);
+}
+
+/// A free port on 127.0.0.1 whose next ten are free too, so a forward to it
+/// lands on it.
+fn free_port() -> u16 {
+    loop {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        if port < 65000 {
+            return port;
+        }
+    }
+}
+
+async fn connect(port: u16) -> tokio::net::TcpStream {
+    tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_forward_serves_a_real_local_port_end_to_end() {
+    let daemon = FakeDaemon::start_tcp();
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+    let port = free_port();
+    let forward = set.add(port, None).await.unwrap();
+    assert_eq!((forward.remote_port, forward.local_port), (port, port));
+    assert_eq!(forward.remote, RemoteState::Listening);
+    assert_eq!(forward.message, None);
+
+    let mut stream = connect(port).await;
+    stream.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+    let mut back = [0u8; 18];
+    within("echo", stream.read_exact(&mut back)).await.unwrap();
+    assert_eq!(&back, b"GET / HTTP/1.1\r\n\r\n");
+    eventually("one connection", || set.get(port).unwrap().connections == 1).await;
+    drop(stream);
+    eventually("no connections", || set.get(port).unwrap().connections == 0).await;
+
+    // Twice the same port is refused.
+    let error = set.add(port, None).await.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::BadRequest);
+    assert_eq!(set.ports(), vec![port]);
+}
+
+#[tokio::test]
+async fn a_busy_local_port_moves_up() {
+    let daemon = FakeDaemon::start();
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+    let port = free_port();
+    let _taken = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let forward = set.add(port, None).await.unwrap();
+    assert_ne!(forward.local_port, port);
+    assert!(
+        forward.local_port > port && forward.local_port <= port + 10,
+        "{forward:?}"
+    );
+    let message = forward.message.unwrap();
+    assert!(
+        message.contains(&format!("localhost:{port} was taken")),
+        "{message}"
+    );
+
+    let mut stream = connect(forward.local_port).await;
+    stream.write_all(b"moved").await.unwrap();
+    let mut back = [0u8; 5];
+    within("echo", stream.read_exact(&mut back)).await.unwrap();
+    assert_eq!(&back, b"moved");
+}
+
+#[tokio::test]
+async fn nothing_listening_gets_a_502_page_for_http_and_a_close_for_tls() {
+    let daemon = FakeDaemon::start_tcp();
+    daemon.forward_mode("nothing");
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+    let port = free_port();
+    let forward = set.add(port, None).await.unwrap();
+    assert_eq!(forward.remote, RemoteState::NothingListening);
+
+    let mut stream = connect(port).await;
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut page = String::new();
+    within("502 page", stream.read_to_string(&mut page))
+        .await
+        .unwrap();
+    assert!(page.starts_with("HTTP/1.1 502 Bad Gateway"), "{page}");
+    assert!(
+        page.contains(&format!("Nothing is listening on localhost:{port} on Studio.")),
+        "{page}"
+    );
+
+    let mut tls = connect(port).await;
+    tls.write_all(&[0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00])
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = within("tls close", tls.read_to_end(&mut answer)).await;
+    assert!(answer.is_empty(), "{answer:?}");
+
+    // Once something runs there, the next connection goes through.
+    daemon.forward_mode("echo");
+    let mut stream = connect(port).await;
+    stream.write_all(b"up").await.unwrap();
+    let mut back = [0u8; 2];
+    within("echo", stream.read_exact(&mut back)).await.unwrap();
+    eventually("listening", || {
+        set.get(port).unwrap().remote == RemoteState::Listening
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn fifty_parallel_connections_each_get_their_own_bytes() {
+    let daemon = FakeDaemon::start();
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+    let port = free_port();
+    set.add(port, None).await.unwrap();
+
+    let mut streams = Vec::new();
+    for i in 0..50u32 {
+        let mut stream = connect(port).await;
+        stream.write_all(&i.to_be_bytes()).await.unwrap();
+        streams.push(stream);
+    }
+    for (i, stream) in streams.iter_mut().enumerate() {
+        let mut back = [0u8; 4];
+        within("echo", stream.read_exact(&mut back)).await.unwrap();
+        assert_eq!(u32::from_be_bytes(back), i as u32);
+    }
+    eventually("fifty", || set.get(port).unwrap().connections == 50).await;
+    drop(streams);
+    eventually("none", || set.get(port).unwrap().connections == 0).await;
+}
+
+#[tokio::test]
+async fn removing_or_dropping_stops_the_listener_and_its_tunnels() {
+    let daemon = FakeDaemon::start();
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+    let port = free_port();
+    set.add(port, None).await.unwrap();
+    let mut open = connect(port).await;
+    open.write_all(b"x").await.unwrap();
+    let mut back = [0u8; 1];
+    within("echo", open.read_exact(&mut back)).await.unwrap();
+
+    assert!(set.remove(port).forwards.is_empty());
+    let mut rest = Vec::new();
+    let _ = within("tunnel dropped", open.read_to_end(&mut rest)).await;
+    eventually("listener closed", || {
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_err()
+    })
+    .await;
+
+    let other = free_port();
+    set.add(other, None).await.unwrap();
+    let mut open = connect(other).await;
+    open.write_all(b"y").await.unwrap();
+    within("echo", open.read_exact(&mut back)).await.unwrap();
+    drop(set);
+    let _ = within("tunnel dropped", open.read_to_end(&mut rest)).await;
+    eventually("listener closed", || {
+        std::net::TcpStream::connect(("127.0.0.1", other)).is_err()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn refusals_and_old_daemons_are_errors_but_an_unreachable_host_is_kept() {
+    let daemon = FakeDaemon::start_tcp();
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+
+    daemon.forward_mode("old");
+    let error = set.add(free_port(), None).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("too_old"));
+    assert_eq!(
+        error.message,
+        "Studio's cos is too old to forward ports. Run `cos upgrade` there."
+    );
+
+    daemon.forward_mode("echo");
+    daemon.refuse(StatusCode::FORBIDDEN, "device_pending", "wait for approval");
+    let error = set.add(free_port(), None).await.unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("device_pending"));
+    assert!(set.ports().is_empty());
+
+    let away = ForwardSet::new(FakeDaemon::stopped_tcp().bridge(), "Laptop");
+    let port = free_port();
+    let forward = away.add(port, None).await.unwrap();
+    assert_eq!(forward.remote, RemoteState::Unreachable);
+    assert_eq!(away.ports(), vec![port]);
+}
+
+#[tokio::test]
+async fn follow_sends_the_list_then_each_change() {
+    let daemon = FakeDaemon::start();
+    let set = ForwardSet::new(daemon.bridge(), "Studio");
+    let (_handle, mut messages) = collect(|sink| set.follow(sink));
+    let ForwardMessage::Forwards { host, forwards } = next(&mut messages).await;
+    assert_eq!((host.as_str(), forwards.len()), ("Studio", 0));
+
+    let port = free_port();
+    set.add(port, None).await.unwrap();
+    let ForwardMessage::Forwards { forwards, .. } = next(&mut messages).await;
+    assert_eq!(forwards[0].remote_port, port);
+
+    set.remove(port);
+    let ForwardMessage::Forwards { forwards, .. } = next(&mut messages).await;
+    assert!(forwards.is_empty());
+
+    // Dropping the set ends the stream.
+    drop(set);
+    assert!(within("end", messages.recv()).await.is_none());
 }
