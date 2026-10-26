@@ -111,6 +111,7 @@ impl Fixture {
             self.dir.path(),
         );
         let state = api::AppState {
+            forwards: crate::daemon::forward::Forwards::new(),
             shells: crate::daemon::shells::Shells::new(),
             staff,
             judge,

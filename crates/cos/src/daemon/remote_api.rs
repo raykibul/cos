@@ -44,9 +44,9 @@ const SHARED: &[&str] = &["/v1/tailnet/peers"];
 /// The approved device behind a tailnet request, put in the request's
 /// extensions by the guard. Absent on the Unix socket.
 #[derive(Debug, Clone)]
-struct RemoteClient {
-    node_id: String,
-    ip: IpAddr,
+pub(crate) struct RemoteClient {
+    pub node_id: String,
+    pub ip: IpAddr,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -167,7 +167,11 @@ async fn deny_device(
     id: Result<Path<i64>, PathRejection>,
 ) -> Result<Json<Device>, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::not_found("there is no such device"))?;
-    Ok(Json(state.devices.deny(id)?))
+    let device = state.devices.deny(id)?;
+    // The guard checks each request, but a tunnel is one request that may
+    // last hours.
+    state.forwards.close_device(&device.node_id);
+    Ok(Json(device))
 }
 
 async fn remove_device(
@@ -175,7 +179,11 @@ async fn remove_device(
     id: Result<Path<i64>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::not_found("there is no such device"))?;
+    let device = state.devices.get(id)?;
     state.devices.remove(id)?;
+    if let Some(device) = device {
+        state.forwards.close_device(&device.node_id);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
