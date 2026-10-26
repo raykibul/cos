@@ -69,6 +69,24 @@ const shots = [
   ],
   ["chief-terminal", "page=chief:1&terminal"],
   ["chief-session", "page=chief:1&session=7"],
+  ["chief-session-terminal", "page=chief:1&session=7&sessionterminal"],
+  [
+    "chief-session-from-sidebar",
+    "page=chief:1",
+    (page) => page.getByRole("treeitem", { name: /^Write the release notes/ }).click(),
+  ],
+  [
+    "terminal-tabs",
+    "page=chief:1",
+    async (page) => {
+      await page.keyboard.press("Control+j");
+      await page.getByRole("tab", { name: "Terminal 1 · cos" }).waitFor();
+      await page.keyboard.press("Control+j");
+      await page.getByRole("tab", { name: "Terminal 2 · cos" }).waitFor();
+      await page.waitForTimeout(400);
+    },
+  ],
+  ["chief-identity", "page=chiefMemory:1"],
   ["agent-shell-command", "page=agent:7"],
   [
     "chief-spawned-cards",

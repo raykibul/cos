@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
-import { shellPlace, shownProject } from "../store/selectors";
+import { shownProject } from "../store/selectors";
 import { type CosStore, isThisMac } from "../store/store";
 import { ChiefMemoryPage } from "../pages/chief/ChiefMemoryPage";
 import { ChiefPage } from "../pages/chief/ChiefPage";
@@ -23,6 +23,7 @@ import { Dialogs } from "../sheets/Dialogs";
 import { cx } from "../ui/cx";
 import { AppContext, useApp, useCos, useUi } from "./context";
 import { useSidebar } from "./layout";
+import { openShell } from "./shell";
 import { type Page, type UiStore, createUiStore } from "./ui";
 
 export function App({ cos, ui }: { cos: CosStore; ui?: UiStore }) {
@@ -159,20 +160,6 @@ function Content() {
     case "shell":
       return <ShellPage key={page.id} page={page} />;
   }
-}
-
-/** Starts a shell where the page is and opens it in a tab next to it. */
-function openShell(cos: CosStore, ui: UiStore): void {
-  const { page, project } = ui.store.getState();
-  const place = shellPlace(cos.get(), page, project);
-  if (!place) {
-    ui.toast("Nowhere to open a terminal", "Add a project first; Ctrl-J opens one in its folder.");
-    return;
-  }
-  void ui.perform("Couldn't open a terminal", async () => {
-    const shell = await cos.client.startShell(place.cwd, place.projectId);
-    ui.navigate({ kind: "shell", id: shell.id, cwd: shell.cwd, projectId: shell.projectId });
-  });
 }
 
 /** A closed terminal tab ends its shell, so none is left running unseen. */

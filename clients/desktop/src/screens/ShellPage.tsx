@@ -17,7 +17,7 @@ export function ShellPage({ page }: { page: Extract<Page, { kind: "shell" }> }) 
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader>
         <Terminal className="size-4 shrink-0 text-ink-3" strokeWidth={1.8} aria-hidden />
-        <h1 className="shrink-0 font-medium text-ink">Terminal</h1>
+        <h1 className="shrink-0 font-medium text-ink">Terminal {page.n ?? 1}</h1>
         {projectName ? <span className="shrink-0">· {projectName}</span> : null}
         <span className="min-w-0 truncate">
           · <PathText path={page.cwd} className="break-normal" />

@@ -121,7 +121,9 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
   useEffect(() => (agentId !== null ? cos.watchTranscript(agentId) : undefined), [cos, agentId]);
   useEffect(() => cos.watchInbox(projectId), [cos, projectId]);
 
-  // Ctrl-Shift-J shows and hides the chief's terminal.
+  // Ctrl-Shift-J flips the session beside the chat between its transcript and
+  // its terminal; with none there, it shows and hides the chief's terminal.
+  const sessionShown = session !== null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       // Plain Ctrl-J opens a shell tab (App.tsx).
@@ -133,12 +135,13 @@ function ChiefView({ projectId, projectName }: { projectId: number; projectName:
         event.code === "KeyJ"
       ) {
         event.preventDefault();
-        ui.toggleChiefTerminal();
+        if (sessionShown) ui.showSessionTerminal();
+        else ui.toggleChiefTerminal();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ui]);
+  }, [ui, sessionShown]);
 
   const items = useMemo(
     () => conversationItems(transcript?.messages ?? [], pending),

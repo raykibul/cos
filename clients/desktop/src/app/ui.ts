@@ -20,7 +20,7 @@ export type Page =
   /** Settings: your machines, environment variables for all projects, and remote access to this one. */
   | { kind: "settings" }
   /** A shell the daemon runs in `cwd` (`id` is the shell's), opened with Ctrl-J. */
-  | { kind: "shell"; id: number; cwd: string; projectId: number | null };
+  | { kind: "shell"; id: number; cwd: string; projectId: number | null; n?: number };
 
 export type DialogState =
   | { kind: "addProject" }
@@ -82,6 +82,16 @@ export interface UiState {
    * card); null for none. It and the chief's terminal share the right side.
    */
   chiefSession: number | null;
+  /**
+   * Whether that session shows its terminal rather than its transcript.
+   * Kept as you move between sessions.
+   */
+  sessionTerminal: boolean;
+  /**
+   * The session just shown beside the chief, whose message box takes the
+   * cursor once it's there; null once it has.
+   */
+  focusSession: number | null;
   /** Whether an agent's page shows its terminal beside the conversation. */
   agentTerminal: boolean;
   /**
@@ -163,6 +173,8 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     toasts: [],
     chiefTerminal: false,
     chiefSession: null,
+    sessionTerminal: false,
+    focusSession: null,
     agentTerminal: false,
     sidebar: "auto" as SidebarMode,
     project: null,
@@ -217,8 +229,17 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     showChiefSession(agentId: number | null) {
       store.setState((s) => ({
         chiefSession: agentId,
+        focusSession: agentId,
         chiefTerminal: agentId !== null ? false : s.chiefTerminal,
       }));
+    },
+    /** The session beside the chief has taken the cursor. */
+    sessionFocused() {
+      if (store.getState().focusSession !== null) store.setState({ focusSession: null });
+    },
+    /** Shows the session beside the chief as its terminal, or as its transcript. */
+    showSessionTerminal(open?: boolean) {
+      store.setState((s) => ({ sessionTerminal: open ?? !s.sessionTerminal }));
     },
     toggleAgentTerminal(open?: boolean) {
       store.setState((s) => ({ agentTerminal: open ?? !s.agentTerminal }));

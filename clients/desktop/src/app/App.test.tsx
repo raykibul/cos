@@ -244,15 +244,54 @@ describe("terminal tabs", () => {
     });
     const page = ui.store.getState().page;
     expect(page).toMatchObject({ kind: "shell", cwd: root, projectId: 1 });
-    const folder = root.split("/").pop()!;
-    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent(`${folder} terminal`);
-    expect(screen.getByRole("heading", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("Terminal 1 · cos");
+    expect(screen.getByRole("heading", { name: "Terminal 1" })).toBeInTheDocument();
     await waitFor(() => expect(written.join("")).toContain("me@mac"));
 
-    await user.click(screen.getByRole("button", { name: `Close ${folder} terminal` }));
+    // The sidebar lists it under the project's terminals.
+    const listed = within(screen.getByRole("list", { name: "Terminals in cos" }));
+    expect(listed.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Terminal 1"]);
+
+    await user.click(screen.getByRole("button", { name: "Close Terminal 1 · cos" }));
     await act(() => settle());
     const closed = `/v1/shells/${"id" in page ? page.id : -1}`;
     expect(daemon.requests.some((r) => r.method === "DELETE" && r.path === closed)).toBe(true);
+    expect(screen.queryByRole("list", { name: "Terminals in cos" })).toBeNull();
+  });
+
+  it("opens another terminal on each Ctrl-J, numbered per project, and closes one from the sidebar", async () => {
+    const { user, daemon, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    expect(daemon.requests.filter((r) => r.path === "/v1/shells")).toHaveLength(2);
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("Terminal 2 · cos");
+    const listed = () => within(screen.getByRole("list", { name: "Terminals in cos" }));
+    expect(
+      listed()
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Terminal 1", "Terminal 2"]);
+
+    // + in the sidebar opens a third in the project's root.
+    await user.click(screen.getByRole("button", { name: "New terminal in cos" }));
+    await act(() => settle());
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("Terminal 3 · cos");
+
+    const first = ui.store.getState().tabs.find((t) => t.kind === "shell")!;
+    await user.click(listed().getByRole("button", { name: "Close Terminal 1" }));
+    await act(() => settle());
+    expect(
+      daemon.requests.some(
+        (r) => r.method === "DELETE" && r.path === `/v1/shells/${"id" in first ? first.id : -1}`,
+      ),
+    ).toBe(true);
+    expect(
+      listed()
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Terminal 2", "Terminal 3"]);
   });
 
   it("opens it in the session's folder from a session's page", async () => {

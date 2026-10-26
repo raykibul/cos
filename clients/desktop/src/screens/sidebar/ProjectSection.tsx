@@ -4,19 +4,24 @@
 // folder sit together, joined by a bracket in that folder's colour.
 
 import {
+  ArrowUpRight,
   FolderX,
   GitBranch,
   LayoutGrid,
   MoreHorizontal,
   NotebookPen,
+  PanelRight,
   Plus,
+  SquareTerminal,
   Trash2,
   Variable,
+  X,
 } from "lucide-react";
 import { useMemo } from "react";
 import { envHint } from "../../api/env";
 import { type Agent, type Project, workspaceName } from "../../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
+import { openShell, projectShells } from "../../app/shell";
 import { samePage } from "../../app/ui";
 import { agentLabel, attentionWord } from "../../domain/labels";
 import { staffLabel } from "../../pages/chief/staffState";
@@ -28,6 +33,7 @@ import {
   spawnedAgents,
   staffState,
 } from "../../store/selectors";
+import { isThisMac } from "../../store/store";
 import { cx } from "../../ui/cx";
 import { StateDot } from "../../ui/kit";
 import { StateIcon } from "../../ui/StateIcon";
@@ -153,6 +159,83 @@ export function ProjectPanel({ project }: { project: Project }) {
           </ul>
         )}
       </div>
+
+      <Terminals project={project} />
+    </div>
+  );
+}
+
+/**
+ * The project's Ctrl-J terminals: one row per open terminal tab, × to close
+ * it (which ends its shell), + to open another in the project's folder.
+ */
+function Terminals({ project }: { project: Project }) {
+  const { cos, ui } = useApp();
+  const tabs = useUi((s) => s.tabs);
+  const page = useUi((s) => s.page);
+  const remote = useCos((s) => !isThisMac(s.host));
+  const shells = useMemo(() => projectShells(tabs, project.id), [tabs, project.id]);
+  // Shells run only on this Mac's daemon (docs/desktop.md).
+  if (remote) return null;
+  return (
+    <div className="shrink-0 border-t border-line px-2.5 pt-2 pb-3">
+      <div className="flex items-center px-1.5 pb-1">
+        <span className="text-[11.5px] font-semibold tracking-wide text-ink-3 uppercase">
+          Terminals
+        </span>
+        <button
+          type="button"
+          aria-label={`New terminal in ${project.name}`}
+          title={`New terminal in ${project.root} (Ctrl-J)`}
+          onClick={() => openShell(cos, ui, { cwd: project.root, projectId: project.id })}
+          className="ml-auto flex size-6 items-center justify-center rounded-md text-ink-3 hover:bg-subtle-2/70 hover:text-ink"
+        >
+          <Plus className="size-3.5" strokeWidth={2} />
+        </button>
+      </div>
+      {shells.length === 0 ? (
+        <p className="px-1.5 text-[12px] leading-snug text-ink-3">
+          Ctrl-J opens one in the project's folder.
+        </p>
+      ) : (
+        <ul aria-label={`Terminals in ${project.name}`} className="flex flex-col gap-px">
+          {shells.map((shell) => {
+            const selected = samePage(page, shell);
+            const name = `Terminal ${shell.n ?? 1}`;
+            const folder = shell.cwd.split("/").filter(Boolean).pop() ?? "/";
+            const atRoot = shell.cwd.replace(/\/+$/, "") === project.root.replace(/\/+$/, "");
+            return (
+              <li key={shell.id} className="group/term relative">
+                <button
+                  type="button"
+                  aria-current={selected ? "page" : undefined}
+                  title={shell.cwd}
+                  onClick={() => ui.navigate(shell)}
+                  className={cx(
+                    "flex h-8 w-full items-center gap-2 rounded-lg pr-8 pl-2.5 text-left text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+                    selected ? "bg-subtle-2 text-ink" : "text-ink-2 hover:bg-subtle hover:text-ink",
+                  )}
+                >
+                  <SquareTerminal className="size-3.5 shrink-0" strokeWidth={1.9} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">
+                    {name}
+                    {atRoot ? null : <span className="text-ink-3"> · {folder}</span>}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Close ${name}`}
+                  title="Close (ends the shell)"
+                  onClick={() => ui.closeTab(shell)}
+                  className="absolute top-1.5 right-1.5 flex size-5 items-center justify-center rounded text-ink-3 opacity-0 group-hover/term:opacity-100 hover:bg-subtle-2 hover:text-ink focus-visible:opacity-100"
+                >
+                  <X className="size-3" strokeWidth={2.2} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -210,7 +293,13 @@ function SessionRow({
   const { cos, ui } = useApp();
   const canChange = useCanChange();
   const agentsSupported = useCos((s) => s.agentsSupported);
-  const selected = useUi((s) => samePage(s.page, { kind: "agent", id: agent.id }));
+  const projectId = group.workspace.projectId;
+  const staffSupported = useCos((s) => s.staffSupported);
+  // Shown beside its project's chief, or open in a tab of its own.
+  const beside = useUi(
+    (s) => samePage(s.page, { kind: "chief", id: projectId }) && s.chiefSession === agent.id,
+  );
+  const selected = useUi((s) => samePage(s.page, { kind: "agent", id: agent.id })) || beside;
   const label = agentLabel(agent.state);
   const word = attentionWord(agent.state);
   const name = workspaceName(group.workspace);
@@ -220,11 +309,29 @@ function SessionRow({
     `${label.title} · ${agent.model ?? "default model"}`,
     agent.spawnedBy !== null ? "Started by the Chief of Staff" : null,
     others.length > 0 ? `Shares ${name} with ${others.join(", ")}` : `In ${name}`,
+    staffSupported ? "Click: beside the Chief of Staff · ⌘-click: in a tab" : null,
   ]
     .filter(Boolean)
     .join("\n");
+  // A click shows it beside the chief, so you keep the chief's chat in view;
+  // ⌘-click (or a daemon without chiefs) opens it in a tab of its own.
+  const open = (inTab: boolean) => {
+    if (inTab || !staffSupported) {
+      ui.navigate({ kind: "agent", id: agent.id });
+      return;
+    }
+    ui.navigate({ kind: "chief", id: projectId });
+    ui.showChiefSession(agent.id);
+  };
   // Right-click: another session in the same folder, the folder, or remove it.
   const menu: MenuItem[] = [
+    {
+      label: "Open in a tab",
+      icon: ArrowUpRight,
+      detail: "⌘-click",
+      onSelect: () => open(true),
+    },
+    "separator",
     {
       label: `New session in ${name}`,
       icon: Plus,
@@ -272,7 +379,7 @@ function SessionRow({
             aria-expanded={popup["aria-expanded"]}
             aria-controls={popup["aria-controls"]}
             title={tooltip}
-            onClick={() => ui.navigate({ kind: "agent", id: agent.id })}
+            onClick={(event) => open(event.metaKey || event.ctrlKey)}
             onContextMenu={onContextMenu}
             className={cx(
               "flex h-8 w-full items-center gap-2 rounded-lg pr-2 text-left text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
@@ -291,6 +398,12 @@ function SessionRow({
               </span>
             ) : agent.state === "interrupted" ? (
               <span className="shrink-0 text-[11px] text-tone-amber">stopped</span>
+            ) : beside ? (
+              <PanelRight
+                className="size-3.5 shrink-0 text-accent"
+                strokeWidth={2}
+                aria-label="Beside the Chief of Staff"
+              />
             ) : agent.state === "exited" ? (
               <span className="shrink-0 text-[11px] text-ink-3">exited</span>
             ) : null}

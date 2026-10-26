@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { fakeStore, requestLines, settle } from "../test/harness";
@@ -43,7 +43,9 @@ describe("tabs", () => {
   it("open a tab for each page, named for what it shows", async () => {
     const { user } = await renderApp();
     await user.click(sidebar().getByRole("button", { name: "Chief of Staff, cos" }));
+    await user.keyboard("{Meta>}");
     await user.click(sidebar().getByRole("treeitem", { name: /Fix login bug/ }));
+    await user.keyboard("{/Meta}");
     expect(tabTitles()).toEqual(["Waiting on you", "cos", "Fix login bug"]);
     expect(tabs().getByRole("tab", { selected: true })).toHaveTextContent("Fix login bug");
     expect(tabs().getByRole("tab", { name: "cos" })).toHaveAttribute(
@@ -285,9 +287,19 @@ describe("focus on open", () => {
     expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveFocus();
   });
 
-  it("puts the cursor in a session's message box", async () => {
+  it("puts the cursor in a session's message box, beside the chief or in its tab", async () => {
     const { user } = await renderApp();
     await user.click(sidebar().getByRole("treeitem", { name: /^Write the release notes/ }));
+    await act(() => settle());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Message Write the release notes" }),
+      ).toHaveFocus(),
+    );
+
+    await user.keyboard("{Meta>}");
+    await user.click(sidebar().getByRole("treeitem", { name: /^Write the release notes/ }));
+    await user.keyboard("{/Meta}");
     await act(() => settle());
     expect(screen.getByRole("textbox", { name: "Message Write the release notes" })).toHaveFocus();
   });
