@@ -1,7 +1,6 @@
 // The fake daemon's shell terminals (docs/agents-api.md, "Shells"): a
 // prompt that echoes what you type and runs nothing. `pwd` prints the
-// folder and `exit` ends the shell. Over the tailnet every route answers 403
-// `host_only`, as the daemon does.
+// folder and `exit` ends the shell. Other machines serve them too.
 
 import { toBase64 } from "../../api/client";
 import type { DaemonResponse, TerminalMessage } from "../types";
@@ -33,19 +32,10 @@ export class FakeShells {
   private readonly streams = new Map<number, ShellStream>();
   private nextId = 1;
 
-  constructor(
-    private readonly remote: boolean,
-    private readonly now: () => number,
-  ) {}
+  constructor(private readonly now: () => number) {}
 
   route(method: string, path: string, b: Raw): DaemonResponse | undefined {
     if (!path.startsWith("/v1/shells")) return undefined;
-    if (this.remote) {
-      return {
-        status: 403,
-        body: { error: "terminals in a folder open only on the host itself", code: "host_only" },
-      };
-    }
     const ok = (body: unknown, status = 200): DaemonResponse => ({ status, body });
     const missing = { status: 404, body: { error: "there is no such terminal" } };
     if (method === "GET" && path === "/v1/shells") {

@@ -1,11 +1,27 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FakeOptions } from "../bridge/fake";
 import { waitingCount } from "../store/selectors";
 import { fakeStore, settle } from "../test/harness";
 import { App } from "./App";
 import { type Page, createUiStore } from "./ui";
+
+// The emulator needs WebAssembly and a canvas, which jsdom lacks.
+vi.mock("../terminal/engine", () => ({
+  loadEngine: () => Promise.resolve(null),
+  createEngine: () =>
+    Promise.resolve({
+      open: () => undefined,
+      write: () => undefined,
+      reset: () => undefined,
+      resize: () => undefined,
+      fitSize: () => ({ cols: 100, rows: 30 }),
+      focus: () => undefined,
+      onData: () => ({ dispose: () => undefined }),
+      dispose: () => undefined,
+    }),
+}));
 
 async function renderApp(page: Page = { kind: "waiting" }, options: FakeOptions = {}) {
   const harness = fakeStore({ retryMs: 10, ...options });
@@ -60,6 +76,23 @@ describe("host picker", () => {
     // The footer names the host; no device count from This Mac.
     expect(sidebar().getByText(/^cos v0\.1\.0/).parentElement).toHaveTextContent("Studio");
     expect(screen.queryByText("Devices asking to reach this Mac")).not.toBeInTheDocument();
+  });
+
+  it("opens terminals on the machine in use", async () => {
+    const { user, bridge, cos, ui } = await renderApp();
+    bridge.approve("h1");
+    await pickHost(user, /^Studio/);
+    await waitFor(() => expect(cos.get().connection).toBe("running"));
+    act(() => ui.navigate({ kind: "chief", id: 1 }));
+    await act(() => settle());
+    await user.click(sidebar().getByRole("button", { name: "New terminal in cos" }));
+    await act(() => settle());
+    const studio = bridge.daemons.get("h1")!;
+    expect(studio.requests.some((r) => r.method === "POST" && r.path === "/v1/shells")).toBe(true);
+    expect(bridge.daemon.requests.some((r) => r.path === "/v1/shells")).toBe(false);
+    expect(ui.store.getState().page).toMatchObject({ kind: "shell", projectId: 1 });
+    const listed = within(sidebar().getByRole("list", { name: "Terminals in cos" }));
+    expect(listed.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Terminal 1"]);
   });
 });
 

@@ -7,8 +7,8 @@
 //! - `POST /v1/shells/{id}/keys|resize`, `DELETE /v1/shells/{id}`
 //! - `GET /v1/shells/{id}/terminal` (SSE, the same stream as an agent's)
 //!
-//! They are host-only: over the tailnet they answer 403 `host_only`, since a
-//! shell is the machine itself.
+//! Approved devices open them over the tailnet too: a shell there runs as the
+//! daemon's user, so approving a device gives it the machine's shell.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

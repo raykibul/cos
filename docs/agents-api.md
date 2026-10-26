@@ -211,7 +211,7 @@ A shell is a login shell (`$SHELL -l`, else the OS's usual one) the daemon runs 
 
 `Shell` is `{"id": 1, "project_id": 1, "cwd": "/abs/folder", "pid": 4242, "started_ms": 1761330000000, "exited": false, "exit_code": null}`. An unknown id is 404 "there is no such terminal".
 
-**This machine only:** over the tailnet every `/v1/shells` route answers 403 `host_only`, since a shell is the machine itself. Approved devices still see and type into agents' terminals.
+**Over the tailnet too:** approved devices open shells like the host does. A shell runs as the daemon's user, so approving a device gives it that machine's shell.
 
 ## Events
 

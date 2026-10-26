@@ -302,7 +302,7 @@ export class DaemonClient {
     return this.get(`/v1/agents/${agentId}/screen`, decodeScreen);
   }
 
-  // MARK: Shells (this Mac only: another machine answers 403 host_only)
+  // MARK: Shells
 
   /** Starts a login shell in `cwd`, with the project's environment when given. */
   startShell(cwd: string, projectId: number | null, rows?: number, cols?: number): Promise<Shell> {
