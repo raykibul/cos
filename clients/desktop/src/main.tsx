@@ -101,6 +101,7 @@ async function main() {
     dialog: parseDialog(params.get("dialog")),
     chiefTerminal: params.has("terminal"),
     chiefSession: params.has("session") ? Number(params.get("session")) : null,
+    sessionTerminal: params.has("sessionterminal"),
     agentTerminal: params.has("terminal"),
     sidebar: params.has("nosidebar") ? "hidden" : savedSidebar(),
   });

@@ -124,10 +124,46 @@ describe("sidebar", () => {
     ).toHaveTextContent("Trust");
   });
 
-  it("opens a session from the sidebar", async () => {
+  it("opens a session from the sidebar beside its chief, or in a tab with ⌘-click", async () => {
+    const { user, ui } = await renderApp({ kind: "waiting" });
+    act(() => ui.showProject(1));
+    const row = () => sidebar().getByRole("treeitem", { name: /Fix login bug/ });
+    await user.click(row());
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
+    expect(ui.store.getState().chiefSession).toBe(7);
+    const pane = within(screen.getByRole("complementary", { name: "Session beside the chat" }));
+    expect(pane.getByRole("heading", { name: "Fix login bug" })).toBeInTheDocument();
+    expect(row()).toHaveAttribute("aria-selected", "true");
+    expect(within(row()).getByLabelText("Beside the Chief of Staff")).toBeInTheDocument();
+
+    await user.keyboard("{Meta>}");
+    await user.click(row());
+    await user.keyboard("{/Meta}");
+    expect(ui.store.getState().page).toEqual({ kind: "agent", id: 7 });
+  });
+
+  it("switches the session beside the chief between transcript and terminal", async () => {
     const { user, ui } = await renderApp({ kind: "chief", id: 1 });
     await user.click(sidebar().getByRole("treeitem", { name: /Fix login bug/ }));
-    expect(ui.store.getState().page.kind).toBe("agent");
+    const pane = () =>
+      within(screen.getByRole("complementary", { name: "Session beside the chat" }));
+    const transcript = pane().getByRole("button", { name: "Transcript" });
+    expect(transcript).toHaveAttribute("aria-pressed", "true");
+    expect(pane().getByRole("textbox", { name: "Message Fix login bug" })).toBeInTheDocument();
+
+    await user.click(pane().getByRole("button", { name: "Terminal" }));
+    expect(ui.store.getState().sessionTerminal).toBe(true);
+    expect(pane().getByRole("button", { name: "Terminal" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(pane().queryByRole("textbox", { name: "Message Fix login bug" })).toBeNull();
+
+    // Ctrl-Shift-J flips it back, and the chief's own terminal stays shut.
+    await user.keyboard("{Control>}{Shift>}j{/Shift}{/Control}");
+    expect(ui.store.getState().sessionTerminal).toBe(false);
+    expect(ui.store.getState().chiefTerminal).toBe(false);
+    expect(pane().getByRole("textbox", { name: "Message Fix login bug" })).toBeInTheDocument();
   });
 });
 

@@ -2,6 +2,7 @@ import {
   ArrowUpRight,
   Bot,
   KeyRound,
+  MessageSquare,
   MoreHorizontal,
   Play,
   ShieldQuestion,
@@ -103,10 +104,10 @@ function AgentView({
   const transcript = useCos((s) => s.transcripts[agent.id]);
   const pending = useCos((s) => s.agentPending[agent.id] ?? noPending);
   const pageTerminal = useUi((s) => s.agentTerminal);
-  const [panelTerminal, setPanelTerminal] = useState(false);
+  const panelTerminal = useUi((s) => s.sessionTerminal);
   const terminalWanted = embedded ? panelTerminal : pageTerminal;
   const toggleTerminal = (open: boolean) =>
-    embedded ? setPanelTerminal(open) : ui.toggleAgentTerminal(open);
+    embedded ? ui.showSessionTerminal(open) : ui.toggleAgentTerminal(open);
   const [busy, setBusy] = useState<"stop" | "resume" | null>(null);
   const [draft, setDraft] = useState("");
   const [jumps, setJumps] = useState(0);
@@ -124,6 +125,17 @@ function AgentView({
   // Logging in happens in the terminal, so it shows while Claude asks.
   const terminalOpen = terminalOnly || terminalWanted || agent.state === "needs_login";
   useFocusOnOpen(input, !terminalOnly && !embedded);
+  // Beside the chief, its message box takes the cursor when you open it
+  // (after the chief's page has put it in its own).
+  const focusWanted = useUi((s) => embedded !== undefined && s.focusSession === agent.id);
+  useEffect(() => {
+    if (!focusWanted) return;
+    const frame = requestAnimationFrame(() => {
+      if (!ui.store.getState().dialog) input.current?.focus({ preventScroll: true });
+      ui.sessionFocused();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [ui, focusWanted]);
 
   useEffect(() => cos.watchTranscript(agent.id), [cos, agent.id]);
 
@@ -196,15 +208,7 @@ function AgentView({
       <h2 className="min-w-0 truncate text-[13px] font-semibold text-ink">{agent.title}</h2>
       <StateBadge label={label} className="shrink-0" />
       <span className="ml-auto flex shrink-0 items-center gap-0.5">
-        {terminalOnly ? null : (
-          <IconButton
-            icon={SquareTerminal}
-            label={terminalOpen ? "Show the conversation" : "Show the terminal"}
-            aria-pressed={terminalOpen}
-            onClick={() => toggleTerminal(!terminalOpen)}
-            className={cx(terminalOpen && "bg-subtle-2 text-ink")}
-          />
-        )}
+        {terminalOnly ? null : <ViewSwitch terminal={terminalOpen} onChange={toggleTerminal} />}
         {canResume(agent.state) ? (
           <IconButton
             icon={Play}
@@ -648,6 +652,47 @@ function AgentFooter({ agent, cwd }: { agent: Agent; cwd: string | null }) {
       <span className="shrink-0">{parts.join(" · ")}</span>
       <EnvNames names={agent.envNames} />
       {cwd ? <PathText path={cwd} className="ml-auto truncate text-[11.5px] text-ink-3" /> : null}
+    </div>
+  );
+}
+
+/**
+ * Transcript or Terminal, for a session beside the chief. Ctrl-Shift-J flips
+ * it from the chief's page.
+ */
+function ViewSwitch({
+  terminal,
+  onChange,
+}: {
+  terminal: boolean;
+  onChange: (terminal: boolean) => void;
+}) {
+  const option = (on: boolean, value: boolean, icon: typeof MessageSquare, label: string) => {
+    const Icon = icon;
+    return (
+      <button
+        type="button"
+        aria-pressed={on}
+        title={`Show its ${label.toLowerCase()} (Ctrl-Shift-J)`}
+        onClick={() => onChange(value)}
+        className={cx(
+          "flex h-6 items-center gap-1.5 rounded-md px-2 text-[11.5px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+          on ? "bg-surface text-ink shadow-card" : "text-ink-2 hover:text-ink",
+        )}
+      >
+        <Icon className="size-3.5" strokeWidth={1.9} aria-hidden />
+        {label}
+      </button>
+    );
+  };
+  return (
+    <div
+      role="group"
+      aria-label="Show the session as"
+      className="mr-1 flex gap-0.5 rounded-lg bg-subtle p-0.5"
+    >
+      {option(!terminal, false, MessageSquare, "Transcript")}
+      {option(terminal, true, SquareTerminal, "Terminal")}
     </div>
   );
 }

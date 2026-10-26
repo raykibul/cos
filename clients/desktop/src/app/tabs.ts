@@ -59,10 +59,14 @@ export function tabInfo(s: DaemonState, page: Page): TabInfo {
     }
     case "shell": {
       const name = page.cwd.split("/").filter(Boolean).pop() ?? "/";
-      const owner = page.projectId !== null ? project(s, page.projectId)?.name : undefined;
+      const p = page.projectId !== null ? project(s, page.projectId) : undefined;
+      const owner = p?.name;
+      const n = page.n ?? 1;
+      // In the project's folder: "Terminal 2 · opal-app"; elsewhere, the folder's name.
+      const atRoot = p !== undefined && p.root.replace(/\/+$/, "") === page.cwd.replace(/\/+$/, "");
       return {
         ...base,
-        title: `${name} terminal`,
+        title: atRoot ? `Terminal ${n} · ${owner}` : `${name} terminal${n > 1 ? ` ${n}` : ""}`,
         hint: `Terminal in ${page.cwd}${owner && owner !== name ? ` · ${owner}` : ""}`,
       };
     }
