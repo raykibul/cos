@@ -145,7 +145,7 @@ export class FakeDaemon {
   constructor(options: FakeOptions = {}, remote = false) {
     this.fixtures = makeFixtures(options.now);
     this.remote = remote;
-    this.shells = new FakeShells(remote, () => this.fixtures.now);
+    this.shells = new FakeShells(() => this.fixtures.now);
     this.devices = remote ? [] : makeDevices(this.fixtures.now);
     this.tailnet = tailnetStatus(!remote, 7700, options.firewall ? firewallReason : null);
     this.peersReason = options.tailscaleOff ? tailscaleReason : null;

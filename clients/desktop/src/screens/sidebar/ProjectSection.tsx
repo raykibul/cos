@@ -33,7 +33,6 @@ import {
   spawnedAgents,
   staffState,
 } from "../../store/selectors";
-import { isThisMac } from "../../store/store";
 import { cx } from "../../ui/cx";
 import { StateDot } from "../../ui/kit";
 import { StateIcon } from "../../ui/StateIcon";
@@ -173,10 +172,7 @@ function Terminals({ project }: { project: Project }) {
   const { cos, ui } = useApp();
   const tabs = useUi((s) => s.tabs);
   const page = useUi((s) => s.page);
-  const remote = useCos((s) => !isThisMac(s.host));
   const shells = useMemo(() => projectShells(tabs, project.id), [tabs, project.id]);
-  // Shells run only on this Mac's daemon (docs/desktop.md).
-  if (remote) return null;
   return (
     <div className="shrink-0 border-t border-line px-2.5 pt-2 pb-3">
       <div className="flex items-center px-1.5 pb-1">

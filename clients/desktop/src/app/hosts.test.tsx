@@ -1,11 +1,27 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FakeOptions } from "../bridge/fake";
 import { waitingCount } from "../store/selectors";
 import { fakeStore, settle } from "../test/harness";
 import { App } from "./App";
 import { type Page, createUiStore } from "./ui";
+
+// The emulator needs WebAssembly and a canvas: terminal tabs get a stand-in.
+vi.mock("../terminal/engine", () => ({
+  loadEngine: () => Promise.resolve(null),
+  createEngine: () =>
+    Promise.resolve({
+      open: () => undefined,
+      write: () => undefined,
+      reset: () => undefined,
+      resize: () => undefined,
+      fitSize: () => ({ cols: 100, rows: 30 }),
+      focus: () => undefined,
+      onData: () => ({ dispose: () => undefined }),
+      dispose: () => undefined,
+    }),
+}));
 
 async function renderApp(page: Page = { kind: "waiting" }, options: FakeOptions = {}) {
   const harness = fakeStore({ retryMs: 10, ...options });
@@ -60,6 +76,46 @@ describe("host picker", () => {
     // The footer names the host; no device count from This Mac.
     expect(sidebar().getByText(/^cos v0\.1\.0/).parentElement).toHaveTextContent("Studio");
     expect(screen.queryByText("Devices asking to reach this Mac")).not.toBeInTheDocument();
+  });
+});
+
+describe("terminals on another machine", () => {
+  async function onStudio() {
+    const app = await renderApp();
+    app.bridge.approve("h1");
+    await pickHost(app.user, /^Studio/);
+    await waitFor(() => expect(app.cos.get().connection).toBe("running"));
+    act(() => app.ui.navigate({ kind: "chief", id: 1 }));
+    await act(() => settle());
+    return { ...app, studio: app.bridge.daemons.get("h1")! };
+  }
+
+  it("opens one on that machine with Ctrl-J and lists it in the sidebar", async () => {
+    const { user, cos, studio } = await onStudio();
+    const root = cos.get().projects.find((p) => p.id === 1)!.root;
+    // + is offered there too.
+    expect(sidebar().getByRole("button", { name: "New terminal in cos" })).toBeInTheDocument();
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    expect(studio.requests).toContainEqual({
+      method: "POST",
+      path: "/v1/shells",
+      body: { cwd: root, project_id: 1 },
+    });
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("Terminal 1 · cos");
+    const listed = within(sidebar().getByRole("list", { name: "Terminals in cos" }));
+    expect(listed.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Terminal 1"]);
+  });
+
+  it("says to update cos there when that machine's cos is too old for it", async () => {
+    const { user, studio } = await onStudio();
+    studio.shells.hostOnly = true;
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    const toast = screen.getByText(/^The cos on Studio is older/).closest("[role=status]");
+    expect(toast).toHaveTextContent("Couldn't open a terminal");
+    expect(toast).toHaveTextContent("Update cos there to open them from this Mac.");
+    expect(screen.queryByRole("list", { name: "Terminals in cos" })).toBeNull();
   });
 });
 

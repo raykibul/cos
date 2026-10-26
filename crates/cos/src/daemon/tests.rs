@@ -976,6 +976,27 @@ async fn a_new_device_waits_for_approval_on_the_host() {
         );
     }
 
+    // Terminals open for approved devices too, and the host sees the same shells.
+    let folder = tempfile::tempdir().unwrap();
+    let cwd = folder.path().canonicalize().unwrap();
+    let shell = remote
+        .start_shell(&crate::daemon::shells::StartShell {
+            cwd: cwd.display().to_string(),
+            project_id: None,
+            rows: Some(24),
+            cols: Some(80),
+        })
+        .await
+        .unwrap();
+    assert_eq!(shell.cwd, cwd.display().to_string());
+    assert_eq!(
+        daemon.local().shells().await.unwrap(),
+        std::slice::from_ref(&shell)
+    );
+    remote.resize_shell(shell.id, 30, 100).await.unwrap();
+    remote.close_shell(shell.id).await.unwrap();
+    assert!(daemon.local().shells().await.unwrap().is_empty());
+
     // Denied: out again at once.
     daemon.local().deny_device(devices[0].id).await.unwrap();
     let (status, body) = tcp_request(addr, "GET", "/v1/status").await;

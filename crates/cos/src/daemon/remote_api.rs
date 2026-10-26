@@ -13,8 +13,8 @@
 //!
 //! Over the tailnet the device and listener routes answer 403 `host_only`, so
 //! a remote device can't approve itself or switch the listener. Every other
-//! route is served there too, peers included, once the guard lets the request
-//! in; there the peer list marks the asking device with `is_you`.
+//! route is served there too, peers and shells included, once the guard lets
+//! the request in; there the peer list marks the asking device with `is_you`.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -37,18 +37,18 @@ use super::tailnet::{Guard, Refusal, TailnetSettings, TailnetStatus};
 /// How long `PUT /v1/tailnet` waits for the listener to start or stop.
 const SETTLE: Duration = Duration::from_secs(15);
 /// Path prefixes only the Unix socket may use.
-const HOST_ONLY: &[&str] = &["/v1/devices", "/v1/tailnet", SHELLS];
-/// Shell terminals: a shell is the machine itself, so only its own user opens one.
-const SHELLS: &str = "/v1/shells";
+const HOST_ONLY: &[&str] = &["/v1/devices", "/v1/tailnet"];
 /// Under a host-only prefix, but served to approved devices too.
 const SHARED: &[&str] = &["/v1/tailnet/peers"];
 
 /// The approved device behind a tailnet request, put in the request's
 /// extensions by the guard. Absent on the Unix socket.
 #[derive(Debug, Clone)]
-struct RemoteClient {
-    node_id: String,
-    ip: IpAddr,
+pub(crate) struct RemoteClient {
+    pub node_id: String,
+    /// Its MagicDNS name, for the log.
+    pub name: String,
+    pub ip: IpAddr,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,6 +104,7 @@ async fn admit(
             let mut request = request;
             request.extensions_mut().insert(RemoteClient {
                 node_id: device.node_id,
+                name: device.name,
                 ip: addr.ip(),
             });
             next.run(request).await
@@ -115,15 +116,12 @@ async fn admit(
 async fn refuse_host_only(request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if is_host_only(path) {
-        let message = if is_under(path, SHELLS) {
-            "terminals in a folder open only on the host itself"
-        } else {
-            "devices and remote access can only be managed on the host (`cos devices`, `cos remote`)"
-        };
         return Refusal {
             status: StatusCode::FORBIDDEN,
             code: "host_only",
-            message: message.into(),
+            message:
+                "devices and remote access can only be managed on the host (`cos devices`, `cos remote`)"
+                    .into(),
         }
         .into_response();
     }
@@ -263,8 +261,6 @@ mod tests {
             "/v1/tailnet/peersx",
             "/v1/tailnet/peers/1",
             "/v1/agents/3/tools/board_get",
-            "/v1/shells",
-            "/v1/shells/2/terminal",
         ] {
             assert!(is_host_only(path), "{path}");
         }
@@ -274,7 +270,8 @@ mod tests {
             "/v1/status",
             "/v1/devicesx",
             "/v1/tailnetwork",
-            "/v1/shellsx",
+            "/v1/shells",
+            "/v1/shells/2/terminal",
             "/v2/devices",
             "/",
         ] {

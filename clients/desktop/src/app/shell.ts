@@ -2,6 +2,7 @@
 // (or the session's or workspace's folder on those pages). Closing its tab
 // ends the shell (App.tsx).
 
+import { CosError } from "../api/errors";
 import { shellPlace } from "../store/selectors";
 import type { CosStore } from "../store/store";
 import type { Page, UiStore } from "./ui";
@@ -23,10 +24,23 @@ export function openShell(
     return;
   }
   void ui.perform("Couldn't open a terminal", async () => {
-    const shell = await cos.client.startShell(where.cwd, where.projectId);
+    let shell;
+    try {
+      shell = await cos.client.startShell(where.cwd, where.projectId);
+    } catch (error) {
+      throw olderDaemon(error, cos.get().host?.name ?? "that machine");
+    }
     const n = nextShellNumber(ui.store.getState().tabs, shell.projectId);
     ui.navigate({ kind: "shell", id: shell.id, cwd: shell.cwd, projectId: shell.projectId, n });
   });
+}
+
+/** An older cos keeps its terminals to itself over the tailnet: say how to get them. */
+function olderDaemon(error: unknown, host: string): unknown {
+  if (CosError.from(error).code !== "host_only") return error;
+  return new Error(
+    `The cos on ${host} is older and opens terminals only on itself. Update cos there to open them from this Mac.`,
+  );
 }
 
 /** One more than the highest number of the project's open terminal tabs. */

@@ -211,7 +211,7 @@ A shell is a login shell (`$SHELL -l`, else the OS's usual one) the daemon runs 
 
 `Shell` is `{"id": 1, "project_id": 1, "cwd": "/abs/folder", "pid": 4242, "started_ms": 1761330000000, "exited": false, "exit_code": null}`. An unknown id is 404 "there is no such terminal".
 
-**This machine only:** over the tailnet every `/v1/shells` route answers 403 `host_only`, since a shell is the machine itself. Approved devices still see and type into agents' terminals.
+**Over the tailnet:** approved devices open and type into shells too, as they already type into agents' terminals (where Claude's `!` runs any command). The guard admits only devices signed in as this machine's Tailscale user, not tagged, and approved on the host, so a shell there is you on your own machine. The daemon logs each shell a device starts, with the device's name, node ID and address. Older daemons answer every `/v1/shells` route 403 `host_only` over the tailnet.
 
 ## Events
 

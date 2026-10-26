@@ -7,8 +7,8 @@
 //! - `POST /v1/shells/{id}/keys|resize`, `DELETE /v1/shells/{id}`
 //! - `GET /v1/shells/{id}/terminal` (SSE, the same stream as an agent's)
 //!
-//! They are host-only: over the tailnet they answer 403 `host_only`, since a
-//! shell is the machine itself.
+//! Approved tailnet devices may use them too, as they may type into agents'
+//! terminals; a shell started over the tailnet is logged with its device.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{Extension, Path as UrlPath, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use super::agents::TerminalView;
 use super::agents_api::{Keys, Resize, terminal_stream};
 use super::api::{ApiError, AppState};
+use super::remote_api::RemoteClient;
 
 /// Shells running at once, at most. Exited ones don't count.
 const MAX_SHELLS: usize = 32;
@@ -204,6 +205,7 @@ async fn list_shells(State(state): State<AppState>) -> Json<ShellsPage> {
 
 async fn start_shell(
     State(state): State<AppState>,
+    client: Option<Extension<RemoteClient>>,
     body: Result<Json<StartShell>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Shell>), ApiError> {
     let Json(body) = body?;
@@ -224,6 +226,18 @@ async fn start_shell(
     let rows = body.rows.filter(|rows| *rows > 0).unwrap_or(DEFAULT_ROWS);
     let cols = body.cols.filter(|cols| *cols > 0).unwrap_or(DEFAULT_COLS);
     let shell = state.shells.start(&cwd, body.project_id, &env, rows, cols)?;
+    // Over the tailnet a shell is this machine in another device's hands, so
+    // the log says which one.
+    if let Some(Extension(client)) = client {
+        tracing::info!(
+            shell = shell.id,
+            cwd = %shell.cwd,
+            device = %client.name,
+            node_id = %client.node_id,
+            ip = %client.ip,
+            "a tailnet device opened a terminal"
+        );
+    }
     Ok((StatusCode::CREATED, Json(shell)))
 }
 
