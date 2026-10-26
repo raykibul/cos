@@ -1,6 +1,6 @@
 # Port forwarding to another machine's localhost (spec)
 
-Status: proposed. Nothing here is built yet. When it lands, the contract moves into [daemon.md](../daemon.md) and [desktop.md](../desktop.md) and this file stays as the record of why.
+Status: built, with the recommended answer to each open decision. The contract now lives in [daemon.md](../daemon.md#port-forwarding) and [desktop.md](../desktop.md#ports); this file stays as the record of why.
 
 ## 1. Context & problem
 
@@ -267,14 +267,16 @@ All in Docker (`make test`, `make lint`, `make ui-test`, `make ui-lint`, `make u
 
 ## 11. Decisions needed from the user
 
-- [ ] **Open where:** the default browser (recommended: cookies, devtools and extensions as usual), an in-app Tauri window, or both. An in-app window would get its own label, which `capabilities/default.json` doesn't list (`"windows": ["main"]`), so the forwarded page can't call cos commands.
-- [ ] **Persist forwards per host in `hosts.json`** and restart them when you select that host (recommended: yes, ports only; dev servers keep their ports), or start empty every time.
-- [ ] **Allow the route on the Unix socket** (recommended: yes; it grants nothing the socket's user lacks, and it keeps tests simple).
-- [ ] **No port deny-list** beyond 1–65535 (recommended: none, since an approved device already has a shell), or refuse some, such as 22 or the daemon's own port.
-- [ ] **Busy local port:** try `P+1` to `P+10`, then let the OS pick (recommended, as Vite does), or let the OS pick straight away.
-- [ ] **No event-log entries for tunnels** (recommended), or a rate-limited `forward.started` per device and port.
-- [ ] **Where the section sits:** the bottom of the sidebar (recommended), or a page under Settings for the machine.
-- [ ] **Caps:** 256 tunnels per device and 1024 per daemon.
+All taken as recommended when it was built (26 Oct 2026).
+
+- [x] **Open where:** the default browser (recommended: cookies, devtools and extensions as usual), an in-app Tauri window, or both. An in-app window would get its own label, which `capabilities/default.json` doesn't list (`"windows": ["main"]`), so the forwarded page can't call cos commands.
+- [x] **Persist forwards per host in `hosts.json`** and restart them when you select that host (recommended: yes, ports only; dev servers keep their ports), or start empty every time.
+- [x] **Allow the route on the Unix socket** (recommended: yes; it grants nothing the socket's user lacks, and it keeps tests simple).
+- [x] **No port deny-list** beyond 1–65535 (recommended: none, since an approved device already has a shell), or refuse some, such as 22 or the daemon's own port.
+- [x] **Busy local port:** try `P+1` to `P+10`, then let the OS pick (recommended, as Vite does), or let the OS pick straight away.
+- [x] **No event-log entries for tunnels** (recommended), or a rate-limited `forward.started` per device and port.
+- [x] **Where the section sits:** the bottom of the sidebar (recommended), or a page under Settings for the machine.
+- [x] **Caps:** 256 tunnels per device and 1024 per daemon.
 
 ## 12. Open risks
 
