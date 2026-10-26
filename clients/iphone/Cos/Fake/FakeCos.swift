@@ -257,6 +257,13 @@ actor FakeCos: CosService {
         refusal = code
     }
 
+    /// Adds a reply to an agent's transcript without logging
+    /// `agent.transcript`, as when the event was missed.
+    func appendQuietly(agentId: Int, text: String) {
+        let n = (transcripts[agentId]?.last?.n ?? 0) + 1
+        transcripts[agentId, default: []].append(TranscriptMessage(n: n, role: .assistant, kind: .text, text: text, tsMs: clock))
+    }
+
     /// Moves an agent to a state, with its `agent.state_changed` event.
     func setAgentState(_ id: Int, _ state: AgentState) {
         setState(id, state)

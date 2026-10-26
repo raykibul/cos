@@ -15,6 +15,7 @@ struct ChiefChatView: View {
     @State private var chat: Chat
     @FocusState private var composing: Bool
     @Environment(Navigator.self) private var navigator
+    @Environment(\.scenePhase) private var scenePhase
     @State private var confirmStop = false
     @State private var confirmNewSession = false
     @State private var error: String?
@@ -121,6 +122,16 @@ struct ChiefChatView: View {
             Text(error ?? "")
         }
         .task { await chat.load() }
+        .task { await chat.keepInSync() }
+        .onChange(of: chat.agent?.state) { old, new in
+            if new == .idle, old != .idle { Task { await chat.agentWentIdle() } }
+        }
+        .onChange(of: session.connects) {
+            Task { await chat.read() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await chat.read() } }
+        }
         .onAppear { markRead() }
         .onDisappear { markRead() }
         .onChange(of: session.transcriptTicks[chat.agentId ?? -1]) {

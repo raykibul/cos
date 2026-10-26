@@ -48,6 +48,10 @@ final class HostSession {
     /// change (`staff.changed`), so a memory page on screen reads them again.
     private(set) var staffChanges: [Int: Int] = [:]
 
+    /// Bumped each time the event stream (re)connects, so a chat on screen
+    /// catches up on what it may have missed meanwhile.
+    private(set) var connects = 0
+
     /// When you last opened each chief's chat, for the chiefs list.
     let readMarks: ReadMarks
 
@@ -118,6 +122,7 @@ final class HostSession {
             self.status = status
             connection = .live
             if lastSeq == nil { lastSeq = status.lastSeq }
+            connects += 1
             requestAll()
         case .event(let event):
             lastSeq = max(lastSeq ?? 0, event.seq)

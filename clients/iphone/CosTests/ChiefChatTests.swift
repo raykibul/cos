@@ -434,3 +434,48 @@ import Testing
         #expect(chat.rows.filter { if case .user(let m, _) = $0 { m.text.contains("git diff") } else { false } }.count == 1)
     }
 }
+
+@MainActor
+@Suite struct ChatSyncTests {
+    @Test func aShownChatCatchesUpOnAReplyWhoseEventWasMissed() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+        let before = chat.messages.count
+
+        await fake.appendQuietly(agentId: 13, text: "Also added the session fix.")
+        let follow = Task { await chat.keepInSync(every: .milliseconds(30)) }
+        defer { follow.cancel() }
+
+        #expect(await eventually { chat.messages.count == before + 1 })
+        guard case .reply(let reply) = chat.rows.last else {
+            Issue.record("the late reply shows: \(String(describing: chat.rows.last))")
+            return
+        }
+        #expect(reply.text == "Also added the session fix.")
+    }
+
+    @Test func itReadsAgainAfterTheAgentGoesIdle() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = Chat(projectId: 1, session: session)
+        await chat.load()
+        let before = chat.messages.count
+
+        await fake.appendQuietly(agentId: 40, text: "One more thing: porto still waits on you.")
+        await chat.agentWentIdle(after: .milliseconds(10))
+
+        #expect(chat.messages.count == before + 1)
+    }
+
+    @Test func eachConnectIsCounted() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let first = session.connects
+        session.reconnect()
+        #expect(await eventually { session.connects == first + 1 })
+    }
+}

@@ -268,6 +268,32 @@ final class Chat {
         }
     }
 
+    // MARK: Keeping in sync
+
+    /// How often a chat on screen reads its transcript again, in case an
+    /// event was missed (a stream that died quietly).
+    static let resyncInterval: Duration = .seconds(15)
+    /// How long after its agent goes idle a chat reads again: Claude can
+    /// write a turn's last reply after its Stop hook, which an older daemon
+    /// never logs.
+    static let idleRecheck: Duration = .milliseconds(2500)
+
+    /// Reads what's new every `interval` until cancelled (the chat leaves
+    /// the screen). Each read asks only for what follows `next`.
+    func keepInSync(every interval: Duration = Chat.resyncInterval) async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: interval)
+            if Task.isCancelled { return }
+            await read()
+        }
+    }
+
+    /// Reads again a moment after the agent went idle.
+    func agentWentIdle(after delay: Duration = Chat.idleRecheck) async {
+        try? await Task.sleep(for: delay)
+        if !Task.isCancelled { await read() }
+    }
+
     /// Why the composer can't send to a session right now, as the desktop
     /// words it: typing goes through its terminal, where a prompt would
     /// catch the text. `nil` when it can, including when it has stopped (a

@@ -113,6 +113,8 @@ Each event refreshes only what it touches, and refreshes of one kind fold togeth
 | `staff.changed` | the memory notes of that project, if its page is open |
 | `agent.transcript` | the chat of that agent (the chief's or a session's), if open |
 
+Since an event can be missed (a connection that died quietly, a reply Claude wrote after its turn ended, which an older daemon never logs), a chat on screen, the chief's or a session's, also catches up: every 15 s while it shows, 2.5 s after its agent goes idle, when the app comes back to the foreground, and each time the event stream connects again (`Chat.keepInSync`, `HostSession.connects`). Each catch-up reads only what's new (`after=next`). Over the tailnet a stream that brings nothing for 45 s, not even the daemon's 15 s keep-alive, counts as dropped and reconnects (`SocketConnection.tcpReadTimeout`), as the Mac app now does too.
+
 Decoding is lenient: unknown fields are ignored, a bad row in a list is dropped rather than failing the list, numbers sent as strings are read, and titles may be `null` (workspaces then show their city).
 
 ## Push, later
