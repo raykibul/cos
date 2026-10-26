@@ -119,6 +119,68 @@ describe("the Chief of Staff in the store", () => {
     expect(requestLines(daemon)).toEqual([]);
   });
 
+  it("reads a watched transcript again a little after its agent's turn ends", async () => {
+    const { cos, daemon } = fakeStore({}, { lateReadMs: 20 });
+    await cos.start();
+    await settle();
+    const unwatch = cos.watchTranscript(40);
+    await settle();
+    daemon.requests.length = 0;
+
+    // Another agent, or a turn starting: nothing to read.
+    cos.handle({
+      type: "event",
+      event: rawEvent(5000, "agent.state_changed", { agent_id: 7, state: "idle" }),
+    });
+    cos.handle({
+      type: "event",
+      event: rawEvent(5001, "agent.state_changed", { agent_id: 40, state: "working" }),
+    });
+    await settle();
+    expect(requestLines(daemon).filter((l) => l.includes("transcript"))).toEqual([]);
+
+    // The turn ended, and its reply reaches the file after the hook: the
+    // late read brings it in with no agent.transcript.
+    cos.handle({
+      type: "event",
+      event: rawEvent(5002, "agent.state_changed", { agent_id: 40, state: "idle" }),
+    });
+    await settle();
+    expect(requestLines(daemon).filter((l) => l.includes("transcript"))).toEqual([
+      "GET /v1/agents/40/transcript?after=12",
+    ]);
+    daemon.staffDesk.transcripts[40]!.push({
+      n: 13,
+      role: "assistant",
+      kind: "text",
+      text: "Written after Stop",
+      ts_ms: Date.now(),
+    });
+    await settle(4, 15);
+    expect(cos.get().transcripts[40]!.messages.at(-1)?.text).toBe("Written after Stop");
+    unwatch();
+  });
+
+  it("catches up on what's on screen when asked to resync", async () => {
+    const { cos, daemon } = await startedStore();
+    const unwatchTranscript = cos.watchTranscript(40);
+    const unwatchInbox = cos.watchInbox(1);
+    await settle();
+    daemon.requests.length = 0;
+    cos.resync();
+    await settle();
+    expect(new Set(requestLines(daemon))).toEqual(
+      new Set([
+        "GET /v1/agents/40/transcript?after=12",
+        "GET /v1/projects/1/staff/inbox",
+        "GET /v1/agents",
+        "GET /v1/approvals?state=pending",
+      ]),
+    );
+    unwatchTranscript();
+    unwatchInbox();
+  });
+
   it("reads a transcript that started over from the top", async () => {
     const { cos, daemon } = await startedStore();
     cos.watchTranscript(40);

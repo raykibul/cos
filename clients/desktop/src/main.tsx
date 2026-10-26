@@ -9,6 +9,7 @@ import { App } from "./app/App";
 import { type DialogState, type Page, createUiStore, savedSidebar } from "./app/ui";
 import { createBridge, inTauri } from "./bridge";
 import { openLinksOutside } from "./app/links";
+import { followWindow } from "./app/resync";
 import { followAttention } from "./store/attention";
 import { CosStore } from "./store/store";
 
@@ -112,6 +113,7 @@ async function main() {
     sidebar: params.has("nosidebar") ? "hidden" : savedSidebar(),
   });
   followAttention(cos);
+  followWindow(cos);
   void cos.start();
   // Handy in the browser console: drive the fake daemon by hand.
   if (!tauri) Object.assign(window, { cos, ui, bridge });

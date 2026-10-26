@@ -203,7 +203,16 @@ export interface StoreOptions {
   keep?: number;
   /** How many events before the newest to start with. */
   backlog?: number;
+  /** How long after a watched agent's turn ends to read its transcript once more. */
+  lateReadMs?: number;
 }
+
+/**
+ * Claude can write a turn's last reply after the hook that ends it, and a
+ * daemon before this fix looked at the file only once, so the transcript is
+ * read again this long after the turn ends.
+ */
+const LATE_READ_MS = 2500;
 
 function message(error: unknown): string {
   return CosError.from(error).message;
@@ -255,6 +264,9 @@ export class CosStore {
   private readonly transcriptWatches = new Map<number, Watch<Transcript>>();
   /** Agents whose transcript restarted: the next fetch reads it from the top. */
   private readonly transcriptResets = new Set<number>();
+  /** A second read of a transcript, after its agent's turn ended, by agent id. */
+  private readonly lateReads = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly lateReadMs: number;
   private readonly inboxWatches = new Map<number, Watch<InboxItem[]>>();
   private readonly memoryWatches = new Map<number, Watch<StaffNote[]>>();
   private nextPendingId = 1;
@@ -269,6 +281,7 @@ export class CosStore {
     this.client = new DaemonClient(bridge);
     this.keep = options.keep ?? 1000;
     this.backlog = options.backlog ?? 200;
+    this.lateReadMs = options.lateReadMs ?? LATE_READ_MS;
     this.createRefreshes();
   }
 
@@ -549,6 +562,7 @@ export class CosStore {
       }
     }
     if (kind === "agent.transcript") this.transcriptGrew(event);
+    if (kind === "agent.state_changed") this.turnMoved(event);
     this.pendingEvents.push(event);
     this.scheduleFlush();
   }
@@ -653,6 +667,39 @@ export class CosStore {
     // A shorter transcript started over (a new session): read it from the top.
     if (next !== null && next < have) this.transcriptResets.add(id);
     watch.refresh.request();
+  }
+
+  /**
+   * `agent.state_changed`: a watched agent that went idle finished a turn.
+   * Its transcript is read now and once more a little later, in case the
+   * reply reached the file after the turn ended.
+   */
+  private turnMoved(event: LoggedEvent): void {
+    const id = agentOf(event);
+    if (id === null || event.data.state !== "idle") return;
+    const watch = this.transcriptWatches.get(id);
+    if (!watch) return;
+    watch.refresh.request();
+    clearTimeout(this.lateReads.get(id));
+    this.lateReads.set(
+      id,
+      setTimeout(() => {
+        this.lateReads.delete(id);
+        this.transcriptWatches.get(id)?.refresh.request();
+      }, this.lateReadMs),
+    );
+  }
+
+  /**
+   * Catches up with anything the event stream missed: the conversations
+   * and inboxes on screen, and the agents. The app calls it when its window
+   * comes back and every so often while it's shown (`app/resync.ts`).
+   */
+  resync(): void {
+    if (this.get().connection !== "running") return;
+    for (const watch of this.transcriptWatches.values()) watch.refresh.request();
+    for (const watch of this.inboxWatches.values()) watch.refresh.request();
+    this.refreshAgents();
   }
 
   /** Keeps an agent's conversation current until the returned function is called. */
@@ -1421,6 +1468,8 @@ export class CosStore {
     for (const watch of this.memoryWatches.values()) watch.refresh.dispose();
     this.memoryWatches.clear();
     this.transcriptResets.clear();
+    for (const timer of this.lateReads.values()) clearTimeout(timer);
+    this.lateReads.clear();
     this.pendingEvents = [];
     const host = list.hosts.find((h) => h.id === list.current) ?? null;
     this.state.setState(
