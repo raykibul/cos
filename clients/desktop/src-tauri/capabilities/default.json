@@ -23,6 +23,7 @@
     "allow-notify",
     "allow-reveal-path",
     "allow-open-in-terminal",
+    "allow-open-url",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize"
   ]

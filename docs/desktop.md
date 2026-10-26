@@ -104,6 +104,9 @@ type TerminalMessage =
 | `notify` | `{title: string, body: string}` | – |
 | `reveal_path` | `{path: string}` | – Shows it in Finder. |
 | `open_in_terminal` | `{path: string}` | – Opens Terminal.app (or Ghostty.app if installed) there. |
+| `open_url` | `{url: string}` | – Opens a web (`http`, `https`) or mail (`mailto`) link in the default browser or mail app; anything else is `bad_request`. |
+
+- **Links:** links never open inside the window. The UI sends a clicked web or mail link (chat markdown, a transcript) and a ⌘-clicked terminal URL (ghostty-web's `window.open`) to `open_url` (`src/app/links.ts`). As a backstop, the shell's `links` plugin cancels any navigation of the window to a web or mail link that isn't the app's own page and opens it outside.
 
 ## UI
 

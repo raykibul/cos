@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { type DialogState, type Page, createUiStore, savedSidebar } from "./app/ui";
 import { createBridge, inTauri } from "./bridge";
+import { openLinksOutside } from "./app/links";
 import { followAttention } from "./store/attention";
 import { CosStore } from "./store/store";
 
@@ -95,6 +96,9 @@ async function main() {
     staffPaused: params.has("paused"),
     chiefContext: params.has("context") ? Number(params.get("context")) : undefined,
   });
+  // In the app, links open in the default browser; in a plain browser
+  // they behave as usual.
+  if (tauri) openLinksOutside(window, (url) => void bridge.openUrl(url));
   const cos = new CosStore(bridge);
   const ui = createUiStore({
     page: parsePage(params.get("page")) ?? { kind: "waiting" },
