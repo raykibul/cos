@@ -26,6 +26,7 @@ import { CosStore } from "./store/store";
 //   ?tailscale=off   Tailscale is off on this Mac, so its tailnet's devices can't be listed
 //   ?paused          cos's Chief of Staff starts with coordination paused, 3 updates waiting
 //   ?context=92      how full cos's chief's context is, in percent (42 by default)
+//   ?portsTooOld     Studio's cos is too old to forward ports
 //   ?theme=dark      force a colour scheme
 const params = new URLSearchParams(window.location.search);
 
@@ -95,6 +96,7 @@ async function main() {
     tailscaleOff: params.get("tailscale") === "off",
     staffPaused: params.has("paused"),
     chiefContext: params.has("context") ? Number(params.get("context")) : undefined,
+    portsTooOld: params.has("portsTooOld"),
   });
   // In the app, links open in the default browser; in a plain browser
   // they behave as usual.

@@ -18,6 +18,7 @@ import {
 } from "./fake/remote";
 import { type Footer, type Screen, inputUpdate, renderScreen, spinnerUpdate } from "./fake/screen";
 import { FakeEnv, makeEnv } from "./fake/env";
+import { FakeForwards, tooOld } from "./fake/forwards";
 import { FakeJudge } from "./fake/judge";
 import { FakeShells } from "./fake/shells";
 import { FakeStaffDesk, StaffError, makeStaff } from "./fake/staff";
@@ -29,6 +30,9 @@ import type {
   DaemonResponse,
   EventMessage,
   FileResponse,
+  Forward,
+  ForwardList,
+  ForwardMessage,
   Host,
   HostList,
   HttpMethod,
@@ -61,6 +65,8 @@ export interface FakeOptions {
   staffPaused?: boolean;
   /** How full cos's chief's context is, in percent of its 200K window (42 by default). */
   chiefContext?: number;
+  /** Studio's cos is older than port forwarding: `forward_add` answers `too_old`. */
+  portsTooOld?: boolean;
 }
 
 interface Follower {
@@ -1053,6 +1059,8 @@ export class FakeBridge implements Bridge {
   private nextStream = 1;
   private nextHost = 3;
   private readonly open = new Map<number, OpenStream>();
+  /** Each host's forwarded ports (fake/forwards.ts); `forwards.opened` lists what Open opened. */
+  readonly forwards = new FakeForwards();
   /** What the shell would show; tests read these. */
   readonly calls: { setWaitingCount: number[]; notify: { title: string; body: string }[] } = {
     setWaitingCount: [],
@@ -1108,7 +1116,16 @@ export class FakeBridge implements Bridge {
     if (host) host.access = reachable ? { kind: "open" } : { kind: "unreachable" };
   }
 
+  /** Why the host turns this Mac away now, or null once it lets it in. */
   private gate(hostId: string): Gate | null {
+    const gate = this.access(hostId);
+    const host = this.hostOf(hostId);
+    if (!gate && host?.address && !this.options.portsTooOld)
+      this.forwards.admitted(host.id, host.name);
+    return gate;
+  }
+
+  private access(hostId: string): Gate | null {
     const host = this.hostOf(hostId);
     if (!host) return null;
     const access = host.access;
@@ -1310,6 +1327,7 @@ export class FakeBridge implements Bridge {
     const stream = this.open.get(id);
     if (stream?.timer) clearTimeout(stream.timer);
     this.open.delete(id);
+    this.forwards.unfollow(id);
     for (const daemon of this.daemons.values()) {
       daemon.followers.delete(id);
       daemon.detach(id);
@@ -1434,5 +1452,74 @@ export class FakeBridge implements Bridge {
 
   async openUrl(url: string): Promise<void> {
     console.info(`[fake bridge] open_url(${JSON.stringify(url)})`);
+  }
+
+  // MARK: Port forwarding, kept by the shell for the host in use
+
+  private get machine(): string {
+    return this.hostOf(this.current)?.name ?? "This Mac";
+  }
+
+  async forwardsList(): Promise<ForwardList> {
+    await this.wait();
+    return { host: this.machine, forwards: this.forwards.list(this.current) };
+  }
+
+  async forwardAdd(remotePort: number, localPort?: number): Promise<Forward> {
+    await this.wait();
+    if (this.current === "local") {
+      throw {
+        kind: "bad_request",
+        message: "This Mac's ports are already here",
+      } satisfies BridgeError;
+    }
+    const machine = this.machine;
+    const gate = this.gate(this.current);
+    if (gate && !gate.notRunning) {
+      throw {
+        kind: "io",
+        message: gate.message,
+        code: gate.code ?? undefined,
+      } satisfies BridgeError;
+    }
+    if (!gate && this.options.portsTooOld && this.current === "h1") throw tooOld(machine);
+    const reach = gate ? `${gate.message[0]!.toUpperCase()}${gate.message.slice(1)}.` : null;
+    return this.forwards.add(this.current, machine, remotePort, localPort, reach);
+  }
+
+  async forwardRemove(remotePort: number): Promise<ForwardList> {
+    await this.wait();
+    return { host: this.machine, forwards: this.forwards.remove(this.current, remotePort) };
+  }
+
+  async followForwards(onMessage: (message: ForwardMessage) => void): Promise<number> {
+    const id = this.nextStream++;
+    const hostId = this.current;
+    const stream: OpenStream = { hostId, timer: null };
+    this.open.set(id, stream);
+    stream.timer = setTimeout(() => {
+      stream.timer = null;
+      if (!this.open.has(id)) return;
+      this.forwards.follow(id, {
+        hostId,
+        machine: () => this.hostOf(hostId)?.name ?? "This Mac",
+        onMessage,
+      });
+    }, this.latencyMs);
+    return id;
+  }
+
+  async forwardOpen(remotePort: number): Promise<void> {
+    await this.wait();
+    const forward = this.forwards.get(this.current, remotePort);
+    if (!forward) {
+      throw {
+        kind: "bad_request",
+        message: `:${remotePort} isn't forwarded`,
+      } satisfies BridgeError;
+    }
+    const url = `http://localhost:${forward.localPort}/`;
+    this.forwards.opened.push(url);
+    console.info(`[fake bridge] forward_open(${remotePort}) → ${url}`);
   }
 }

@@ -1,10 +1,11 @@
 // The sidebar beside the rail: the machine picker, the project the rail
-// picked (its chief, workspaces and agents), and which machine the app
-// talks to.
+// picked (its chief, workspaces and agents), the ports forwarded from
+// another machine, and which machine the app talks to.
 
 import { useApp, useCos } from "../app/context";
 import type { Project } from "../api/models";
 import { HostPicker, HostStatus } from "./Hosts";
+import { PortsSection } from "./sidebar/PortsSection";
 import { ProjectPanel } from "./sidebar/ProjectSection";
 
 export function Sidebar({ project }: { project: Project | undefined }) {
@@ -39,6 +40,7 @@ export function Sidebar({ project }: { project: Project | undefined }) {
           ) : null}
         </div>
       )}
+      <PortsSection />
       <div className="shrink-0 border-t border-line px-2.5 py-2">
         <HostStatus />
       </div>
