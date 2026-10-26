@@ -141,6 +141,8 @@ struct Entry {
     /// Tells this forward from an earlier one on the same port.
     id: u64,
     forward: Forward,
+    /// The note that the local port moved, shown again once a tunnel works.
+    note: Option<String>,
     listeners: Vec<AbortHandle>,
 }
 
@@ -173,10 +175,10 @@ impl Shared {
     }
 
     /// Changes the forward on `remote`, if it is still the one with `id`.
-    fn update(&self, remote: u16, id: u64, change: impl FnOnce(&mut Forward)) {
+    fn update(&self, remote: u16, id: u64, change: impl FnOnce(&mut Forward, Option<&String>)) {
         let mut forwards = self.lock();
         if let Some(entry) = forwards.get_mut(&remote).filter(|entry| entry.id == id) {
-            change(&mut entry.forward);
+            change(&mut entry.forward, entry.note.as_ref());
             drop(forwards);
             self.changed.send_modify(|version| *version += 1);
         }
@@ -326,7 +328,7 @@ impl ForwardSet {
             state: ListenState::Listening,
             remote: remote_state,
             code,
-            message: message.or(moved),
+            message: message.or_else(|| moved.clone()),
             connections: 0,
         };
 
@@ -349,6 +351,7 @@ impl ForwardSet {
             Entry {
                 id,
                 forward: forward.clone(),
+                note: moved,
                 listeners,
             },
         );
@@ -478,7 +481,7 @@ struct Counted {
 
 impl Drop for Counted {
     fn drop(&mut self) {
-        self.shared.update(self.remote, self.id, |forward| {
+        self.shared.update(self.remote, self.id, |forward, _| {
             forward.connections = forward.connections.saturating_sub(1);
         });
     }
@@ -490,12 +493,10 @@ async fn tunnel(shared: Arc<Shared>, remote: u16, id: u64, mut local: TcpStream)
     let _ = local.set_nodelay(true);
     match shared.bridge.open_tunnel(remote).await {
         Ok(mut tunnel) => {
-            shared.update(remote, id, |forward| {
+            shared.update(remote, id, |forward, note| {
                 forward.remote = RemoteState::Listening;
                 forward.code = None;
-                if forward.local_port == forward.remote_port {
-                    forward.message = None;
-                }
+                forward.message = note.cloned();
                 forward.connections += 1;
             });
             let _counted = Counted {
@@ -507,7 +508,7 @@ async fn tunnel(shared: Arc<Shared>, remote: u16, id: u64, mut local: TcpStream)
         }
         Err(error) => {
             let (state, code, line) = shared.failure(remote, &error);
-            shared.update(remote, id, |forward| {
+            shared.update(remote, id, |forward, _| {
                 forward.remote = state;
                 forward.code = code;
                 forward.message = Some(line.clone());
