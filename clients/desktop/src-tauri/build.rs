@@ -21,6 +21,7 @@ fn main() {
         "notify",
         "reveal_path",
         "open_in_terminal",
+        "open_url",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(commands)),

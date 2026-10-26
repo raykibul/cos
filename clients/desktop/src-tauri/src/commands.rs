@@ -340,6 +340,14 @@ pub(crate) fn reveal_path(path: String) -> CommandResult<()> {
     run(Command::new("/usr/bin/open").arg("-R").arg(&path))
 }
 
+/// Opens a web or mail link in the default browser (or mail app).
+#[tauri::command]
+pub(crate) fn open_url(url: String) -> CommandResult<()> {
+    let url = crate::links::external(&url)
+        .ok_or_else(|| BridgeError::bad_request(format!("{url} is not a web or mail link")))?;
+    run(Command::new("/usr/bin/open").arg(url.as_str()))
+}
+
 /// Opens a terminal window in the folder `path`: Ghostty if it's installed,
 /// else Terminal.
 #[tauri::command]
@@ -416,6 +424,12 @@ mod tests {
     #[test]
     fn open_in_terminal_wants_a_folder() {
         let error = open_in_terminal("/etc/hosts".into()).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::BadRequest);
+    }
+
+    #[test]
+    fn open_url_wants_a_web_or_mail_link() {
+        let error = open_url("file:///etc/hosts".into()).unwrap_err();
         assert_eq!(error.kind, ErrorKind::BadRequest);
     }
 

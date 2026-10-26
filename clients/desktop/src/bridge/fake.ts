@@ -1431,4 +1431,8 @@ export class FakeBridge implements Bridge {
   async openInTerminal(path: string): Promise<void> {
     console.info(`[fake bridge] open_in_terminal(${JSON.stringify(path)})`);
   }
+
+  async openUrl(url: string): Promise<void> {
+    console.info(`[fake bridge] open_url(${JSON.stringify(url)})`);
+  }
 }

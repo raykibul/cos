@@ -93,4 +93,8 @@ export class TauriBridge implements Bridge {
   openInTerminal(path: string): Promise<void> {
     return invoke("open_in_terminal", { path });
   }
+
+  openUrl(url: string): Promise<void> {
+    return invoke("open_url", { url });
+  }
 }

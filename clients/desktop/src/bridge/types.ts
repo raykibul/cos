@@ -128,4 +128,6 @@ export interface Bridge {
   notify(title: string, body: string): Promise<void>;
   revealPath(path: string): Promise<void>;
   openInTerminal(path: string): Promise<void>;
+  /** Opens a web (http, https) or mail link in the default browser or mail app. */
+  openUrl(url: string): Promise<void>;
 }

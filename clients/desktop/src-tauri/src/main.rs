@@ -4,6 +4,7 @@
 
 mod commands;
 mod hosts;
+mod links;
 mod tray;
 
 use cos_bridge::Bridge;
@@ -20,6 +21,7 @@ fn main() {
     let bridge = Bridge::from_env().unwrap_or_else(|| Bridge::new("/.cos/cos.sock"));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(links::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::daemon_info,
             commands::daemon_request,
@@ -39,6 +41,7 @@ fn main() {
             commands::notify,
             commands::reveal_path,
             commands::open_in_terminal,
+            commands::open_url,
         ])
         .setup(move |app| {
             // Saved hosts live in the app's config folder
