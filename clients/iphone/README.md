@@ -37,7 +37,7 @@ Launch arguments (Product > Scheme > Edit Scheme > Arguments, or after `simctl l
 | Argument | Effect |
 |---|---|
 | `-fakeData` | Two invented hosts, both answered by `FakeCos`, on an invented tailnet (gpu-box runs cos and isn't saved, a Mac without cos, this iPhone, an offline iPad, a tagged CI server). Nothing touches the network or your saved hosts. |
-| `-screen <name>` | Opens a screen: `chiefs` (the default), `waiting`, `chief`, `chief-new`, `chief-info`, `chief-terminal`, `terminal`, `workspace`, `agent`, `agent-approval`, `hosts`, `add-host`. |
+| `-screen <name>` | Opens a screen: `chiefs` (the default), `waiting`, `chief`, `chief-new`, `chief-info`, `chief-memory`, `chief-terminal`, `terminal`, `workspace`, `agent`, `agent-approval`, `hosts`, `add-host`. |
 | `-fakeRefusal <code>` | The fake refuses the device, e.g. `device_pending`, `device_denied`, `wrong_user`. |
 | `-fakeUnreachable` | The fake can't be reached. |
 | `-noHosts` | Starts with no hosts (the welcome screen). |

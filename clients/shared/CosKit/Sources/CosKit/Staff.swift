@@ -14,31 +14,44 @@ public struct Staff: Codable, Equatable, Sendable {
     public var state: AgentState?
     /// The model it runs; `nil` for Claude's default (or `COS_STAFF_MODEL`).
     public var model: String?
+    /// What it is working on now. It keeps this itself (`brief_update`),
+    /// and you can set it too.
     public var brief: String
+    /// Who it is and how it works, written by you; empty when not set, or
+    /// on an older daemon. Only you change it.
+    public var identity: String
     public var worktree: String?
     public var branch: String?
     /// The agents it started that are `starting` or `working`.
     public var workingAgents: Int
     /// The agents it started that wait on you (an approval or the trust dialog).
     public var waitingOnYou: Int
+    /// Coordination paused: news collects in its inbox, but no wakeups go in.
+    public var paused: Bool
+    /// News from its agents not delivered to it yet.
+    public var updatesWaiting: Int
 
     public init(
         projectId: Int, agentId: Int? = nil, state: AgentState? = nil, model: String? = nil, brief: String = "",
-        worktree: String? = nil, branch: String? = nil, workingAgents: Int = 0, waitingOnYou: Int = 0
+        identity: String = "", worktree: String? = nil, branch: String? = nil, workingAgents: Int = 0, waitingOnYou: Int = 0,
+        paused: Bool = false, updatesWaiting: Int = 0
     ) {
         self.projectId = projectId
         self.agentId = agentId
         self.state = state
         self.model = model
         self.brief = brief
+        self.identity = identity
         self.worktree = worktree
         self.branch = branch
         self.workingAgents = workingAgents
         self.waitingOnYou = waitingOnYou
+        self.paused = paused
+        self.updatesWaiting = updatesWaiting
     }
 
     private enum CodingKeys: String, CodingKey {
-        case projectId, agentId, state, model, brief, worktree, branch, workingAgents, waitingOnYou
+        case projectId, agentId, state, model, brief, identity, worktree, branch, workingAgents, waitingOnYou, paused, updatesWaiting
     }
 
     public init(from decoder: Decoder) throws {
@@ -48,11 +61,21 @@ public struct Staff: Codable, Equatable, Sendable {
         state = c.optional(AgentState.self, .state)
         model = c.string(.model).nilIfBlank
         brief = c.string(.brief) ?? ""
+        identity = c.string(.identity) ?? ""
         worktree = c.string(.worktree)
         branch = c.string(.branch)
         workingAgents = c.int(.workingAgents) ?? 0
         waitingOnYou = c.int(.waitingOnYou) ?? 0
+        paused = c.optional(Bool.self, .paused) ?? false
+        updatesWaiting = c.int(.updatesWaiting) ?? 0
     }
+
+    /// The most bytes a brief holds; the daemon refuses more.
+    public static let maxBriefBytes = 4 * 1024
+    /// The most bytes the identity holds; the daemon refuses more.
+    public static let maxIdentityBytes = 8 * 1024
+    /// About how long an identity should be, in words: a guide, not a limit.
+    public static let identityWords = 500
 
     /// Whether it has ever been started.
     public var hasStarted: Bool { agentId != nil }
@@ -148,6 +171,101 @@ public struct StaffInbox: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         items = try decoder.container(keyedBy: CodingKeys.self).list(StaffItem.self, .items)
             .sorted { $0.createdMs > $1.createdMs }
+    }
+}
+
+// MARK: Memory notes
+
+/// One of the chief's memory notes ("Memory notes" in
+/// docs/chief-of-staff.md): what lasts, one subject per note. Only the name
+/// and description go in its prompt; it reads the body when it needs it.
+public struct StaffNote: Codable, Equatable, Hashable, Sendable, Identifiable {
+    /// 1 to 64 lowercase letters, digits and `-`, unique in the project.
+    public var name: String
+    /// One line: what the note holds.
+    public var description: String
+    public var body: String
+    public var createdMs: Int64
+    public var updatedMs: Int64
+
+    public var id: String { name }
+
+    public init(name: String, description: String, body: String, createdMs: Int64 = 0, updatedMs: Int64 = 0) {
+        self.name = name
+        self.description = description
+        self.body = body
+        self.createdMs = createdMs
+        self.updatedMs = updatedMs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, description, body, createdMs, updatedMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let name = c.string(.name).nilIfBlank else {
+            throw DecodingError.keyNotFound(CodingKeys.name, .init(codingPath: c.codingPath, debugDescription: "no name"))
+        }
+        self.name = name
+        description = c.string(.description) ?? ""
+        body = c.string(.body) ?? ""
+        createdMs = c.int64(.createdMs) ?? 0
+        updatedMs = c.int64(.updatedMs) ?? 0
+    }
+
+    public var updatedAt: Date { Date(unixMilliseconds: updatedMs) }
+
+    /// The most bytes a body holds.
+    public static let maxBodyBytes = 8 * 1024
+    /// The most characters a description holds.
+    public static let maxDescription = 200
+    /// The most notes a project's chief keeps.
+    public static let maxNotes = 50
+
+    /// Why a name won't do, or `nil`.
+    public static func nameProblem(_ name: String) -> String? {
+        if name.isEmpty { return "Give it a name." }
+        if name.count > 64 { return "Keep the name to 64 characters." }
+        if name.wholeMatch(of: /[a-z0-9]([a-z0-9-]*[a-z0-9])?/) == nil {
+            return "Use lowercase letters, digits and dashes, starting and ending with a letter or digit."
+        }
+        return nil
+    }
+
+    /// A description as it is saved: one line, trimmed.
+    public static func oneLine(_ description: String) -> String {
+        description.replacing(/\s*\n\s*/, with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Why a description won't do, or `nil`.
+    public static func descriptionProblem(_ description: String) -> String? {
+        let line = oneLine(description)
+        if line.isEmpty { return "Say in a line what the note holds, so the chief knows when to read it." }
+        if line.count > maxDescription { return "Keep it to \(maxDescription) characters." }
+        return nil
+    }
+
+    /// Why a body won't do, or `nil`.
+    public static func bodyProblem(_ body: String) -> String? {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Write what the chief should know." }
+        if trimmed.utf8.count > maxBodyBytes { return "Keep it under \(maxBodyBytes.formatted()) bytes; split it into more notes." }
+        return nil
+    }
+}
+
+/// `GET /v1/projects/{id}/staff/memory`, by name.
+public struct StaffMemory: Codable, Equatable, Sendable {
+    public var notes: [StaffNote]
+
+    public init(notes: [StaffNote]) {
+        self.notes = notes
+    }
+
+    public init(from decoder: Decoder) throws {
+        notes = try decoder.container(keyedBy: CodingKeys.self).list(StaffNote.self, .notes)
+            .sorted { $0.name < $1.name }
     }
 }
 

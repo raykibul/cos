@@ -44,6 +44,9 @@ final class HostSession {
     /// Bumped per agent when its transcript grows (`agent.transcript`), so
     /// a chat on screen reads what's new.
     private(set) var transcriptTicks: [Int: Int] = [:]
+    /// Bumped per project when its chief's brief, identity, notes or pause
+    /// change (`staff.changed`), so a memory page on screen reads them again.
+    private(set) var staffChanges: [Int: Int] = [:]
 
     /// When you last opened each chief's chat, for the chiefs list.
     let readMarks: ReadMarks
@@ -143,6 +146,9 @@ final class HostSession {
         if event.changesStaff || event.changesProjects { request(.staffs) }
         if event.kind == EventKind.agentTranscript, let agentId = event.number("agent_id") {
             transcriptTicks[agentId, default: 0] += 1
+        }
+        if event.kind == EventKind.staffChanged, let projectId = event.number("project_id") {
+            staffChanges[projectId, default: 0] += 1
         }
         if let status, event.seq > status.lastSeq {
             self.status?.lastSeq = event.seq

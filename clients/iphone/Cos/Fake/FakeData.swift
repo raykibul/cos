@@ -101,9 +101,37 @@ struct FakeData {
 
     var staffs: [Int: Staff] {
         [
-            1: Staff(projectId: 1, agentId: 40, state: .idle, model: "sonnet", brief: "Ship 0.2: the session fix, left-pad, release notes.", worktree: "/Users/me/.cos/worktrees/atlas-1/chief", branch: "atlas/chief", workingAgents: 1, waitingOnYou: 1),
+            1: Staff(projectId: 1, agentId: 40, state: .idle, model: "sonnet", brief: "Ship 0.2: the session fix, left-pad, release notes.", identity: Self.identity, worktree: "/Users/me/.cos/worktrees/atlas-1/chief", branch: "atlas/chief", workingAgents: 1, waitingOnYou: 1),
             2: Staff(projectId: 2),
             3: Staff(projectId: 3, agentId: 41, state: .idle, model: "haiku", brief: "Keep dependencies current.", branch: "opal/chief"),
+        ]
+    }
+
+    static let identity = """
+    You are Ada, the Chief of Staff for atlas. You're calm, direct and careful.
+
+    Talk to me like a senior engineer: short answers, no fluff, the result first. Before starting agents, say in one line what each will do. Prefer small PRs, one subject each. Never push to main. I work in Dhaka time and review PRs the same day.
+    """
+
+    var notes: [Int: [StaffNote]] {
+        [
+            1: [
+                StaffNote(
+                    name: "user-preferences", description: "How I like PRs and replies",
+                    body: "- Keep replies short and lead with the result.\n- One subject per PR.\n- Ask before pushing a tag.",
+                    createdMs: ago(600_000), updatedMs: ago(86_000)
+                ),
+                StaffNote(
+                    name: "release-process", description: "How atlas cuts a release",
+                    body: "Tag from main as `vX.Y.Z` once CI is green. The release notes live in CHANGELOG.md, newest first.",
+                    createdMs: ago(500_000), updatedMs: ago(400_000)
+                ),
+                StaffNote(
+                    name: "test-suite", description: "Which tests are slow or flaky",
+                    body: "The full suite takes about 6 minutes. `auth/session.test.ts` is flaky under load; run it twice before calling it broken.",
+                    createdMs: ago(90_000), updatedMs: ago(3_000)
+                ),
+            ],
         ]
     }
 

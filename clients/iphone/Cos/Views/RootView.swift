@@ -8,6 +8,8 @@ enum Route: Hashable {
     case chief(projectId: Int)
     /// A chief's workspaces and sessions, from its chat's ⋯ menu.
     case chiefInfo(projectId: Int, tab: ChiefInfoTab = .workspaces)
+    /// A chief's identity, brief and memory notes.
+    case chiefMemory(projectId: Int)
     case workspace(id: Int)
     case agent(id: Int)
     /// An agent's live terminal, full screen: the chief's or a session's.
@@ -41,6 +43,7 @@ final class Navigator {
         case "chief": tab = .chiefs; chiefs = [.chief(projectId: 1)]
         case "chief-new": tab = .chiefs; chiefs = [.chief(projectId: 2)]
         case "chief-info": tab = .chiefs; chiefs = [.chief(projectId: 1), .chiefInfo(projectId: 1)]
+        case "chief-memory": tab = .chiefs; chiefs = [.chief(projectId: 1), .chiefMemory(projectId: 1)]
         case "terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 7)]
         case "chief-terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 40)]
         case "workspace": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .workspace(id: 5)]
@@ -116,6 +119,7 @@ struct RouteView: View {
             case .waiting: WaitingView(session: session)
             case .chief(let projectId): ChiefChatView(session: session, projectId: projectId)
             case .chiefInfo(let projectId, let tab): ChiefInfoView(session: session, projectId: projectId, tab: tab)
+            case .chiefMemory(let projectId): ChiefMemoryView(session: session, projectId: projectId)
             case .workspace(let id): WorkspaceView(session: session, workspaceId: id)
             case .agent(let id): AgentView(session: session, agentId: id)
             case .terminal(let agentId): TerminalScreen(session: session, agentId: agentId)

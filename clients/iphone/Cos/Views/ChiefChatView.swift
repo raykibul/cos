@@ -15,6 +15,7 @@ struct ChiefChatView: View {
     @FocusState private var composing: Bool
     @Environment(Navigator.self) private var navigator
     @State private var confirmStop = false
+    @State private var confirmNewSession = false
     @State private var error: String?
 
     init(session: HostSession, projectId: Int) {
@@ -27,9 +28,14 @@ struct ChiefChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     if chat.rows.isEmpty && !chat.isLoading {
-                        EmptyChief(project: chat.project?.name ?? "this project", started: chat.staff?.hasStarted ?? false) { suggestion in
+                        EmptyChief(
+                            project: chat.project?.name ?? "this project", started: chat.staff?.hasStarted ?? false,
+                            briefed: !(chat.staff?.brief.isEmpty ?? true) || !(chat.staff?.identity.isEmpty ?? true)
+                        ) { suggestion in
                             chat.draft = suggestion
                             composing = true
+                        } openMemory: {
+                            navigator.open(.chiefMemory(projectId: chat.projectId))
                         }
                     }
                     ForEach(chat.rows) { row in
@@ -101,6 +107,12 @@ struct ChiefChatView: View {
         } message: {
             Text("The sessions it started keep running. Your next message starts it again.")
         }
+        .confirmationDialog("Start a new session?", isPresented: $confirmNewSession, titleVisibility: .visible) {
+            Button("New session") { newSession() }
+            Button("Identity & memory…") { navigator.open(.chiefMemory(projectId: chat.projectId)) }
+        } message: {
+            Text("The chief drops this conversation and starts afresh with its identity, brief and memory notes. The sessions it started stay its own.")
+        }
         .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -137,11 +149,15 @@ struct ChiefChatView: View {
                 Label("Sessions", systemImage: "person.2")
                 Text([count(working, "working", "working"), needYou > 0 ? "\(needYou) need you" : nil].compactMap { $0 }.joined(separator: " · "))
             }
+            Button("Identity & memory", systemImage: "book.closed") { navigator.open(.chiefMemory(projectId: projectId)) }
             if let id = chat.chiefAgentId {
                 Button("Chief's terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: id)) }
             }
-            if let agent = session.agent(id: chat.chiefAgentId), agent.state.isAlive {
+            if chat.staff?.hasStarted == true {
                 Divider()
+                Button("New session", systemImage: "plus.bubble") { confirmNewSession = true }
+            }
+            if let agent = session.agent(id: chat.chiefAgentId), agent.state.isAlive {
                 Button("Stop Chief of Staff", systemImage: "stop.circle", role: .destructive) { confirmStop = true }
             }
         } label: {
@@ -165,6 +181,19 @@ struct ChiefChatView: View {
 
     private func markRead() {
         session.readMarks.markRead(projectId: chat.projectId)
+    }
+
+    private func newSession() {
+        Task {
+            do {
+                let staff = try await session.service.newStaffSession(projectId: chat.projectId)
+                session.setStaff(staff)
+                session.refreshStaff()
+                await chat.read()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     private func stopChief() {
@@ -208,7 +237,10 @@ struct ChatTitle: View {
 struct EmptyChief: View {
     var project: String
     var started: Bool
+    /// It has a brief or an identity already.
+    var briefed: Bool
     var pick: (String) -> Void
+    var openMemory: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -221,6 +253,31 @@ struct EmptyChief: View {
                 : "It starts with your first message. It creates workspaces, starts agents in them, follows them and reports back.")
                 .font(.body)
                 .foregroundStyle(Palette.ink2)
+            if !started, !briefed {
+                Button(action: openMemory) {
+                    HStack(alignment: .top, spacing: 10) {
+                        CardIcon(symbol: "book.closed", color: Palette.amber)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Give it a brief first")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Palette.ink)
+                            Text("Who it is, what it's working on, and what it should remember. It reads them when it starts.")
+                                .font(.footnote)
+                                .foregroundStyle(Palette.ink2)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Palette.ink3)
+                            .padding(.top, 10)
+                    }
+                    .padding(12)
+                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+            }
             VStack(spacing: 8) {
                 ForEach(ChiefChat.suggestions, id: \.self) { suggestion in
                     Button {

@@ -7,9 +7,9 @@ import Foundation
 ///
 /// - three projects: atlas (lisbon, porto, madrid), harbor (kyoto,
 ///   nairobi) and opal (oslo); porto and kyoto have no title
-/// - atlas's Chief of Staff (agent 40) has a conversation and started
-///   agents 7 and 8; harbor's hasn't started; opal's (agent 41) is idle
-///   with no conversation
+/// - atlas's Chief of Staff (agent 40) has a conversation, an identity,
+///   a brief and three memory notes, and started agents 7 and 8; harbor's
+///   hasn't started; opal's (agent 41) is idle with no conversation
 /// - an approval waiting for you (agent 8)
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
@@ -37,6 +37,7 @@ actor FakeCos: CosService {
     private var staffs: [Int: Staff] = [:]
     private var transcripts: [Int: [TranscriptMessage]] = [:]
     private var inboxes: [Int: [StaffItem]] = [:]
+    private var notes: [Int: [StaffNote]] = [:]
     /// Uploaded files with their bytes, by the folder they went into.
     private var files: [String: [(attachment: Attachment, data: Data)]] = [:]
     private var log: [LoggedEvent] = []
@@ -69,6 +70,7 @@ actor FakeCos: CosService {
         staffs = data.staffs
         transcripts = data.transcripts
         inboxes = data.inboxes
+        notes = data.notes
         for (projectId, seeded) in data.files {
             let folder = Self.staffFolder(projectId)
             files[folder] = seeded.map { file -> (attachment: Attachment, data: Data) in
@@ -310,6 +312,71 @@ actor FakeCos: CosService {
             emit("staff.started", ["project_id": .number(Double(projectId)), "agent_id": .number(Double(id))])
         }
         return staffs[projectId]!
+    }
+
+    func updateStaff(projectId: Int, brief: String?, identity: String?) async throws -> Staff {
+        try check("PUT /v1/projects/\(projectId)/staff")
+        guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+        let brief = brief?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identity = identity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let brief, brief.utf8.count > Staff.maxBriefBytes {
+            throw CosError.http(status: 400, message: "the brief is at most 4 KiB")
+        }
+        if let identity, identity.utf8.count > Staff.maxIdentityBytes {
+            throw CosError.http(status: 400, message: "the identity is at most 8 KiB")
+        }
+        if let brief { staffs[projectId]?.brief = brief }
+        if let identity { staffs[projectId]?.identity = identity }
+        emit("staff.changed", ["project_id": .number(Double(projectId))])
+        return staffs[projectId]!
+    }
+
+    func newStaffSession(projectId: Int) async throws -> Staff {
+        try check("POST /v1/projects/\(projectId)/staff/new-session")
+        let staff = try ensureStaff(projectId)
+        guard let agentId = staff.agentId else { return staff }
+        transcripts[agentId] = []
+        setStaffState(projectId, .idle)
+        emit("agent.transcript", ["agent_id": .number(Double(agentId)), "next": .number(0)])
+        emit("staff.started", ["project_id": .number(Double(projectId)), "agent_id": .number(Double(agentId))])
+        return staffs[projectId]!
+    }
+
+    func staffMemory(projectId: Int) async throws -> [StaffNote] {
+        try check("GET /v1/projects/\(projectId)/staff/memory")
+        guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+        return (notes[projectId] ?? []).sorted { $0.name < $1.name }
+    }
+
+    func saveStaffNote(projectId: Int, name: String, description: String, body: String) async throws -> StaffNote {
+        try check("PUT /v1/projects/\(projectId)/staff/memory/\(name)")
+        guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+        if let problem = StaffNote.nameProblem(name) ?? StaffNote.descriptionProblem(description) ?? StaffNote.bodyProblem(body) {
+            throw CosError.http(status: 400, message: problem)
+        }
+        var list = notes[projectId] ?? []
+        let existing = list.first { $0.name == name }
+        if existing == nil, list.count >= StaffNote.maxNotes {
+            throw CosError.http(status: 400, message: "a chief keeps at most 50 notes; delete one first")
+        }
+        let note = StaffNote(
+            name: name, description: StaffNote.oneLine(description), body: body.trimmingCharacters(in: .whitespacesAndNewlines),
+            createdMs: existing?.createdMs ?? clock, updatedMs: clock
+        )
+        list.removeAll { $0.name == name }
+        list.append(note)
+        notes[projectId] = list
+        emit("staff.changed", ["project_id": .number(Double(projectId))])
+        return note
+    }
+
+    func deleteStaffNote(projectId: Int, name: String) async throws {
+        try check("DELETE /v1/projects/\(projectId)/staff/memory/\(name)")
+        guard notes[projectId]?.contains(where: { $0.name == name }) == true else {
+            throw CosError.notFound("there is no note \(name)")
+        }
+        notes[projectId]?.removeAll { $0.name == name }
+        emit("staff.changed", ["project_id": .number(Double(projectId))])
     }
 
     func messageStaff(projectId: Int, text: String) async throws {

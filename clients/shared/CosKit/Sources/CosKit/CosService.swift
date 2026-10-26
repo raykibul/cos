@@ -28,6 +28,11 @@ public protocol CosService: EventSource {
     // The Chief of Staff and transcripts
     func staff(projectId: Int) async throws -> Staff
     func startStaff(projectId: Int) async throws -> Staff
+    func updateStaff(projectId: Int, brief: String?, identity: String?) async throws -> Staff
+    func newStaffSession(projectId: Int) async throws -> Staff
+    func staffMemory(projectId: Int) async throws -> [StaffNote]
+    func saveStaffNote(projectId: Int, name: String, description: String, body: String) async throws -> StaffNote
+    func deleteStaffNote(projectId: Int, name: String) async throws
     func messageStaff(projectId: Int, text: String) async throws
     /// A message naming files uploaded with `uploadAttachment(to: .staff…)`.
     func messageStaff(projectId: Int, text: String, attachments: [String]) async throws

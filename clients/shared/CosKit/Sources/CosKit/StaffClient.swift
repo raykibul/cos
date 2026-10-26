@@ -24,9 +24,51 @@ extension CosClient {
         return try await sendJSON("PUT", "/v1/projects/\(projectId)/staff", body: Body(model: model.nonEmpty))
     }
 
+    /// Replaces its brief, its identity, or both; a field left `nil` stays
+    /// as it is. Used from its next start or new session. A daemon older
+    /// than editable briefs or identities ignores them and answers the old
+    /// ones.
+    public func updateStaff(projectId: Int, brief: String? = nil, identity: String? = nil) async throws -> Staff {
+        struct Body: Encodable {
+            var brief: String?
+            var identity: String?
+        }
+        return try await sendJSON("PUT", "/v1/projects/\(projectId)/staff", body: Body(brief: brief, identity: identity))
+    }
+
     /// Starts or resumes it; nothing if it's running.
     public func startStaff(projectId: Int) async throws -> Staff {
         try await sendJSON("POST", "/v1/projects/\(projectId)/staff/start")
+    }
+
+    /// Drops its Claude session and starts it in a new one, with its
+    /// identity, brief and memory notes as they are now. It stays the same
+    /// agent; a running chief is stopped first (409 if it didn't stop).
+    public func newStaffSession(projectId: Int) async throws -> Staff {
+        try await sendJSON("POST", "/v1/projects/\(projectId)/staff/new-session")
+    }
+
+    /// Its memory notes, by name, with their bodies. `.notFound` from a
+    /// daemon older than notes.
+    public func staffMemory(projectId: Int) async throws -> [StaffNote] {
+        let memory: StaffMemory = try await getJSON("/v1/projects/\(projectId)/staff/memory")
+        return memory.notes
+    }
+
+    /// Creates a note or replaces the one with that name. The daemon refuses
+    /// a bad name, description or body, or a 51st note (400, with why).
+    public func saveStaffNote(projectId: Int, name: String, description: String, body: String) async throws -> StaffNote {
+        try await sendJSON("PUT", Self.notePath(projectId, name), body: ["description": description, "body": body])
+    }
+
+    /// Deletes a note; `.notFound` if there is no such note.
+    public func deleteStaffNote(projectId: Int, name: String) async throws {
+        try await send("DELETE", Self.notePath(projectId, name))
+    }
+
+    private static func notePath(_ projectId: Int, _ name: String) -> String {
+        let escaped = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? name
+        return "/v1/projects/\(projectId)/staff/memory/\(escaped)"
     }
 
     /// A message to it (202). Starts it if needed; the text goes in as soon

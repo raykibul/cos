@@ -63,6 +63,7 @@ struct ChiefInfoView: View {
                         if let id = staff?.agentId { navigator.open(.terminal(agentId: id)) }
                     }
                     .disabled(staff?.agentId == nil)
+                    QuickAction(title: "Memory", symbol: "book.closed") { navigator.open(.chiefMemory(projectId: projectId)) }
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
@@ -187,7 +188,7 @@ struct ChiefInfoView: View {
     }
 }
 
-/// A rounded button under the header: Chat, Screen.
+/// A rounded button under the header: Chat, Terminal, Memory.
 struct QuickAction: View {
     var title: String
     var symbol: String

@@ -56,8 +56,15 @@ Two tabs: **Chiefs** (the home tab, with a badge of what waits on you) and **Hos
   - **Files:** the paperclip left of the message box offers Photos (the system picker, up to 20; HEIC and other kinds go as JPEG, PNG, JPEG, GIF and WebP as they are) and Files (iCloud Drive, On My iPhone, any file provider). Each file uploads into the chief's worktree as soon as you pick it (`POST /v1/projects/{id}/staff/attachments`) and sits above the box as a chip with a thumbnail, "Uploading…", its size or why it failed (over 32 MB, more than 20), and × to take it off. Send waits for the uploads, and a message may be files only; a failed message keeps its files for Retry. In your bubble, pictures show above the text (tap one for the whole picture) and other files as a row with their size. Pictures you picked show at once; others come from `GET /v1/agents/{id}/attachments/{name}`, fetched once per chat.
   - **Typing:** while the chief works (`working` or `starting`), the title says "typing…" and the chat ends with moving dots and its latest tool call with how long ago it started ("cargo test · 12s"), unless it has written since. Tapping it opens the chief's terminal. The chiefs list shows "typing…" too.
   - The title (avatar, name, "2 sessions working…" or its state) opens its info page. The terminal button opens the chief's terminal.
-  - The **⋯ menu:** Workspaces and Sessions (each with a count, opening the info page on that tab), the chief's terminal, and Stop Chief of Staff (with a confirmation; its sessions keep running and your next message starts it again).
-- **Chief info:** the project's avatar, name, root and the chief's state and model; Chat and Terminal; then a segmented control:
+  - The **⋯ menu:** Workspaces and Sessions (each with a count, opening the info page on that tab), Identity & memory, the chief's terminal, New session (once it has started) and Stop Chief of Staff (with a confirmation; its sessions keep running and your next message starts it again).
+  - **New session** (`POST /v1/projects/{id}/staff/new-session`, after a confirmation that also offers Identity & memory) starts the chief in a fresh Claude session with its identity, brief and notes; the chat starts over, since the transcript's `next` drops to 0. See "New session" in [chief-of-staff.md](chief-of-staff.md#new-session).
+  - Before it starts, without a brief or identity, the empty chat has a **Give it a brief first** card that opens Identity & memory.
+- **Identity & memory** (`-screen chief-memory`): from the chat's ⋯ menu, the info page's Memory button and the empty chat's card.
+  - **Identity**, marked "Only you can change this" (`PUT /v1/projects/{id}/staff {identity}`): who the chief is and how it works, in an editor counting words against about 500 and bytes against 8 KiB, with Save and Revert once you change it. The chief has no tool for it.
+  - **Brief** (`PUT …/staff {brief}`, at most 4 KiB, counted as you type): what it's working on now. It keeps the brief itself too, so it may rewrite yours.
+  - **Memory notes** (`GET …/staff/memory` while the page shows, again on `staff.changed`): each note's name, description and when it changed, unfolding to its body. + and Add note open a sheet that checks the name (lowercase letters, digits and dashes), the one-line description (200 characters) and the body (8 KiB) as the daemon does, and says when a name replaces a note; swipe or long-press a note to Edit or Delete it (`PUT`/`DELETE …/staff/memory/{name}`), and Undo puts a deleted note back for a few seconds. At 50 notes, adding is off. A daemon older than notes says so; one older than editable briefs or identities keeps the old text, which the page reports.
+  - Changes reach the chief from its next start, so once it has started the page ends with New session, which goes back to the chat.
+- **Chief info:** the project's avatar, name, root and the chief's state and model; Chat, Terminal and Memory; then a segmented control:
   - **Workspaces:** each workspace, newest first, as a section: the workspace (name, branch, base, what waits on you) with its sessions under it.
   - **Sessions:** the project's agents, what needs you first. A row opens its terminal; swipe it for its details.
 - **Workspace:** the branch and base, and its agents (state, role, last message).
@@ -86,6 +93,7 @@ The app uses CosKit's `CosService` protocol, which `CosClient` implements over H
 | `GET /v1/agents/{id}/transcript?after=N` | The Chief of Staff chat. |
 | `GET /v1/approvals?state=pending`, `POST /v1/approvals/{id}` | Approvals. |
 | `GET /v1/projects/{id}/staff`, `POST …/staff/start`, `POST …/staff/message`, `GET …/staff/inbox` | The Chief of Staff. |
+| `PUT /v1/projects/{id}/staff {brief?, identity?}`, `POST …/staff/new-session`, `GET …/staff/memory`, `PUT`/`DELETE …/staff/memory/{name}` | Identity & memory, and New session. |
 | `POST /v1/projects/{id}/staff/attachments?name=`, `GET /v1/agents/{id}/attachments/{name}` | Files you send the chief, and pictures to show ([agents-api.md](agents-api.md#attachments)). |
 | `GET /v1/tailnet/peers` | The tailnet, from every saved host (`is_you`, `self`). |
 
@@ -96,6 +104,7 @@ Each event refreshes only what it touches, and refreshes of one kind fold togeth
 | `project.*`, `workspace.*` | projects, chiefs |
 | `agent.*`, `approval.*` | agents, approvals |
 | `staff.*`, agent state changes | chiefs |
+| `staff.changed` | the memory notes of that project, if its page is open |
 | `agent.transcript` | the chat of that agent, if open |
 
 Decoding is lenient: unknown fields are ignored, a bad row in a list is dropped rather than failing the list, numbers sent as strings are read, and titles may be `null` (workspaces then show their city).

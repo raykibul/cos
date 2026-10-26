@@ -6,6 +6,8 @@ import Testing
 /// in docs/daemon.md.
 enum StaffSamples {
     static let staff = #"{"project_id":1,"agent_id":14,"state":"idle","model":"haiku","brief":"Ship 0.2.","worktree":"/w/chief","branch":"atlas/chief","working_agents":2,"waiting_on_you":1}"#
+    static let identified = #"{"project_id":1,"agent_id":14,"state":"idle","brief":"Ship 0.2.","identity":"You are Ada.","paused":true,"updates_waiting":"3"}"#
+    static let memory = #"{"notes":[{"name":"user-preferences","description":"How I like PRs","body":"- Short replies.","created_ms":1792611174811,"updated_ms":1792611274811},{"name":"","body":"no name"},{"name":"release-process","description":"How we tag","body":"Tag from main.","created_ms":1,"updated_ms":2}]}"#
     static let notStarted = #"{"project_id":2,"agent_id":null,"state":null,"model":null,"brief":"","worktree":null,"branch":null,"working_agents":0,"waiting_on_you":0}"#
     static let inbox = #"{"items":[{"id":7,"project_id":1,"kind":"agent","agent_id":15,"text":"Agent 15 \"Add a README line\" finished a turn\nDone: added it.","created_ms":1792611174811,"delivered_ms":null},{"id":8,"project_id":1,"kind":"message","agent_id":null,"text":"Ship it","created_ms":1792611274811,"delivered_ms":1792611275000},{"oops":true}]}"#
     static let transcript = #"""
@@ -43,6 +45,48 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(fresh.state == nil)
         #expect(fresh.model == nil)
         #expect(fresh.stateLabel == "Not started")
+    }
+
+    @Test func decodesTheIdentityAndPause() throws {
+        let staff = try decode(Staff.self, StaffSamples.identified)
+        #expect(staff.identity == "You are Ada.")
+        #expect(staff.paused)
+        #expect(staff.updatesWaiting == 3)
+        // An older daemon has none of them.
+        let older = try decode(Staff.self, StaffSamples.staff)
+        #expect(older.identity == "")
+        #expect(!older.paused)
+        #expect(older.updatesWaiting == 0)
+    }
+
+    @Test func decodesMemoryNotesByNameSkippingOnesWithoutAName() throws {
+        let memory = try decode(StaffMemory.self, StaffSamples.memory)
+        #expect(memory.notes.map(\.name) == ["release-process", "user-preferences"])
+        let note = memory.notes[1]
+        #expect(note.id == "user-preferences")
+        #expect(note.description == "How I like PRs")
+        #expect(note.body == "- Short replies.")
+        #expect(note.updatedMs == 1_792_611_274_811)
+    }
+
+    @Test func checksANoteAsTheDaemonDoes() {
+        #expect(StaffNote.nameProblem("release-process") == nil)
+        #expect(StaffNote.nameProblem("a") == nil)
+        #expect(StaffNote.nameProblem("") == "Give it a name.")
+        #expect(StaffNote.nameProblem("Release") != nil)
+        #expect(StaffNote.nameProblem("-release") != nil)
+        #expect(StaffNote.nameProblem("release-") != nil)
+        #expect(StaffNote.nameProblem("has space") != nil)
+        #expect(StaffNote.nameProblem(String(repeating: "a", count: 65)) == "Keep the name to 64 characters.")
+
+        #expect(StaffNote.oneLine("  How we tag\n  releases ") == "How we tag releases")
+        #expect(StaffNote.descriptionProblem(" \n ") != nil)
+        #expect(StaffNote.descriptionProblem(String(repeating: "x", count: 201)) == "Keep it to 200 characters.")
+        #expect(StaffNote.descriptionProblem("How we tag") == nil)
+
+        #expect(StaffNote.bodyProblem("  ") == "Write what the chief should know.")
+        #expect(StaffNote.bodyProblem(String(repeating: "é", count: 4097)) != nil) // 8,194 bytes
+        #expect(StaffNote.bodyProblem(String(repeating: "x", count: 8192)) == nil)
     }
 
     @Test func decodesTheInboxNewestFirstSkippingOddItems() throws {
@@ -224,5 +268,38 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(requests.first { $0.method == "PUT" && $0.path == "/v1/projects/1/staff" }?.value == .object(["model": .null]))
         #expect(requests.first { $0.path.hasSuffix("/staff/message") }?.json == ["text": "What's left?"])
         #expect(requests.first { $0.path.hasSuffix("/env/CLAUDE_CONFIG_DIR") }?.json == ["value": "~/.claude-work"])
+    }
+}
+
+@Suite struct StaffMemoryClientTests {
+    @Test func sendsTheBriefIdentityMemoryAndNewSessionRoutes() async throws {
+        let server = try FakeDaemon { request in
+            switch (request.method, request.path) {
+            case ("PUT", "/v1/projects/1/staff"), ("POST", "/v1/projects/1/staff/new-session"): .json(200, StaffSamples.identified)
+            case ("GET", "/v1/projects/1/staff/memory"): .json(200, StaffSamples.memory)
+            case ("PUT", "/v1/projects/1/staff/memory/release-process"):
+                .json(200, #"{"name":"release-process","description":"How we tag","body":"Tag from main.","created_ms":1,"updated_ms":3}"#)
+            case ("DELETE", "/v1/projects/1/staff/memory/release-process"): .empty(204)
+            case ("DELETE", "/v1/projects/1/staff/memory/gone"): .json(404, #"{"error":"there is no note gone"}"#)
+            default: .json(404, #"{"error":"unknown route"}"#)
+            }
+        }
+        defer { server.stop() }
+        let client = CosClient(socketPath: server.socketPath)
+
+        #expect(try await client.updateStaff(projectId: 1, brief: "Ship 0.2.").identity == "You are Ada.")
+        _ = try await client.updateStaff(projectId: 1, identity: "You are Ada.")
+        #expect(try await client.newStaffSession(projectId: 1).agentId == 14)
+        #expect(try await client.staffMemory(projectId: 1).count == 2)
+        let saved = try await client.saveStaffNote(projectId: 1, name: "release-process", description: "How we tag", body: "Tag from main.")
+        #expect(saved.updatedMs == 3)
+        try await client.deleteStaffNote(projectId: 1, name: "release-process")
+        await #expect(throws: CosError.self) { try await client.deleteStaffNote(projectId: 1, name: "gone") }
+
+        let puts = server.requests.filter { $0.method == "PUT" && $0.path == "/v1/projects/1/staff" }
+        // Only the field given goes, so the other stays as it is.
+        #expect(puts.map(\.json) == [["brief": "Ship 0.2."], ["identity": "You are Ada."]])
+        #expect(server.requests.first { $0.path.hasSuffix("/memory/release-process") && $0.method == "PUT" }?.json
+            == ["description": "How we tag", "body": "Tag from main."])
     }
 }
