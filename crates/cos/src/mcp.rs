@@ -119,7 +119,8 @@ pub(crate) fn tools() -> Vec<Tool> {
         tool(
             "workspaces_list",
             "List this project's workspaces (id, title, city, branch, path) and the agents in each: id, title, state, \
-             model, spawned_by (your agent id if you started it) and the start of its last message.",
+             model, spawned_by (your agent id if you started it), report (true: its news comes to you) and the start \
+             of its last message. A state of waiting_approval, needs_trust or needs_login means it waits for the user.",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
             true,
         ),
@@ -133,8 +134,9 @@ pub(crate) fn tools() -> Vec<Tool> {
         tool(
             "agent_spawn",
             "Start a Claude agent on a job. Give exactly one of workspace_id (an existing workspace) or new_workspace. \
-             The prompt is all it knows, so make it complete: what to do, where, and how to know it's done. It reports \
-             to you when it finishes a turn. Returns {agent_id, workspace_id}.",
+             The prompt is all it knows, so make it complete: what to do, where, and how to know it's done. It sends \
+             you no news unless you set report to true: check on it yourself with workspaces_list (its state) and \
+             agent_read (its last message). Returns {agent_id, workspace_id}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -144,7 +146,10 @@ pub(crate) fn tools() -> Vec<Tool> {
                     "title": {"type": "string", "description": "A short name for the agent; defaults to the start of the prompt."},
                     "model": {"type": "string", "description": "A Claude model such as \"sonnet\"; defaults to Claude's default."},
                     "permission_mode": {"type": "string", "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]},
-                    "attachments": attachments.clone()
+                    "attachments": attachments.clone(),
+                    "report": {"type": "boolean", "description": "Whether its news (each finished turn, its exit, \
+                        waiting on the user) comes to you and wakes you. Defaults to false. Set true for a long job \
+                        you must follow up on, or one whose approvals you should notice."}
                 },
                 "required": ["prompt"],
                 "additionalProperties": false
@@ -157,7 +162,13 @@ pub(crate) fn tools() -> Vec<Tool> {
              first.",
             json!({
                 "type": "object",
-                "properties": {"agent_id": {"type": "integer"}, "message": {"type": "string"}, "attachments": attachments},
+                "properties": {
+                    "agent_id": {"type": "integer"},
+                    "message": {"type": "string"},
+                    "attachments": attachments,
+                    "report": {"type": "boolean", "description": "Change whether it reports to you, from this message \
+                        on. Leave it out to keep it as it is."}
+                },
                 "required": ["agent_id", "message"],
                 "additionalProperties": false
             }),

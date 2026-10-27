@@ -87,6 +87,11 @@ export interface Forward {
   remotePort: number;
   /** The port on this Mac's loopback; another one when that was busy here. */
   localPort: number;
+  /**
+   * The port really listened on, when `localPort` is below 1024: macOS lets
+   * only root listen there, so pf redirects `localPort` to it.
+   */
+  via: number | null;
   /** This Mac's listener. */
   state: "listening" | "error";
   remote: ForwardRemote;
@@ -175,6 +180,6 @@ export interface Bridge {
   forwardRemove(remotePort: number): Promise<ForwardList>;
   /** The whole list now and on every change; a stream id for `closeStream`. */
   followForwards(onMessage: (message: ForwardMessage) => void): Promise<number>;
-  /** Opens `http://localhost:{localPort}/` of a forward in the default browser. */
+  /** Opens `http://localhost:{localPort}/` (`https://localhost/` for 443) of a forward in the default browser. */
   forwardOpen(remotePort: number): Promise<void>;
 }

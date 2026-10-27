@@ -20,9 +20,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use cos_bridge::redirect::Table;
 use cos_bridge::{
-    Backoff, Bridge, ErrorKind, EventMessage, ForwardMessage, ForwardSet, RemoteState, StreamHandle, Target,
-    TerminalMessage,
+    Backoff, Bridge, ErrorKind, EventMessage, ForwardMessage, ForwardSet, Redirector, Redirects, RemoteState,
+    StreamHandle, Target, TerminalMessage,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1278,6 +1279,79 @@ async fn a_busy_local_port_moves_up() {
     })
     .await;
     assert_eq!(set.get(port).unwrap().message.as_deref(), Some(message.as_str()));
+}
+
+/// Records the redirect tables, or refuses them like a cancelled password
+/// prompt.
+#[derive(Clone, Default)]
+struct FakeRedirector {
+    tables: Arc<Mutex<Vec<Table>>>,
+    refuse: Arc<AtomicBool>,
+}
+
+impl Redirector for FakeRedirector {
+    fn apply(&self, table: &Table) -> Result<(), String> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err("you cancelled the password prompt".into());
+        }
+        self.tables.lock().unwrap().push(table.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_port_below_1024_listens_higher_and_is_redirected_while_forwarded() {
+    let daemon = FakeDaemon::start();
+    let redirector = FakeRedirector::default();
+    let redirects = Redirects::new(redirector.clone());
+    let set = ForwardSet::with_redirects(daemon.bridge(), "Studio", Some(redirects.clone()));
+    let forward = set.add(443, None).await.unwrap();
+    assert_eq!(forward.local_port, 443);
+    let via = forward.via.unwrap();
+    // A port the OS picks, so never one a dev stack wants, like 8443.
+    assert!(via >= 1024 && via != 8443, "{forward:?}");
+    assert_eq!(redirects.table(), Table::from([(443, via)]));
+
+    // The browser's localhost:443 lands on `via`, which pf stands in for here.
+    let mut stream = connect(via).await;
+    stream.write_all(b"tls").await.unwrap();
+    let mut back = [0u8; 3];
+    within("echo", stream.read_exact(&mut back)).await.unwrap();
+    assert_eq!(&back, b"tls");
+    drop(stream);
+
+    // A local port of 1024 or more is never redirected.
+    let port = free_port();
+    let plain = set.add(port, None).await.unwrap();
+    assert_eq!((plain.local_port, plain.via), (port, None));
+    assert_eq!(redirects.table(), Table::from([(443, via)]));
+
+    // Removing the forward removes its redirect and closes `via`.
+    set.remove(443);
+    assert!(redirects.table().is_empty());
+    assert_eq!(redirector.tables.lock().unwrap().last(), Some(&Table::new()));
+    eventually("via closed", || {
+        std::net::TcpStream::connect(("127.0.0.1", via)).is_err()
+    })
+    .await;
+
+    // A refused redirect is an error, and nothing is kept or left listening.
+    redirector.refuse.store(true, Ordering::SeqCst);
+    let error = set.add(80, None).await.unwrap_err();
+    assert!(
+        error.message.starts_with("Couldn't redirect localhost:80 to ")
+            && error.message.ends_with(": You cancelled the password prompt."),
+        "{}",
+        error.message
+    );
+    assert_eq!(set.ports(), vec![port]);
+
+    // Dropping the set (another host selected) removes its redirects too.
+    redirector.refuse.store(false, Ordering::SeqCst);
+    set.add(80, None).await.unwrap();
+    assert_eq!(redirects.table().keys().copied().collect::<Vec<_>>(), [80]);
+    drop(set);
+    assert!(redirects.table().is_empty());
 }
 
 #[tokio::test]

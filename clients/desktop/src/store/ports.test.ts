@@ -55,7 +55,15 @@ describe("forwarded ports", () => {
   it("adds, moves up from a busy local port, refuses duplicates and removes", async () => {
     const { cos } = await onStudio();
     const added = await cos.addForward(8080);
-    expect(added).toMatchObject({ remotePort: 8080, localPort: 8080, remote: "listening" });
+    expect(added).toMatchObject({
+      remotePort: 8080,
+      localPort: 8080,
+      via: null,
+      remote: "listening",
+    });
+    // Below 1024 it keeps its port, redirected to one the OS picked.
+    expect(await cos.addForward(443)).toMatchObject({ localPort: 443, via: 52443 });
+    await cos.removeForward(443);
     expect(cos.get().forwards.map((f) => f.remotePort)).toEqual([3343, 5173, 8080]);
 
     const moved = await cos.addForward(3000, 3343);

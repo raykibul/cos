@@ -505,6 +505,11 @@ impl AgentManager {
         Ok(())
     }
 
+    /// Sets whether the agent's news goes to the chief that started it.
+    pub(crate) fn set_report(&self, id: i64, report: bool) -> Result<(), AgentError> {
+        Ok(self.inner.agents.set_report(id, report)?)
+    }
+
     /// The agents a Chief of Staff started, oldest first.
     pub(crate) fn spawned_by(&self, spawner: i64) -> Result<Vec<Agent>, AgentError> {
         Ok(self.inner.agents.spawned_by(spawner)?)

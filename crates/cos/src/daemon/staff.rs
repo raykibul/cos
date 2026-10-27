@@ -15,7 +15,7 @@
 //!   for you) add items; so do the messages you type. When it's idle, the
 //!   delivery loop types your oldest message on its own, else one
 //!   `[cos · N updates]` wakeup under the caps in [`cos_core::staff`]. While coordination is paused, news waits and only your
-//!   messages go in.
+//!   messages go in. An agent with `report: false` (`agent_spawn`'s default) adds nothing.
 //! - **Restarts:** when the daemon starts, every chief that was running
 //!   (now `interrupted`) is resumed, one a second, unless you stopped it
 //!   yourself ([`Staff::resume_chiefs`]).
@@ -646,8 +646,12 @@ impl Inner {
         }
     }
 
-    /// The project whose Chief of Staff started `agent`, with that chief.
+    /// The project whose Chief of Staff started `agent`, with that chief, if
+    /// the agent reports to it.
     fn spawner(&self, agent: &Agent) -> Option<(i64, i64)> {
+        if !agent.report {
+            return None;
+        }
         let spawner = agent.spawned_by?;
         let project = self.books.project_of(spawner).ok()??;
         Some((project, spawner))
