@@ -15,7 +15,7 @@
 //!   for you) add items; so do the messages you type. When it's idle, the
 //!   delivery loop types your oldest message on its own, else one
 //!   `[cos · N updates]` wakeup under the caps in [`cos_core::staff`]. While coordination is paused, news waits and only your
-//!   messages go in. An agent started with `report: false` adds nothing.
+//!   messages go in. An agent with `report: false` (`agent_spawn`'s default) adds nothing.
 //! - **Restarts:** when the daemon starts, every chief that was running
 //!   (now `interrupted`) is resumed, one a second, unless you stopped it
 //!   yourself ([`Staff::resume_chiefs`]).

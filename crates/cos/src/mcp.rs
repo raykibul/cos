@@ -119,8 +119,8 @@ pub(crate) fn tools() -> Vec<Tool> {
         tool(
             "workspaces_list",
             "List this project's workspaces (id, title, city, branch, path) and the agents in each: id, title, state, \
-             model, spawned_by (your agent id if you started it), report (false: it sends you no news) and the start \
-             of its last message.",
+             model, spawned_by (your agent id if you started it), report (true: its news comes to you) and the start \
+             of its last message. A state of waiting_approval, needs_trust or needs_login means it waits for the user.",
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
             true,
         ),
@@ -134,8 +134,9 @@ pub(crate) fn tools() -> Vec<Tool> {
         tool(
             "agent_spawn",
             "Start a Claude agent on a job. Give exactly one of workspace_id (an existing workspace) or new_workspace. \
-             The prompt is all it knows, so make it complete: what to do, where, and how to know it's done. It reports \
-             to you when it finishes a turn, unless you set report to false. Returns {agent_id, workspace_id}.",
+             The prompt is all it knows, so make it complete: what to do, where, and how to know it's done. It sends \
+             you no news unless you set report to true: check on it yourself with workspaces_list (its state) and \
+             agent_read (its last message). Returns {agent_id, workspace_id}.",
             json!({
                 "type": "object",
                 "properties": {
@@ -147,9 +148,8 @@ pub(crate) fn tools() -> Vec<Tool> {
                     "permission_mode": {"type": "string", "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]},
                     "attachments": attachments.clone(),
                     "report": {"type": "boolean", "description": "Whether its news (each finished turn, its exit, \
-                        waiting on the user) comes to you and wakes you. Defaults to true. Set false for a \
-                        fire-and-forget job you don't need to follow, such as one the user watches themselves; you \
-                        can still read, message and stop it."}
+                        waiting on the user) comes to you and wakes you. Defaults to false. Set true for a long job \
+                        you must follow up on, or one whose approvals you should notice."}
                 },
                 "required": ["prompt"],
                 "additionalProperties": false

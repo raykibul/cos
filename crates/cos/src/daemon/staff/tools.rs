@@ -49,8 +49,9 @@ struct AgentSpawn {
     /// agent's workspace and named in its prompt.
     #[serde(default)]
     attachments: Vec<String>,
-    /// False: its news skips the chief's inbox.
-    #[serde(default = "yes")]
+    /// True: its news goes to the chief's inbox. By default it skips it:
+    /// the chief looks the agent up when it needs to.
+    #[serde(default)]
     report: bool,
 }
 
@@ -64,10 +65,6 @@ struct AgentSend {
     /// Changes whether it reports to the chief, from this message on.
     #[serde(default)]
     report: Option<bool>,
-}
-
-fn yes() -> bool {
-    true
 }
 
 #[derive(Deserialize)]
@@ -278,7 +275,7 @@ impl Staff {
             format!("Sent to agent {}.", agent.id)
         };
         Ok(match report {
-            Some(true) => format!("{sent} It reports to you again."),
+            Some(true) => format!("{sent} It reports to you now."),
             Some(false) => format!("{sent} It no longer reports to you."),
             None => sent,
         })

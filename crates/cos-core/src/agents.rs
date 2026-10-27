@@ -53,7 +53,8 @@ pub struct Agent {
     #[serde(default)]
     pub spawned_by: Option<i64>,
     /// Whether its news (turns, exits, waits) goes to the inbox of the chief
-    /// that started it. False for a chief's fire-and-forget agents.
+    /// that started it. A chief's agents are false unless it asked for news;
+    /// agents from before the column are true.
     #[serde(default = "yes")]
     pub report: bool,
     /// Claude's transcript (JSONL), from the hooks.

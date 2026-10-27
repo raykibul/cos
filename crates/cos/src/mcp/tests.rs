@@ -185,7 +185,7 @@ fn every_tool_has_a_description_and_an_object_schema() {
 }
 
 #[test]
-fn the_chief_can_start_an_agent_that_doesnt_report_and_change_it_later() {
+fn report_is_an_optional_flag_on_agent_spawn_and_agent_send() {
     let tools = tools();
     for name in ["agent_spawn", "agent_send"] {
         let tool = tools.iter().find(|tool| tool.name == name).unwrap();

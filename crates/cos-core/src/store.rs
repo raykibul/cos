@@ -419,8 +419,9 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE staff ADD COLUMN identity TEXT NOT NULL DEFAULT '';
 ",
     "
-    -- 0: a Chief of Staff started it fire-and-forget, so its news (turns,
-    -- exits, waits) doesn't go to the chief's inbox.
+    -- 0: its news (turns, exits, waits) doesn't go to the inbox of the Chief
+    -- of Staff that started it, agent_spawn's default. Existing agents keep
+    -- reporting.
     ALTER TABLE agents ADD COLUMN report INTEGER NOT NULL DEFAULT 1;
 ",
 ];
@@ -835,6 +836,8 @@ mod tests {
         };
         assert_eq!(ids("SELECT id FROM agents"), [1]);
         assert_eq!(ids("SELECT spawned_by FROM agents"), [3]);
+        // Agents from before the report column keep reporting.
+        assert_eq!(ids("SELECT report FROM agents"), [1]);
         assert_eq!(ids("SELECT id FROM approvals"), [1]);
         assert_eq!(ids("SELECT id FROM staff_inbox"), [1]);
         let gone = ids("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
