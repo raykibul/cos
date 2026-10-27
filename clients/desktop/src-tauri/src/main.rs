@@ -5,9 +5,10 @@
 mod commands;
 mod hosts;
 mod links;
+mod redirect;
 mod tray;
 
-use cos_bridge::Bridge;
+use cos_bridge::{Bridge, Redirects};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
@@ -18,6 +19,11 @@ use crate::hosts::Hosts;
 const MAIN_WINDOW: &str = "main";
 
 fn main() {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().is_some_and(|flag| flag == redirect::HELPER_FLAG) {
+        // Started as root by the password prompt: serve pf redirects, no window.
+        std::process::exit(redirect::helper_main(args.next().map(Into::into)));
+    }
     let bridge = Bridge::from_env().unwrap_or_else(|| Bridge::new("/.cos/cos.sock"));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -52,7 +58,8 @@ fn main() {
             // Saved hosts live in the app's config folder
             // (~/Library/Application Support/local.cos.desktop).
             let file = app.path().app_config_dir().ok().map(|dir| dir.join("hosts.json"));
-            app.manage(AppState::new(bridge, Hosts::load(file)));
+            let redirects = Redirects::new(redirect::PfRedirector::default());
+            app.manage(AppState::new(bridge, Hosts::load(file), redirects));
             let tray = tray::Tray::create(app.handle())?;
             app.manage(tray);
             Ok(())

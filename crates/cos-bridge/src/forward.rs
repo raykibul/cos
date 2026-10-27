@@ -23,6 +23,7 @@ use tokio::task::{AbortHandle, JoinSet};
 
 use crate::http::{error_from, read_all};
 use crate::messages::{Forward, ForwardList, ForwardMessage, ListenState, RemoteState};
+use crate::redirect::{OFFSET, Redirect, Redirects, UNPRIVILEGED};
 use crate::stream::{self, Sink, StreamHandle};
 use crate::{Bridge, BridgeError};
 
@@ -135,6 +136,9 @@ struct Shared {
     /// Bumped on every change, for [`ForwardSet::follow`].
     changed: watch::Sender<u64>,
     next_id: Mutex<u64>,
+    /// Where a port below 1024 is redirected from; without, it can't be
+    /// forwarded (on macOS).
+    redirects: Option<Redirects>,
 }
 
 struct Entry {
@@ -144,6 +148,8 @@ struct Entry {
     /// The note that the local port moved, shown again once a tunnel works.
     note: Option<String>,
     listeners: Vec<AbortHandle>,
+    /// The redirect from a port below 1024, removed with the forward.
+    _redirect: Option<Redirect>,
 }
 
 impl Drop for Entry {
@@ -224,6 +230,12 @@ fn sentence(message: &str) -> String {
 impl ForwardSet {
     /// Forwards to the daemon `bridge` talks to, called `host` in messages.
     pub fn new(bridge: Bridge, host: impl Into<String>) -> Self {
+        Self::with_redirects(bridge, host, None)
+    }
+
+    /// [`Self::new`], with a local port below 1024 listening [`OFFSET`]
+    /// higher and redirected from the port asked for.
+    pub fn with_redirects(bridge: Bridge, host: impl Into<String>, redirects: Option<Redirects>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 bridge,
@@ -231,6 +243,7 @@ impl ForwardSet {
                 forwards: Mutex::default(),
                 changed: watch::channel(0).0,
                 next_id: Mutex::new(0),
+                redirects,
             }),
         }
     }
@@ -276,9 +289,12 @@ impl ForwardSet {
         let wanted = local.unwrap_or(remote);
         check_port(wanted)?;
         self.refuse_duplicate(remote)?;
-        let (listeners, local_port) = bind_local(wanted)
-            .await
-            .map_err(|error| BridgeError::io(format!("could not listen on localhost:{wanted}: {error}")))?;
+        let Listening {
+            listeners,
+            local_port,
+            via,
+            redirect,
+        } = self.listen(wanted).await?;
 
         let shared = &self.shared;
         let (remote_state, code, message) = match shared
@@ -325,6 +341,7 @@ impl ForwardSet {
         let forward = Forward {
             remote_port: remote,
             local_port,
+            via,
             state: ListenState::Listening,
             remote: remote_state,
             code,
@@ -353,11 +370,51 @@ impl ForwardSet {
                 forward: forward.clone(),
                 note: moved,
                 listeners,
+                _redirect: redirect,
             },
         );
         drop(forwards);
         shared.changed.send_modify(|version| *version += 1);
         Ok(forward)
+    }
+
+    /// Listens on `wanted`, or the next free port. With redirects, a port
+    /// below 1024 listens [`OFFSET`] higher and is redirected from `wanted`,
+    /// which may ask for the Mac's password.
+    async fn listen(&self, wanted: u16) -> Result<Listening, BridgeError> {
+        let redirects = match &self.shared.redirects {
+            Some(redirects) if wanted < UNPRIVILEGED => redirects.clone(),
+            _ => {
+                let (listeners, local_port) = bind_local(wanted)
+                    .await
+                    .map_err(|error| listen_error(wanted, &error))?;
+                return Ok(Listening {
+                    listeners,
+                    local_port,
+                    via: None,
+                    redirect: None,
+                });
+            }
+        };
+        let high = wanted + OFFSET;
+        let (listeners, via) = bind_local(high)
+            .await
+            .map_err(|error| listen_error(high, &error))?;
+        let redirect = tokio::task::spawn_blocking(move || redirects.add(wanted, via))
+            .await
+            .map_err(|error| BridgeError::io(error.to_string()))?
+            .map_err(|error| {
+                BridgeError::io(format!(
+                    "Couldn't redirect localhost:{wanted} to {via}: {}",
+                    sentence(&error)
+                ))
+            })?;
+        Ok(Listening {
+            listeners,
+            local_port: wanted,
+            via: Some(via),
+            redirect: Some(redirect),
+        })
     }
 
     fn refuse_duplicate(&self, remote: u16) -> Result<(), BridgeError> {
@@ -399,6 +456,27 @@ impl ForwardSet {
             }
         })
     }
+}
+
+/// A forward's listeners, and its redirect when below 1024.
+struct Listening {
+    listeners: Vec<TcpListener>,
+    /// The port the browser uses.
+    local_port: u16,
+    /// The port listened on, when redirected from `local_port`.
+    via: Option<u16>,
+    redirect: Option<Redirect>,
+}
+
+/// Why this Mac couldn't listen on `port`. macOS lets only root listen on a
+/// loopback port below 1024, which a set without redirects can't get round.
+fn listen_error(port: u16, error: &std::io::Error) -> BridgeError {
+    if error.kind() == IoKind::PermissionDenied && port < UNPRIVILEGED {
+        return BridgeError::bad_request(format!(
+            "Only root can listen on localhost:{port} on this Mac. Pick a local port of 1024 or more."
+        ));
+    }
+    BridgeError::io(format!("could not listen on localhost:{port}: {error}"))
 }
 
 fn duplicate(remote: u16) -> BridgeError {

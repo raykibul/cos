@@ -13,6 +13,7 @@ mod events;
 mod forward;
 mod http;
 mod messages;
+pub mod redirect;
 mod sse;
 mod stream;
 mod target;
@@ -27,6 +28,7 @@ pub use messages::{
     DaemonInfo, EventMessage, FileResponse, Forward, ForwardList, ForwardMessage, ListenState, RemoteState,
     Response, TerminalMessage,
 };
+pub use redirect::{Redirector, Redirects};
 pub use stream::{Sink, StreamHandle};
 pub use target::{DEFAULT_PORT, Target, parse_address};
 
