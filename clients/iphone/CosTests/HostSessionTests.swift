@@ -107,3 +107,126 @@ import Testing
         #expect(session.agentsStarted(byProject: 1).map(\.id).contains(8))
     }
 }
+
+@MainActor
+@Suite struct SessionFolderTests {
+    @Test func startsAnotherSessionBesideOne() async throws {
+        let session = await liveSession()
+        defer { session.stop() }
+
+        let agent = try await session.startSession(workspaceId: 3, prompt: "  Add a test for the TTL  ")
+
+        #expect(agent.workspaceId == 3)
+        #expect(session.agent(id: agent.id) != nil)
+        #expect(session.agents(inWorkspace: 3).map(\.id).contains(7))
+        #expect(session.sessionsSharingFolder(with: agent).map(\.id).sorted() == [7, 13])
+    }
+
+    @Test func removingARunningSessionStopsItFirstAndKeepsASharedFolder() async throws {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let agent = try #require(session.agent(id: 7))
+
+        try await session.removeSession(agent, withFolder: false, timeout: .seconds(2))
+
+        let calls = await fake.calls
+        #expect(calls.contains("POST /v1/agents/7/stop"))
+        #expect(calls.contains("DELETE /v1/agents/7"))
+        #expect(!calls.contains("DELETE /v1/workspaces/3"))
+        #expect(session.agent(id: 7) == nil)
+        #expect(session.agent(id: 13) != nil)
+    }
+
+    @Test func removingTheLastSessionCanTakeItsFolder() async throws {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let agent = try #require(session.agent(id: 12))
+        #expect(session.sessionsSharingFolder(with: agent).isEmpty)
+
+        try await session.removeSession(agent, withFolder: true, timeout: .seconds(2))
+
+        #expect(await fake.calls.contains("DELETE /v1/workspaces/9"))
+        #expect(session.agent(id: 12) == nil)
+        #expect(await eventually { session.workspace(id: 9) == nil })
+    }
+
+    @Test func aFolderWithUncommittedChangesStays() async throws {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        // Porto has two sessions; take one away so the other is the last.
+        try await session.removeSession(try #require(session.agent(id: 14)), withFolder: false)
+        let agent = try #require(session.agent(id: 8))
+
+        await #expect(throws: CosError.conflict("porto has uncommitted changes. Commit or discard them first.")) {
+            try await session.removeSession(agent, withFolder: true, timeout: .seconds(2))
+        }
+        // It was stopped on the way, and stays, as does its folder.
+        #expect(session.agent(id: 8)?.state.isAlive == false)
+        #expect(session.workspace(id: 4) != nil)
+
+        // Unticking removes just the session.
+        try await session.removeSession(agent, withFolder: false)
+        #expect(session.agent(id: 8) == nil)
+    }
+
+    @Test func aRemovedSessionsScreensGo() {
+        let navigator = Navigator()
+        navigator.chiefs = [.chief(projectId: 1), .workspace(id: 3), .session(agentId: 7), .terminal(agentId: 7), .session(agentId: 13)]
+        navigator.forget(agentId: 7, workspaceId: nil)
+        #expect(navigator.chiefs == [.chief(projectId: 1), .workspace(id: 3), .session(agentId: 13)])
+        navigator.forget(agentId: 13, workspaceId: 3)
+        #expect(navigator.chiefs == [.chief(projectId: 1)])
+    }
+}
+
+@MainActor
+@Suite struct ShellSessionTests {
+    @Test func listsOpensNamesAndClosesShells() async throws {
+        let session = await liveSession()
+        defer { session.stop() }
+        await session.loadShells()
+        #expect(session.shellsSupported)
+        #expect(session.shells(inProject: 1).map(\.id) == [1])
+        #expect(session.shellTitle(session.shells[0]) == "Shell 1")
+
+        let root = try await session.openShell(cwd: "/Users/me/code/atlas", projectId: 1)
+        #expect(session.shellTitle(root) == "Shell 2")
+        let lisbon = try #require(session.agent(id: 7))
+        let folder = try #require(session.folder(ofAgent: lisbon))
+        let there = try await session.openShell(cwd: folder, projectId: 1)
+        #expect(session.shellTitle(there) == "lisbon shell")
+        #expect(session.shells(inProject: 1).count == 3)
+
+        try await session.closeShell(id: root.id)
+        #expect(session.shells(inProject: 1).map(\.id) == [1, there.id])
+        // Closing one that's gone already is fine.
+        try await session.closeShell(id: root.id)
+
+        await #expect(throws: CosError.self) { try await session.openShell(cwd: "relative", projectId: nil) }
+    }
+
+    @Test func typingInAShellEchoesThroughItsTerminal() async throws {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let shell = try await session.openShell(cwd: "/Users/me/code/atlas", projectId: 1)
+        let plumbing = ShellTerminal(shells: fake)
+
+        var events: [TerminalEvent] = []
+        let stream = plumbing.terminal(agentId: shell.id)
+        var iterator = stream.makeAsyncIterator()
+        if let first = try await iterator.next() { events.append(first) }
+        try await plumbing.sendKeys(agentId: shell.id, Array("ls\r".utf8))
+        if let echo = try await iterator.next() { events.append(echo) }
+
+        guard case .snapshot(_, _, let prompt) = events.first else {
+            Issue.record("a shell starts with its prompt: \(events)")
+            return
+        }
+        #expect(String(decoding: prompt, as: UTF8.self).hasSuffix("atlas % "))
+        #expect(events.last == .output(Array("ls\r\n".utf8)))
+    }
+}

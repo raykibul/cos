@@ -40,10 +40,21 @@ final class HostSession {
     private(set) var approvals: [Approval] = []
     /// Each project's Chief of Staff, by project id.
     private(set) var staffs: [Int: Staff] = [:]
+    /// The daemon's shells as last listed (`loadShells`): they log no events.
+    private(set) var shells: [Shell] = []
+    /// `false` on a daemon without shells.
+    private(set) var shellsSupported = true
 
     /// Bumped per agent when its transcript grows (`agent.transcript`), so
     /// a chat on screen reads what's new.
     private(set) var transcriptTicks: [Int: Int] = [:]
+    /// Bumped per project when its chief's brief, identity, notes or pause
+    /// change (`staff.changed`), so a memory page on screen reads them again.
+    private(set) var staffChanges: [Int: Int] = [:]
+
+    /// Bumped each time the event stream (re)connects, so a chat on screen
+    /// catches up on what it may have missed meanwhile.
+    private(set) var connects = 0
 
     /// When you last opened each chief's chat, for the chiefs list.
     let readMarks: ReadMarks
@@ -115,6 +126,7 @@ final class HostSession {
             self.status = status
             connection = .live
             if lastSeq == nil { lastSeq = status.lastSeq }
+            connects += 1
             requestAll()
         case .event(let event):
             lastSeq = max(lastSeq ?? 0, event.seq)
@@ -143,6 +155,9 @@ final class HostSession {
         if event.changesStaff || event.changesProjects { request(.staffs) }
         if event.kind == EventKind.agentTranscript, let agentId = event.number("agent_id") {
             transcriptTicks[agentId, default: 0] += 1
+        }
+        if event.kind == EventKind.staffChanged, let projectId = event.number("project_id") {
+            staffChanges[projectId, default: 0] += 1
         }
         if let status, event.seq > status.lastSeq {
             self.status?.lastSeq = event.seq
@@ -329,6 +344,109 @@ final class HostSession {
     func stopAgent(id: Int) async throws {
         try await service.stopAgent(id: id)
         request(.agents)
+    }
+
+    /// Starts a session in a workspace's folder, beside the ones there.
+    func startSession(workspaceId: Int, prompt: String) async throws -> Agent {
+        let agent = try await service.createAgent(workspaceId: workspaceId, NewAgent(prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines)))
+        upsert(agent)
+        request(.agents)
+        return agent
+    }
+
+    /// The other sessions in `agent`'s folder, whatever their state.
+    func sessionsSharingFolder(with agent: Agent) -> [Agent] {
+        guard let workspaceId = agent.workspaceId else { return [] }
+        return agents(inWorkspace: workspaceId).filter { $0.id != agent.id }
+    }
+
+    /// Removes a session, as the desktop does: a running one is stopped
+    /// first (waiting up to `timeout` for it to exit), then its folder goes
+    /// too when `withFolder` (which forgets the agent and keeps the branch),
+    /// else just the session. A folder with uncommitted changes stays, with
+    /// the daemon's 409.
+    func removeSession(_ agent: Agent, withFolder: Bool, timeout: Duration = .seconds(15)) async throws {
+        if self.agent(id: agent.id)?.state.isAlive ?? agent.state.isAlive {
+            try await service.stopAgent(id: agent.id)
+            let deadline = ContinuousClock.now + timeout
+            while true {
+                let current = try await service.agent(id: agent.id)
+                if !current.state.isAlive {
+                    upsert(current)
+                    break
+                }
+                if ContinuousClock.now >= deadline {
+                    throw CosError.conflict("\(agent.title) didn't stop in time. Try again in a moment.")
+                }
+                try await Task.sleep(for: .milliseconds(300))
+            }
+        }
+        if withFolder, let workspaceId = agent.workspaceId {
+            try await service.removeWorkspace(id: workspaceId)
+            agents.removeAll { $0.workspaceId == workspaceId }
+            request(.projects)
+        } else {
+            try await service.removeAgent(id: agent.id)
+            agents.removeAll { $0.id == agent.id }
+        }
+        request(.agents)
+    }
+
+    // MARK: Shells
+
+    /// Lists the daemon's shells, the ones the Mac opened included.
+    func loadShells() async {
+        do {
+            shells = try await service.shells()
+            shellsSupported = true
+        } catch CosError.notFound {
+            shellsSupported = false
+        } catch {
+            // The follower shows connection trouble; keep the last list.
+        }
+    }
+
+    /// Opens a login shell on the host in `cwd`, with `projectId`'s
+    /// environment, as the daemon's user.
+    func openShell(cwd: String, projectId: Int?) async throws -> Shell {
+        do {
+            let shell = try await service.startShell(cwd: cwd, projectId: projectId, rows: nil, cols: nil)
+            shells.append(shell)
+            return shell
+        } catch let error as CosError where error.code == .hostOnly {
+            throw CosError.http(status: 403, message: "The cos on \(host.name) is too old to open shells from this iPhone. Run `cos upgrade` there.")
+        }
+    }
+
+    /// Ends a shell (killing it if it still runs) and forgets it.
+    func closeShell(id: Int) async throws {
+        do {
+            try await service.closeShell(id: id)
+        } catch CosError.notFound {
+            // Gone already.
+        }
+        shells.removeAll { $0.id == id }
+    }
+
+    /// A project's shells, oldest first.
+    func shells(inProject id: Int) -> [Shell] {
+        shells.filter { $0.projectId == id }.sorted { $0.id < $1.id }
+    }
+
+    /// "Shell 2" in its project's root, numbered by start, else "lisbon shell".
+    func shellTitle(_ shell: Shell) -> String {
+        if let projectId = shell.projectId, let root = project(id: projectId)?.root, root == shell.cwd {
+            let inRoot = shells(inProject: projectId).filter { $0.cwd == root }
+            let number = (inRoot.firstIndex { $0.id == shell.id } ?? inRoot.count) + 1
+            return "Shell \(number)"
+        }
+        return "\(shell.folderName) shell"
+    }
+
+    /// The folder an agent works in: its own `cwd` (a chief's worktree),
+    /// else its workspace's.
+    func folder(ofAgent agent: Agent) -> String? {
+        agent.cwd ?? workspace(id: agent.workspaceId)?.path
     }
 
     /// After a Chief of Staff action, its record changes.

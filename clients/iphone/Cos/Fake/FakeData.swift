@@ -97,13 +97,46 @@ struct FakeData {
         ]
     }
 
+    /// A shell the Mac opened in atlas's root.
+    var shells: [Shell] {
+        [Shell(id: 1, projectId: 1, cwd: "/Users/me/code/atlas", pid: 52_001, startedMs: ago(5_400))]
+    }
+
     // MARK: The Chief of Staff
 
     var staffs: [Int: Staff] {
         [
-            1: Staff(projectId: 1, agentId: 40, state: .idle, model: "sonnet", brief: "Ship 0.2: the session fix, left-pad, release notes.", worktree: "/Users/me/.cos/worktrees/atlas-1/chief", branch: "atlas/chief", workingAgents: 1, waitingOnYou: 1),
+            1: Staff(projectId: 1, agentId: 40, state: .idle, model: "sonnet", brief: "Ship 0.2: the session fix, left-pad, release notes.", identity: Self.identity, worktree: "/Users/me/.cos/worktrees/atlas-1/chief", branch: "atlas/chief", workingAgents: 1, waitingOnYou: 1),
             2: Staff(projectId: 2),
             3: Staff(projectId: 3, agentId: 41, state: .idle, model: "haiku", brief: "Keep dependencies current.", branch: "opal/chief"),
+        ]
+    }
+
+    static let identity = """
+    You are Ada, the Chief of Staff for atlas. You're calm, direct and careful.
+
+    Talk to me like a senior engineer: short answers, no fluff, the result first. Before starting agents, say in one line what each will do. Prefer small PRs, one subject each. Never push to main. I work in Dhaka time and review PRs the same day.
+    """
+
+    var notes: [Int: [StaffNote]] {
+        [
+            1: [
+                StaffNote(
+                    name: "user-preferences", description: "How I like PRs and replies",
+                    body: "- Keep replies short and lead with the result.\n- One subject per PR.\n- Ask before pushing a tag.",
+                    createdMs: ago(600_000), updatedMs: ago(86_000)
+                ),
+                StaffNote(
+                    name: "release-process", description: "How atlas cuts a release",
+                    body: "Tag from main as `vX.Y.Z` once CI is green. The release notes live in CHANGELOG.md, newest first.",
+                    createdMs: ago(500_000), updatedMs: ago(400_000)
+                ),
+                StaffNote(
+                    name: "test-suite", description: "Which tests are slow or flaky",
+                    body: "The full suite takes about 6 minutes. `auth/session.test.ts` is flaky under load; run it twice before calling it broken.",
+                    createdMs: ago(90_000), updatedMs: ago(3_000)
+                ),
+            ],
         ]
     }
 
@@ -144,7 +177,42 @@ struct FakeData {
                 TranscriptMessage(n: 10, role: .assistant, kind: .tool, tool: ToolCall(name: "mcp__cos__agent_read", summary: "{\"agent_id\":7}", agentId: 7), tsMs: ago(250)),
                 TranscriptMessage(n: 11, role: .assistant, kind: .text, text: after, tsMs: ago(240)),
             ],
+            7: [
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: Self.spawned("Sessions expire after five minutes instead of twelve hours. Find out why and fix it, with a test."), tsMs: ago(1_500)),
+                TranscriptMessage(n: 2, role: .assistant, kind: .text, text: "I'll start with the auth middleware, where sessions are checked.", tsMs: ago(1_495)),
+                TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Grep", summary: "SESSION_TTL"), tsMs: ago(1_490)),
+                TranscriptMessage(n: 4, role: .assistant, kind: .tool, tool: ToolCall(name: "Read", summary: "src/auth/session.ts"), tsMs: ago(1_480)),
+                TranscriptMessage(n: 5, role: .assistant, kind: .text, text: "Found it: `SESSION_TTL` is `12`, in minutes, but `expiresAt()` reads it as hours. That's 12 minutes, and the 5-minute idle check makes it look like five.", tsMs: ago(1_200)),
+                TranscriptMessage(n: 6, role: .assistant, kind: .tool, tool: ToolCall(name: "Edit", summary: "src/auth/session.ts"), tsMs: ago(1_100)),
+                TranscriptMessage(n: 7, role: .assistant, kind: .text, text: "Fixed, and running the whole suite now.", tsMs: ago(300)),
+                TranscriptMessage(n: 8, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "npm test"), tsMs: ago(20)),
+            ],
+            8: [
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: Self.spawned("The formatter pads with spaces. Use left-pad for it, and add a test."), tsMs: ago(1_400)),
+                TranscriptMessage(n: 2, role: .assistant, kind: .text, text: "I'll add left-pad first, then switch the formatter over.", tsMs: ago(1_390)),
+                TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "npm install left-pad --save"), tsMs: ago(90)),
+            ],
+            13: [
+                TranscriptMessage(n: 1, role: .user, kind: .text, text: "Draft the release notes for 0.2 in CHANGELOG.md.", tsMs: ago(9_000)),
+                TranscriptMessage(n: 2, role: .assistant, kind: .tool, tool: ToolCall(name: "Bash", summary: "git log --oneline v0.1.0..HEAD"), tsMs: ago(8_990)),
+                TranscriptMessage(n: 3, role: .assistant, kind: .tool, tool: ToolCall(name: "Edit", summary: "CHANGELOG.md"), tsMs: ago(8_700)),
+                TranscriptMessage(n: 4, role: .assistant, kind: .text, text: "Drafted the notes in CHANGELOG.md under 0.2.0. They don't mention the session fix yet.", tsMs: ago(3_000)),
+                TranscriptMessage(n: 5, role: .user, kind: .text, text: "! git diff --stat", tsMs: ago(2_900)),
+                TranscriptMessage(
+                    n: 6, role: .user, kind: .tool,
+                    tool: ToolCall(
+                        name: ToolCall.shellOutputName, summary: "CHANGELOG.md | 24 ++++++++++++++++++++++++",
+                        output: "CHANGELOG.md | 24 ++++++++++++++++++++++++\n 1 file changed, 24 insertions(+)"
+                    ),
+                    tsMs: ago(2_899)
+                ),
+            ],
         ]
+    }
+
+    /// A first prompt as the chief's `agent_spawn` sends it, with cos's line.
+    static func spawned(_ prompt: String) -> String {
+        prompt + "\n\n[cos] The Chief of Staff of atlas started you. When you finish, end with a short summary of what you did and anything left open."
     }
 
     /// What Claude types into the chief when a subagent it ran finishes.

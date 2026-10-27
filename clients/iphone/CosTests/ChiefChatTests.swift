@@ -8,12 +8,12 @@ import Testing
     @Test func readsTheTranscriptAsRows() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
 
         await chat.load()
 
         #expect(chat.error == nil)
-        #expect(chat.chiefAgentId == 40)
+        #expect(chat.agentId == 40)
         guard case .user = chat.rows.first else {
             Issue.record("the chat starts with what you asked: \(chat.rows)")
             return
@@ -26,7 +26,7 @@ import Testing
     @Test func sessionsItStartedAndAgentsThatFinishedAreCards() async throws {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
 
         let spawned = chat.rows.compactMap { row -> ToolCall? in
@@ -52,7 +52,7 @@ import Testing
     @Test func aSentMessageShowsUntilTheTranscriptHasIt() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
         let before = chat.rows.count
 
@@ -72,7 +72,7 @@ import Testing
     @Test func yourMessagesGetTicks() async {
         let session = await liveSession(FakeCos(replyDelay: .milliseconds(300)))
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
 
         // The chief answered everything you wrote before: two blue ticks.
@@ -113,16 +113,16 @@ import Testing
     }
 
     @Test func whatTheChiefIsDoingReadsAsOneLine() {
-        #expect(ChiefChat.describe(ToolCall(name: "Bash", summary: "cargo test -p cos")) == "cargo test -p cos")
-        #expect(ChiefChat.describe(ToolCall(name: "Read", summary: "src/app.ts")) == "Read src/app.ts")
-        #expect(ChiefChat.describe(ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix it")) == "Started an agent")
-        #expect(ChiefChat.describe(ToolCall(name: "TodoWrite")) == "TodoWrite")
+        #expect(Chat.describe(ToolCall(name: "Bash", summary: "cargo test -p cos")) == "cargo test -p cos")
+        #expect(Chat.describe(ToolCall(name: "Read", summary: "src/app.ts")) == "Read src/app.ts")
+        #expect(Chat.describe(ToolCall(name: "mcp__cos__agent_spawn", summary: "Fix it")) == "Started an agent")
+        #expect(Chat.describe(ToolCall(name: "TodoWrite")) == "TodoWrite")
     }
 
     @Test func theFirstMessageStartsTheChief() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 2, session: session)
+        let chat = Chat(projectId: 2, session: session)
         await chat.load()
         #expect(chat.staff?.hasStarted == false)
         #expect(chat.rows.isEmpty)
@@ -136,7 +136,7 @@ import Testing
     @Test func theChiefsReplyArrivesLive() async {
         let session = await liveSession(FakeCos(replyDelay: .milliseconds(50)))
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
 
         await chat.send("Status?")
@@ -156,7 +156,7 @@ import Testing
         let fake = FakeCos(replyDelay: nil)
         let session = await liveSession(fake)
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
 
         await fake.setRefusal(.deviceDenied)
@@ -180,7 +180,7 @@ import Testing
     @Test func agentsTheChiefStartedThatWaitOnYou() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
 
         let waiting = chat.agentsWaiting
         #expect(waiting.map(\.agent.id) == [8])
@@ -193,7 +193,7 @@ import Testing
         let fake = FakeCos(replyDelay: nil)
         let session = await liveSession(fake)
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
         #expect(!chat.canSend)
 
@@ -220,7 +220,7 @@ import Testing
     @Test func aPictureYouSentShowsInTheChat() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
 
         guard case .user(let first, _) = chat.rows.first else {
@@ -237,7 +237,7 @@ import Testing
     @Test func aFileTooLargeIsRefusedOnTheComposer() async {
         let session = await liveSession()
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
 
         await chat.attach(name: "dump.bin", contentType: "application/octet-stream", data: Data(count: Attachment.maxBytes + 1))
@@ -256,7 +256,7 @@ import Testing
         let fake = FakeCos(replyDelay: nil)
         let session = await liveSession(fake)
         defer { session.stop() }
-        let chat = ChiefChat(projectId: 1, session: session)
+        let chat = Chat(projectId: 1, session: session)
         await chat.load()
         await chat.attach(name: "trace.log", contentType: "text/plain", data: Data("boom".utf8))
         chat.draft = "Look at this"
@@ -274,5 +274,208 @@ import Testing
         }
         #expect(message.text == "Look at this")
         #expect(message.attachments.map(\.name) == ["trace.log"])
+    }
+}
+
+@MainActor
+@Suite struct SessionChatTests {
+    @Test func readsASessionsTranscriptWithTheChiefsPromptFirst() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 7, session: session)
+
+        await chat.load()
+
+        #expect(!chat.isChief)
+        #expect(chat.agentId == 7)
+        #expect(chat.projectId == 1)
+        #expect(chat.staff == nil)
+        guard case .fromChief(_, let prompt) = chat.rows.first else {
+            Issue.record("the chat starts with the chief's prompt: \(String(describing: chat.rows.first))")
+            return
+        }
+        #expect(prompt.hasPrefix("Sessions expire after five minutes"))
+        #expect(!prompt.contains("[cos]"))
+        #expect(chat.rows.contains { if case .tool = $0 { true } else { false } })
+        // It's working: the chat shows it typing, with its latest tool call.
+        #expect(chat.isTyping)
+        #expect(chat.activity?.text == "npm test")
+    }
+
+    @Test func yourOwnSessionsPromptIsYourMessage() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+
+        guard case .user(let message, let receipt) = chat.rows.first else {
+            Issue.record("your prompt is your message: \(String(describing: chat.rows.first))")
+            return
+        }
+        #expect(message.text.hasPrefix("Draft the release notes"))
+        #expect(receipt == .seen)
+    }
+
+    @Test func aMessageTypesIntoTheSession() async {
+        let session = await liveSession(FakeCos(replyDelay: .milliseconds(50)))
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+
+        chat.draft = "Mention the session fix too."
+        await chat.send()
+
+        #expect(chat.pending.isEmpty)
+        guard case .user(let message, _) = chat.rows.last else {
+            Issue.record("the last row is your message: \(String(describing: chat.rows.last))")
+            return
+        }
+        #expect(message.text == "Mention the session fix too.")
+        // Its answer arrives live, from the transcript.
+        let answered = await eventually {
+            Task { await chat.read() }
+            if case .reply(let reply) = chat.rows.last { return reply.text.hasPrefix("Done.") }
+            return false
+        }
+        #expect(answered)
+    }
+
+    @Test func aStoppedSessionIsResumedByAMessage() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = Chat(agentId: 14, session: session)
+        await chat.load()
+        #expect(chat.placeholder == "Resume it with a message")
+
+        chat.draft = "Write up the spike"
+        await chat.send()
+
+        let calls = await fake.calls
+        #expect(calls.contains("POST /v1/agents/14/resume"))
+        #expect(calls.last { $0.hasPrefix("POST /v1/agents/14/") } == "POST /v1/agents/14/input")
+        #expect(chat.pending.isEmpty)
+    }
+
+    @Test func theComposerWaitsWhileAPromptWouldCatchTheText() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 8, session: session)
+        await chat.load()
+
+        #expect(chat.blocked == "Answer the request above first")
+        chat.draft = "hello"
+        #expect(!chat.canSend)
+        #expect(chat.agentsWaiting.map(\.agent.id) == [8])
+        #expect(chat.agentsWaiting.first?.approval?.id == 12)
+
+        let trust = Chat(agentId: 12, session: session)
+        #expect(trust.blocked == "Trust the folder first")
+        let login = Chat(agentId: 11, session: session)
+        #expect(login.blocked == "Log in to Claude first")
+    }
+}
+
+@MainActor
+@Suite struct ReplyChatTests {
+    @Test func aReplyCarriesItsQuoteAndShowsIt() async throws {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(projectId: 1, session: session)
+        await chat.load()
+        let theirs = try #require(chat.messages.last { $0.role == .assistant && $0.kind == .text })
+
+        chat.reply(to: theirs)
+        #expect(chat.replyLabel == "Replying to the Chief of Staff")
+        chat.draft = "Allow it."
+        await chat.send()
+
+        #expect(chat.replyingTo == nil)
+        guard case .user(let message, _) = chat.rows.last else {
+            Issue.record("the last row is your reply: \(String(describing: chat.rows.last))")
+            return
+        }
+        let parsed = try #require(ChatReply.parse(message.text))
+        #expect(parsed.reply.from == .them)
+        #expect(parsed.reply.text.hasPrefix("Good news from **lisbon**"))
+        #expect(parsed.body == "Allow it.")
+
+        // Replying to that reply quotes what you wrote, not its quote.
+        chat.reply(to: message)
+        #expect(chat.replyingTo == ChatReply(from: .me, text: "Allow it."))
+        #expect(chat.replyLabel == "Replying to yourself")
+    }
+
+    @Test func inASessionTheyAreClaude() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+        if let last = chat.messages.last(where: { $0.role == .assistant }) { chat.reply(to: last) }
+        #expect(chat.replyLabel == "Replying to Claude")
+    }
+}
+
+@MainActor
+@Suite struct ShellModeChatTests {
+    @Test func aBangCommandShowsOnceWithItsOutputUnderIt() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+
+        let tail = chat.rows.suffix(2)
+        guard case .user(let command, _) = tail.first, case .shellOutput(_, let output) = tail.last else {
+            Issue.record("your command, then what it printed: \(tail)")
+            return
+        }
+        #expect(command.text == "! git diff --stat")
+        #expect(output.output?.contains("1 file changed") == true)
+        #expect(chat.rows.filter { if case .user(let m, _) = $0 { m.text.contains("git diff") } else { false } }.count == 1)
+    }
+}
+
+@MainActor
+@Suite struct ChatSyncTests {
+    @Test func aShownChatCatchesUpOnAReplyWhoseEventWasMissed() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = Chat(agentId: 13, session: session)
+        await chat.load()
+        let before = chat.messages.count
+
+        await fake.appendQuietly(agentId: 13, text: "Also added the session fix.")
+        let follow = Task { await chat.keepInSync(every: .milliseconds(30)) }
+        defer { follow.cancel() }
+
+        #expect(await eventually { chat.messages.count == before + 1 })
+        guard case .reply(let reply) = chat.rows.last else {
+            Issue.record("the late reply shows: \(String(describing: chat.rows.last))")
+            return
+        }
+        #expect(reply.text == "Also added the session fix.")
+    }
+
+    @Test func itReadsAgainAfterTheAgentGoesIdle() async {
+        let fake = FakeCos(replyDelay: nil)
+        let session = await liveSession(fake)
+        defer { session.stop() }
+        let chat = Chat(projectId: 1, session: session)
+        await chat.load()
+        let before = chat.messages.count
+
+        await fake.appendQuietly(agentId: 40, text: "One more thing: porto still waits on you.")
+        await chat.agentWentIdle(after: .milliseconds(10))
+
+        #expect(chat.messages.count == before + 1)
+    }
+
+    @Test func eachConnectIsCounted() async {
+        let session = await liveSession()
+        defer { session.stop() }
+        let first = session.connects
+        session.reconnect()
+        #expect(await eventually { session.connects == first + 1 })
     }
 }

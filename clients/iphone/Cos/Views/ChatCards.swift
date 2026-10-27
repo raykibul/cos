@@ -2,8 +2,8 @@ import CosKit
 import SwiftUI
 
 /// A session the chief started (cos's `agent_spawn`), as a card in the
-/// chat: its title, workspace, model and live state, with Terminal and
-/// Session buttons that open it.
+/// chat: its title, workspace, model and live state. Tapping it opens the
+/// session's chat; Chat and Terminal buttons open either.
 struct SpawnedCard: View {
     var tool: ToolCall
     /// `nil` until the session list has it, or from an older daemon that
@@ -16,7 +16,7 @@ struct SpawnedCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                if let agent { navigator.open(.terminal(agentId: agent.id)) }
+                if let agent { navigator.open(.session(agentId: agent.id)) }
             } label: {
                 HStack(alignment: .top, spacing: 10) {
                     CardIcon(symbol: "terminal", color: Palette.blue)
@@ -57,12 +57,12 @@ struct SpawnedCard: View {
             if let agent {
                 Divider()
                 HStack(spacing: 0) {
-                    CardButton(title: "Terminal", symbol: "apple.terminal", bold: true) {
-                        navigator.open(.terminal(agentId: agent.id))
+                    CardButton(title: "Chat", symbol: "text.bubble", bold: true) {
+                        navigator.open(.session(agentId: agent.id))
                     }
                     Divider().frame(height: 42)
-                    CardButton(title: "Session", symbol: nil) {
-                        navigator.open(.agent(id: agent.id))
+                    CardButton(title: "Terminal", symbol: "apple.terminal") {
+                        navigator.open(.terminal(agentId: agent.id))
                     }
                 }
             }

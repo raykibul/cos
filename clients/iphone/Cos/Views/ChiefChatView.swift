@@ -11,15 +11,19 @@ import UniformTypeIdentifiers
 /// `agent.transcript`.
 struct ChiefChatView: View {
     var session: HostSession
-    @State private var chat: ChiefChat
+    let projectId: Int
+    @State private var chat: Chat
     @FocusState private var composing: Bool
     @Environment(Navigator.self) private var navigator
+    @Environment(\.scenePhase) private var scenePhase
     @State private var confirmStop = false
+    @State private var confirmNewSession = false
     @State private var error: String?
 
     init(session: HostSession, projectId: Int) {
         self.session = session
-        _chat = State(initialValue: ChiefChat(projectId: projectId, session: session))
+        self.projectId = projectId
+        _chat = State(initialValue: Chat(projectId: projectId, session: session))
     }
 
     var body: some View {
@@ -27,9 +31,14 @@ struct ChiefChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     if chat.rows.isEmpty && !chat.isLoading {
-                        EmptyChief(project: chat.project?.name ?? "this project", started: chat.staff?.hasStarted ?? false) { suggestion in
+                        EmptyChief(
+                            project: chat.project?.name ?? "this project", started: chat.staff?.hasStarted ?? false,
+                            briefed: !(chat.staff?.brief.isEmpty ?? true) || !(chat.staff?.identity.isEmpty ?? true)
+                        ) { suggestion in
                             chat.draft = suggestion
                             composing = true
+                        } openMemory: {
+                            navigator.open(.chiefMemory(projectId: projectId))
                         }
                     }
                     ForEach(chat.rows) { row in
@@ -42,7 +51,7 @@ struct ChiefChatView: View {
                     }
                     if chat.isTyping {
                         TypingBubble(activity: chat.activity) {
-                            if let id = chat.chiefAgentId { navigator.open(.terminal(agentId: id)) }
+                            if let id = chat.agentId { navigator.open(.terminal(agentId: id)) }
                         }
                         .id("typing")
                         .transition(.opacity)
@@ -80,7 +89,7 @@ struct ChiefChatView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Button {
-                    navigator.open(.chiefInfo(projectId: chat.projectId))
+                    navigator.open(.chiefInfo(projectId: projectId))
                 } label: {
                     ChatTitle(name: chat.project?.name ?? "Chief of Staff", subtitle: subtitle, live: chat.isTyping || (chat.staff?.workingAgents ?? 0) > 0)
                 }
@@ -89,9 +98,9 @@ struct ChiefChatView: View {
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Chief's terminal", systemImage: "terminal") {
-                    if let id = chat.chiefAgentId { navigator.open(.terminal(agentId: id)) }
+                    if let id = chat.agentId { navigator.open(.terminal(agentId: id)) }
                 }
-                .disabled(chat.chiefAgentId == nil)
+                .disabled(chat.agentId == nil)
                 menu
             }
         }
@@ -101,26 +110,44 @@ struct ChiefChatView: View {
         } message: {
             Text("The sessions it started keep running. Your next message starts it again.")
         }
+        .confirmationDialog("Start a new session?", isPresented: $confirmNewSession, titleVisibility: .visible) {
+            Button("New session") { newSession() }
+            Button("Identity & memory…") { navigator.open(.chiefMemory(projectId: projectId)) }
+        } message: {
+            Text("The chief drops this conversation and starts afresh with its identity, brief and memory notes. The sessions it started stay its own.")
+        }
         .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(error ?? "")
         }
         .task { await chat.load() }
+        .task { await chat.keepInSync() }
+        .onChange(of: chat.agent?.state) { old, new in
+            if new == .idle, old != .idle { Task { await chat.agentWentIdle() } }
+        }
+        .onChange(of: session.connects) {
+            Task { await chat.read() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await chat.read() } }
+        }
         .onAppear { markRead() }
         .onDisappear { markRead() }
-        .onChange(of: session.transcriptTicks[chat.chiefAgentId ?? -1]) {
+        .onChange(of: session.transcriptTicks[chat.agentId ?? -1]) {
             markRead()
             Task { await chat.read() }
         }
-        .onChange(of: chat.chiefAgentId) {
+        .onChange(of: chat.agentId) {
             Task { await chat.read() }
+        }
+        .onChange(of: chat.replyingTo) { _, reply in
+            if reply != nil { composing = true }
         }
     }
 
     /// The three dots: where its workspaces and sessions are.
     private var menu: some View {
-        let projectId = chat.projectId
         let sessions = session.agents(inProject: projectId)
         let working = sessions.filter { $0.state == .working || $0.state == .starting }.count
         let needYou = chat.agentsWaiting.count
@@ -137,11 +164,20 @@ struct ChiefChatView: View {
                 Label("Sessions", systemImage: "person.2")
                 Text([count(working, "working", "working"), needYou > 0 ? "\(needYou) need you" : nil].compactMap { $0 }.joined(separator: " · "))
             }
-            if let id = chat.chiefAgentId {
+            Button("Identity & memory", systemImage: "book.closed") { navigator.open(.chiefMemory(projectId: projectId)) }
+            if let id = chat.agentId {
                 Button("Chief's terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: id)) }
             }
-            if let agent = session.agent(id: chat.chiefAgentId), agent.state.isAlive {
+            if session.shellsSupported, let root = chat.project?.root {
+                Button("New shell in \(chat.project?.name ?? "the project")", systemImage: "apple.terminal") {
+                    Task { error = await navigator.openShell(session: session, cwd: root, projectId: projectId) }
+                }
+            }
+            if chat.staff?.hasStarted == true {
                 Divider()
+                Button("New session", systemImage: "plus.bubble") { confirmNewSession = true }
+            }
+            if let agent = session.agent(id: chat.agentId), agent.state.isAlive {
                 Button("Stop Chief of Staff", systemImage: "stop.circle", role: .destructive) { confirmStop = true }
             }
         } label: {
@@ -164,11 +200,24 @@ struct ChiefChatView: View {
     }
 
     private func markRead() {
-        session.readMarks.markRead(projectId: chat.projectId)
+        session.readMarks.markRead(projectId: projectId)
+    }
+
+    private func newSession() {
+        Task {
+            do {
+                let staff = try await session.service.newStaffSession(projectId: projectId)
+                session.setStaff(staff)
+                session.refreshStaff()
+                await chat.read()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     private func stopChief() {
-        guard let id = chat.chiefAgentId else { return }
+        guard let id = chat.agentId else { return }
         Task {
             do {
                 try await session.stopAgent(id: id)
@@ -208,7 +257,10 @@ struct ChatTitle: View {
 struct EmptyChief: View {
     var project: String
     var started: Bool
+    /// It has a brief or an identity already.
+    var briefed: Bool
     var pick: (String) -> Void
+    var openMemory: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -221,8 +273,33 @@ struct EmptyChief: View {
                 : "It starts with your first message. It creates workspaces, starts agents in them, follows them and reports back.")
                 .font(.body)
                 .foregroundStyle(Palette.ink2)
+            if !started, !briefed {
+                Button(action: openMemory) {
+                    HStack(alignment: .top, spacing: 10) {
+                        CardIcon(symbol: "book.closed", color: Palette.amber)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Give it a brief first")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Palette.ink)
+                            Text("Who it is, what it's working on, and what it should remember. It reads them when it starts.")
+                                .font(.footnote)
+                                .foregroundStyle(Palette.ink2)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Palette.ink3)
+                            .padding(.top, 10)
+                    }
+                    .padding(12)
+                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.line, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+            }
             VStack(spacing: 8) {
-                ForEach(ChiefChat.suggestions, id: \.self) { suggestion in
+                ForEach(Chat.suggestions, id: \.self) { suggestion in
                     Button {
                         pick(suggestion)
                     } label: {
@@ -248,7 +325,7 @@ struct EmptyChief: View {
 }
 /// One row of the chat.
 struct ChatRowView: View {
-    var chat: ChiefChat
+    var chat: Chat
     var row: ChatRow
     @State private var expanded = false
     @State private var info: TranscriptMessage?
@@ -256,27 +333,49 @@ struct ChatRowView: View {
     var body: some View {
         switch row {
         case .user(let message, let receipt):
+            let parsed = ChatReply.parse(message.text)
+            let shown = parsed?.body ?? message.text
             Bubble(outgoing: true, time: message.tsMs, receipt: receipt) {
+                if let parsed { QuotedReply(reply: parsed.reply, theirName: chat.theirName) }
                 SentFiles(chat: chat, files: message.attachments)
-                if !message.text.isEmpty {
-                    Text(message.text)
+                if !shown.isEmpty {
+                    Text(shown)
                         .font(.body)
                         .foregroundStyle(Palette.ink)
                 }
             }
             .contextMenu {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") { chat.reply(to: message) }
                 Button("Info", systemImage: "info.circle") { info = message }
-                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = shown }
             }
             .sheet(item: $info) { message in
                 MessageInfo(message: message, times: chat.receiptTimes(for: message))
             }
+        case .fromChief(let message, let prompt):
+            Bubble(outgoing: true, time: message.tsMs) {
+                Label("From the Chief of Staff", systemImage: "star.fill")
+                    .labelStyle(.tight)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Palette.amber)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                SentFiles(chat: chat, files: message.attachments)
+                MarkdownView(markdown: prompt)
+                    .foregroundStyle(Palette.ink)
+                    .textSelection(.enabled)
+            }
+            .contextMenu {
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = prompt }
+            }
         case .pending(let pending):
             VStack(alignment: .trailing, spacing: 4) {
+                let parsed = ChatReply.parse(pending.text)
+                let shown = parsed?.body ?? pending.text
                 Bubble(outgoing: true, time: pending.createdMs, receipt: pending.receipt) {
+                    if let parsed { QuotedReply(reply: parsed.reply, theirName: chat.theirName) }
                     SentFiles(chat: chat, files: pending.attachments)
-                    if !pending.text.isEmpty {
-                        Text(pending.text)
+                    if !shown.isEmpty {
+                        Text(shown)
                             .font(.body)
                             .foregroundStyle(Palette.ink)
                     }
@@ -293,6 +392,10 @@ struct ChatRowView: View {
                     .foregroundStyle(Palette.ink)
                     .textSelection(.enabled)
             }
+            .contextMenu {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") { chat.reply(to: message) }
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+            }
         case .tool(let message):
             toolRow(message.tool ?? ToolCall(name: "tool"))
         case .spawned(let message, let tool):
@@ -303,6 +406,8 @@ struct ChatRowView: View {
             }
         case .updates(let message, let count):
             updatesRow(message, count: count)
+        case .shellOutput(_, let tool):
+            ShellOutput(tool: tool)
         }
     }
 
@@ -542,9 +647,10 @@ struct WaitingMessage: View {
 
 /// The message box: a paperclip (Photos or Files), the files you picked as
 /// chips, a capsule field and a round send button. Files upload as soon as
-/// you pick them; Send waits until they're up.
+/// you pick them; Send waits until they're up. For a session, a line over
+/// it says why it can't send while a prompt would catch the text.
 struct Composer: View {
-    @Bindable var chat: ChiefChat
+    @Bindable var chat: Chat
     var focused: FocusState<Bool>.Binding
     @State private var choosingPhotos = false
     @State private var choosingFiles = false
@@ -552,6 +658,17 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            if let blocked = chat.blocked {
+                Label(blocked, systemImage: "hand.raised")
+                    .labelStyle(.tight)
+                    .font(.footnote)
+                    .foregroundStyle(Palette.claude)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+            }
+            if let reply = chat.replyingTo, let label = chat.replyLabel {
+                ReplyStrip(label: label, text: ChatReply.preview(reply.text)) { chat.replyingTo = nil }
+            }
             if !chat.files.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -575,7 +692,7 @@ struct Composer: View {
                         .frame(width: 36, height: 36)
                 }
                 .accessibilityLabel("Attach")
-                TextField("Message", text: $chat.draft, axis: .vertical)
+                TextField(chat.placeholder, text: $chat.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .focused(focused)
                     .padding(.horizontal, 14)
@@ -730,7 +847,7 @@ struct FileThumb: View {
 /// The files one of your messages names, inside its bubble: pictures as
 /// pictures (tap for the whole one), other files as a row with their size.
 struct SentFiles: View {
-    var chat: ChiefChat
+    var chat: Chat
     var files: [AttachedFile]
 
     var body: some View {
@@ -763,7 +880,7 @@ struct SentFiles: View {
 
 /// A picture you sent: the one you picked, or fetched from the chief's folder.
 struct SentImage: View {
-    var chat: ChiefChat
+    var chat: Chat
     var file: AttachedFile
     @State private var image: UIImage?
     @State private var showing = false
@@ -815,5 +932,100 @@ struct SentImage: View {
                 }
             }
         }
+    }
+}
+
+/// The quote a message of yours replies to, muted, above its text:
+/// "↩ You replied to the Chief of Staff".
+struct QuotedReply: View {
+    var reply: ChatReply
+    var theirName: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(reply.from == .me ? "You replied to yourself" : "You replied to \(theirName)", systemImage: "arrowshape.turn.up.left")
+                .labelStyle(.tight)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Palette.ink3)
+            Text(ChatReply.preview(reply.text))
+                .font(.footnote)
+                .foregroundStyle(Palette.ink2)
+                .lineLimit(3)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.page.opacity(0.55), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Palette.claude.opacity(0.6)).frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 1.5))
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// What the composer replies to, on top of it, with × to drop it.
+struct ReplyStrip: View {
+    var label: String
+    var text: String
+    var dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle().fill(Palette.claude).frame(width: 3).clipShape(RoundedRectangle(cornerRadius: 1.5))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Palette.claude)
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(Palette.ink2)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Button(action: dismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Palette.ink3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Don't reply")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 14)
+        .padding(.top, 2)
+    }
+}
+
+/// What a `!` command you ran printed, under your bubble: its first lines,
+/// unfolding to all of it.
+struct ShellOutput: View {
+    var tool: ToolCall
+    @State private var expanded = false
+
+    var body: some View {
+        let output = tool.output ?? tool.summary
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).count
+        VStack(alignment: .trailing, spacing: 4) {
+            Text(output.isEmpty ? "(no output)" : output)
+                .font(.caption.monospaced())
+                .foregroundStyle(tool.isError ? Palette.red : Palette.ink2)
+                .lineLimit(expanded ? nil : 8)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Palette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if lines > 8 {
+                Button(expanded ? "Show less" : "Show all \(lines) lines") {
+                    withAnimation(.snappy) { expanded.toggle() }
+                }
+                .font(.caption)
+                .foregroundStyle(Palette.ink2)
+            }
+        }
+        .frame(maxWidth: 520, alignment: .trailing)
+        .padding(.leading, 44)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityLabel("Output: \(output)")
     }
 }

@@ -17,13 +17,16 @@ enum ChiefInfoTab: String, Hashable, CaseIterable, Identifiable, Sendable {
 
 /// A chief's info page, as a chat app shows a contact's: its project, quick
 /// actions, and everything under it: each workspace with its sessions, and
-/// all sessions. Reached from the chat's ⋯ menu or its title.
+/// all sessions. A session opens its chat; swipe it for its terminal or
+/// details, or long-press it for those and New session in its folder and
+/// Remove session. Reached from the chat's ⋯ menu or its title.
 struct ChiefInfoView: View {
     var session: HostSession
     var projectId: Int
     @State private var tab: ChiefInfoTab
     @Environment(Navigator.self) private var navigator
     @Environment(\.dismiss) private var dismiss
+    @State private var error: String?
 
     init(session: HostSession, projectId: Int, tab: ChiefInfoTab = .workspaces) {
         self.session = session
@@ -63,6 +66,7 @@ struct ChiefInfoView: View {
                         if let id = staff?.agentId { navigator.open(.terminal(agentId: id)) }
                     }
                     .disabled(staff?.agentId == nil)
+                    QuickAction(title: "Memory", symbol: "book.closed") { navigator.open(.chiefMemory(projectId: projectId)) }
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
@@ -80,12 +84,25 @@ struct ChiefInfoView: View {
             case .workspaces: workspaces(project)
             case .sessions: sessions()
             }
+
+            if session.shellsSupported, let project {
+                shells(project)
+            }
         }
         .pageBackground()
         .navigationTitle(project?.name ?? "Chief of Staff")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .refreshable { await session.refresh() }
+        .refreshable {
+            await session.refresh()
+            await session.loadShells()
+        }
+        .task { await session.loadShells() }
+        .alert("Couldn't do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(error ?? "")
+        }
     }
 
     // MARK: Tabs
@@ -108,13 +125,16 @@ struct ChiefInfoView: View {
                     WorkspaceHeaderRow(workspace: workspace, waiting: agents.filter { needsYou($0) }.count)
                 }
                 ForEach(agents) { agent in
-                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: needsYou(agent))
                     }
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
                     }
+                    .sessionActions(session: session, agent: agent)
                 }
             }
         }
@@ -137,28 +157,65 @@ struct ChiefInfoView: View {
         if !waiting.isEmpty {
             Section("Needs you") {
                 ForEach(waiting) { agent in
-                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: true, place: session.workspaceName(agent.workspaceId))
                     }
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
                     }
+                    .sessionActions(session: session, agent: agent)
                 }
             }
         }
         if !others.isEmpty {
             Section(waiting.isEmpty ? "Sessions" : "Others") {
                 ForEach(others) { agent in
-                    NavigationLink(value: Route.terminal(agentId: agent.id)) {
+                    NavigationLink(value: Route.session(agentId: agent.id)) {
                         SessionRow(agent: agent, waiting: false, place: session.workspaceName(agent.workspaceId))
                     }
                     .swipeActions {
                         Button("Details", systemImage: "info.circle") { navigator.open(.agent(id: agent.id)) }
                             .tint(Palette.ink2)
+                        Button("Terminal", systemImage: "terminal") { navigator.open(.terminal(agentId: agent.id)) }
+                            .tint(Palette.blue)
+                    }
+                    .sessionActions(session: session, agent: agent)
+                }
+            }
+        }
+    }
+
+    /// The project's shells on the host (the Mac's Ctrl-J terminals
+    /// included), and New shell in its root.
+    @ViewBuilder
+    private func shells(_ project: Project) -> some View {
+        Section {
+            ForEach(session.shells(inProject: project.id)) { shell in
+                NavigationLink(value: Route.shell(id: shell.id)) {
+                    ShellRow(title: session.shellTitle(shell), shell: shell)
+                }
+                .swipeActions {
+                    Button("Close", systemImage: "xmark", role: .destructive) {
+                        Task {
+                            do {
+                                try await session.closeShell(id: shell.id)
+                            } catch {
+                                self.error = error.localizedDescription
+                            }
+                        }
                     }
                 }
             }
+            Button("New shell", systemImage: "plus") {
+                Task { error = await navigator.openShell(session: session, cwd: project.root, projectId: project.id) }
+            }
+        } header: {
+            Text("Shells on \(session.host.name)")
+        } footer: {
+            Text("Login shells in the project's folders, with its environment, as on the Mac's Ctrl-J. They keep running until you close them.")
         }
     }
 
@@ -187,7 +244,7 @@ struct ChiefInfoView: View {
     }
 }
 
-/// A rounded button under the header: Chat, Screen.
+/// A rounded button under the header: Chat, Terminal, Memory.
 struct QuickAction: View {
     var title: String
     var symbol: String

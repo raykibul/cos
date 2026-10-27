@@ -18,9 +18,16 @@ public protocol CosService: EventSource {
     func agent(id: Int) async throws -> Agent
     func createAgent(workspaceId: Int, _ request: NewAgent) async throws -> Agent
     func sendInput(agentId: Int, text: String) async throws
+    /// A message naming files uploaded with `uploadAttachment(to: .agent…)`.
+    func sendInput(agentId: Int, text: String, attachments: [String]) async throws
     func trustAgent(id: Int) async throws
     func stopAgent(id: Int) async throws
     func resumeAgent(id: Int) async throws -> Agent
+    /// Forgets an exited agent; `.conflict` while it runs.
+    func removeAgent(id: Int) async throws
+    /// Deletes a workspace's folder (keeping its branch) and forgets its
+    /// exited agents; `.conflict` with uncommitted changes or a running agent.
+    func removeWorkspace(id: Int) async throws
     func screen(agentId: Int) async throws -> AgentScreen
     func approvals(state: ApprovalState?) async throws -> [Approval]
     func decide(approvalId: Int, _ decision: ApprovalDecision, message: String?) async throws -> Approval
@@ -28,6 +35,11 @@ public protocol CosService: EventSource {
     // The Chief of Staff and transcripts
     func staff(projectId: Int) async throws -> Staff
     func startStaff(projectId: Int) async throws -> Staff
+    func updateStaff(projectId: Int, brief: String?, identity: String?) async throws -> Staff
+    func newStaffSession(projectId: Int) async throws -> Staff
+    func staffMemory(projectId: Int) async throws -> [StaffNote]
+    func saveStaffNote(projectId: Int, name: String, description: String, body: String) async throws -> StaffNote
+    func deleteStaffNote(projectId: Int, name: String) async throws
     func messageStaff(projectId: Int, text: String) async throws
     /// A message naming files uploaded with `uploadAttachment(to: .staff…)`.
     func messageStaff(projectId: Int, text: String, attachments: [String]) async throws
@@ -41,6 +53,12 @@ public protocol CosService: EventSource {
     // Environment
     func globalEnv() async throws -> EnvVars
     func projectEnv(projectId: Int) async throws -> ProjectEnv
+
+    // Shells ("Shells" in docs/agents-api.md); their terminals come
+    // through `ShellTerminalSource`.
+    func shells() async throws -> [Shell]
+    func startShell(cwd: String, projectId: Int?, rows: Int?, cols: Int?) async throws -> Shell
+    func closeShell(id: Int) async throws
 
     // The tailnet: approved devices may list it too.
     func tailnetPeers(port: Int?) async throws -> TailnetPeers

@@ -8,10 +8,16 @@ enum Route: Hashable {
     case chief(projectId: Int)
     /// A chief's workspaces and sessions, from its chat's ⋯ menu.
     case chiefInfo(projectId: Int, tab: ChiefInfoTab = .workspaces)
+    /// A chief's identity, brief and memory notes.
+    case chiefMemory(projectId: Int)
     case workspace(id: Int)
     case agent(id: Int)
+    /// A session as a chat: its transcript and a composer.
+    case session(agentId: Int)
     /// An agent's live terminal, full screen: the chief's or a session's.
     case terminal(agentId: Int)
+    /// A login shell on the host, full screen.
+    case shell(id: Int)
 }
 
 enum AppTab: Hashable {
@@ -34,6 +40,18 @@ final class Navigator {
         chiefs.append(route)
     }
 
+    /// Drops the screens of a session that was removed, and of its
+    /// workspace when that went too.
+    func forget(agentId: Int, workspaceId: Int?) {
+        chiefs.removeAll { route in
+            switch route {
+            case .session(let id), .terminal(let id), .agent(let id): id == agentId
+            case .workspace(let id): id == workspaceId
+            default: false
+            }
+        }
+    }
+
     /// `-screen <name>`: the screen a screenshot wants, with the fake data's ids.
     func apply(screen: String?) {
         switch screen {
@@ -41,10 +59,14 @@ final class Navigator {
         case "chief": tab = .chiefs; chiefs = [.chief(projectId: 1)]
         case "chief-new": tab = .chiefs; chiefs = [.chief(projectId: 2)]
         case "chief-info": tab = .chiefs; chiefs = [.chief(projectId: 1), .chiefInfo(projectId: 1)]
+        case "chief-memory": tab = .chiefs; chiefs = [.chief(projectId: 1), .chiefMemory(projectId: 1)]
         case "terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 7)]
         case "chief-terminal": tab = .chiefs; chiefs = [.chief(projectId: 1), .terminal(agentId: 40)]
+        case "shell": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .shell(id: 1)]
         case "workspace": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .workspace(id: 5)]
         case "agent": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 7)]
+        case "session": tab = .chiefs; chiefs = [.chief(projectId: 1), .session(agentId: 7)]
+        case "session-approval": tab = .chiefs; chiefs = [.chief(projectId: 1), .session(agentId: 8)]
         case "agent-approval": tab = .chiefs; chiefs = [.chiefInfo(projectId: 1), .agent(id: 8)]
         case "hosts": tab = .hosts
         case "add-host": tab = .hosts; addingHost = true
@@ -116,9 +138,12 @@ struct RouteView: View {
             case .waiting: WaitingView(session: session)
             case .chief(let projectId): ChiefChatView(session: session, projectId: projectId)
             case .chiefInfo(let projectId, let tab): ChiefInfoView(session: session, projectId: projectId, tab: tab)
+            case .chiefMemory(let projectId): ChiefMemoryView(session: session, projectId: projectId)
             case .workspace(let id): WorkspaceView(session: session, workspaceId: id)
             case .agent(let id): AgentView(session: session, agentId: id)
+            case .session(let agentId): SessionChatView(session: session, agentId: agentId)
             case .terminal(let agentId): TerminalScreen(session: session, agentId: agentId)
+            case .shell(let id): ShellScreen(session: session, shellId: id)
             }
         }
     }

@@ -3,7 +3,7 @@
 The iPhone app for the cos daemon, in SwiftUI. It reaches a Mac or server running cos over Tailscale and works like a messaging app: the home screen lists each project's Chief of Staff as a chat, and a chat's ⋯ menu leads to its workspaces and sessions. What waits on you is a pinned row on top. The screens, the routes it uses and the plan for push are in [docs/iphone.md](../../docs/iphone.md).
 
 - `Cos/App`: the entry point and `AppModel` (hosts, the session for the current one, launch flags).
-- `Cos/Model`: `HostStore` (saved hosts), `HostSession` (one host's lists, kept current from `/v1/events`), `Chiefs` (the chiefs list and `ReadMarks`), `TailnetFinder` and `TailnetListing` (the tailnet, as the saved hosts list it), `ChiefChat`, `AgentDetail` and the `Notifications` seam.
+- `Cos/Model`: `HostStore` (saved hosts), `HostSession` (one host's lists, kept current from `/v1/events`), `Chiefs` (the chiefs list and `ReadMarks`), `TailnetFinder` and `TailnetListing` (the tailnet, as the saved hosts list it), `Chat` (a chief's or a session's conversation), `ChiefMemory`, `AgentDetail` and the `Notifications` seam.
 - `Cos/Views`: the screens.
 - `Cos/Fake`: `FakeCos`, a daemon in memory with invented data, for `-fakeData`, screenshots and tests.
 - `CosTests`: unit tests of the models against `FakeCos`.
@@ -37,7 +37,7 @@ Launch arguments (Product > Scheme > Edit Scheme > Arguments, or after `simctl l
 | Argument | Effect |
 |---|---|
 | `-fakeData` | Two invented hosts, both answered by `FakeCos`, on an invented tailnet (gpu-box runs cos and isn't saved, a Mac without cos, this iPhone, an offline iPad, a tagged CI server). Nothing touches the network or your saved hosts. |
-| `-screen <name>` | Opens a screen: `chiefs` (the default), `waiting`, `chief`, `chief-new`, `chief-info`, `chief-terminal`, `terminal`, `workspace`, `agent`, `agent-approval`, `hosts`, `add-host`. |
+| `-screen <name>` | Opens a screen: `chiefs` (the default), `waiting`, `chief`, `chief-new`, `chief-info`, `chief-memory`, `chief-terminal`, `terminal`, `shell`, `workspace`, `agent`, `agent-approval`, `session`, `session-approval`, `hosts`, `add-host`. |
 | `-fakeRefusal <code>` | The fake refuses the device, e.g. `device_pending`, `device_denied`, `wrong_user`. |
 | `-fakeUnreachable` | The fake can't be reached. |
 | `-noHosts` | Starts with no hosts (the welcome screen). |

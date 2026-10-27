@@ -7,10 +7,14 @@ import Foundation
 ///
 /// - three projects: atlas (lisbon, porto, madrid), harbor (kyoto,
 ///   nairobi) and opal (oslo); porto and kyoto have no title
-/// - atlas's Chief of Staff (agent 40) has a conversation and started
-///   agents 7 and 8; harbor's hasn't started; opal's (agent 41) is idle
-///   with no conversation
+/// - atlas's Chief of Staff (agent 40) has a conversation, an identity,
+///   a brief and three memory notes, and started agents 7 and 8; harbor's
+///   hasn't started; opal's (agent 41) is idle with no conversation
+/// - transcripts for the sessions 7 (from the chief, working), 8 (from the
+///   chief, waiting on you) and 13 (yours, idle)
 /// - an approval waiting for you (agent 8)
+/// - porto (workspace 4) has uncommitted changes, so its folder can't go
+/// - a shell open in atlas's root (shell 1), as the Mac's Ctrl-J leaves one
 /// - agents needing a Claude login (11) and the trust dialog (12)
 /// - a tailnet (`FakeData.peers(answering:)`): gpu-box runs cos and isn't
 ///   saved, mini runs no cos, the iPhone itself, an offline iPad, and a
@@ -37,6 +41,7 @@ actor FakeCos: CosService {
     private var staffs: [Int: Staff] = [:]
     private var transcripts: [Int: [TranscriptMessage]] = [:]
     private var inboxes: [Int: [StaffItem]] = [:]
+    private var notes: [Int: [StaffNote]] = [:]
     /// Uploaded files with their bytes, by the folder they went into.
     private var files: [String: [(attachment: Attachment, data: Data)]] = [:]
     private var log: [LoggedEvent] = []
@@ -45,6 +50,9 @@ actor FakeCos: CosService {
     private var terminals: [Int: [UUID: AsyncThrowingStream<TerminalEvent, Error>.Continuation]] = [:]
     /// Keystrokes sent to each agent's terminal, for tests.
     private(set) var keys: [Int: [UInt8]] = [:]
+    private var shellList: [Shell] = []
+    /// Open shell terminal streams, by shell.
+    private var shellTerminals: [Int: [UUID: AsyncThrowingStream<TerminalEvent, Error>.Continuation]] = [:]
     private var nextId = 100
 
     /// Requests in order, as `METHOD path`, for tests.
@@ -69,6 +77,8 @@ actor FakeCos: CosService {
         staffs = data.staffs
         transcripts = data.transcripts
         inboxes = data.inboxes
+        notes = data.notes
+        shellList = data.shells
         for (projectId, seeded) in data.files {
             let folder = Self.staffFolder(projectId)
             files[folder] = seeded.map { file -> (attachment: Attachment, data: Data) in
@@ -198,14 +208,35 @@ actor FakeCos: CosService {
     }
 
     func sendInput(agentId: Int, text: String) async throws {
+        try await sendInput(agentId: agentId, text: text, attachments: [])
+    }
+
+    /// Types into the agent: your message goes in its transcript, and,
+    /// after a moment, a tool call and its answer.
+    func sendInput(agentId: Int, text: String, attachments names: [String]) async throws {
         try check("POST /v1/agents/\(agentId)/input")
         guard let index = agentList.firstIndex(where: { $0.id == agentId }) else { throw CosError.notFound("unknown agent \(agentId)") }
         guard agentList[index].state.isAlive else { throw CosError.conflict("agent \(agentId) has exited; resume it first") }
+        let folder = agentFolder(agentId)
+        let attached = try names.map { name -> AttachedFile in
+            guard let file = files[folder]?.first(where: { $0.attachment.name == name || $0.attachment.path == name }) else {
+                throw CosError.http(status: 400, message: "there is no attachment \(name)")
+            }
+            return file.attachment.attached
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attached.isEmpty else {
+            throw CosError.http(status: 400, message: "the message is empty")
+        }
+        append(agentId, role: .user, kind: .text, text: text, attachments: attached)
         setState(agentId, .working)
         if let replyDelay {
             Task {
                 try? await Task.sleep(for: replyDelay)
-                self.finishTurn(agentId, message: "Done. I looked into “\(text.prefix(60))” and left a summary in the terminal.")
+                self.append(agentId, role: .assistant, kind: .tool, tool: ToolCall(name: "Read", summary: "src/auth/session.ts"))
+                try? await Task.sleep(for: replyDelay)
+                let message = "Done. I looked into “\(text.prefix(60))” and left a summary in the terminal."
+                self.append(agentId, role: .assistant, kind: .text, text: message)
+                self.finishTurn(agentId, message: message)
             }
         }
     }
@@ -230,6 +261,13 @@ actor FakeCos: CosService {
     /// Starts or stops refusing this device, as approving it on the host would.
     func setRefusal(_ code: RefusalCode?) {
         refusal = code
+    }
+
+    /// Adds a reply to an agent's transcript without logging
+    /// `agent.transcript`, as when the event was missed.
+    func appendQuietly(agentId: Int, text: String) {
+        let n = (transcripts[agentId]?.last?.n ?? 0) + 1
+        transcripts[agentId, default: []].append(TranscriptMessage(n: n, role: .assistant, kind: .text, text: text, tsMs: clock))
     }
 
     /// Moves an agent to a state, with its `agent.state_changed` event.
@@ -257,6 +295,34 @@ actor FakeCos: CosService {
         setState(id, .idle)
         return agentList[index]
     }
+
+    func removeAgent(id: Int) async throws {
+        try check("DELETE /v1/agents/\(id)")
+        guard let agent = agentList.first(where: { $0.id == id }) else { throw CosError.notFound("unknown agent \(id)") }
+        guard !agent.state.isAlive else { throw CosError.conflict("agent \(id) is still running; stop it first") }
+        agentList.removeAll { $0.id == id }
+        transcripts[id] = nil
+        emit("agent.removed", ["agent_id": .number(Double(id))])
+    }
+
+    func removeWorkspace(id: Int) async throws {
+        try check("DELETE /v1/workspaces/\(id)")
+        guard let index = projectList.firstIndex(where: { $0.workspaces.contains { $0.id == id } }),
+            let workspace = projectList[index].workspaces.first(where: { $0.id == id })
+        else { throw CosError.notFound("unknown workspace \(id)") }
+        if agentList.contains(where: { $0.workspaceId == id && $0.state.isAlive }) {
+            throw CosError.conflict("an agent is running in \(workspace.displayName); stop it first")
+        }
+        if Self.uncommitted.contains(id) {
+            throw CosError.conflict("\(workspace.displayName) has uncommitted changes. Commit or discard them first.")
+        }
+        projectList[index].workspaces.removeAll { $0.id == id }
+        agentList.removeAll { $0.workspaceId == id }
+        emit("workspace.removed", ["workspace_id": .number(Double(id)), "project_id": .number(Double(projectList[index].id))])
+    }
+
+    /// Workspaces whose folder has uncommitted changes: porto.
+    static let uncommitted: Set<Int> = [4]
 
     func screen(agentId: Int) async throws -> AgentScreen {
         try check("GET /v1/agents/\(agentId)/screen")
@@ -310,6 +376,71 @@ actor FakeCos: CosService {
             emit("staff.started", ["project_id": .number(Double(projectId)), "agent_id": .number(Double(id))])
         }
         return staffs[projectId]!
+    }
+
+    func updateStaff(projectId: Int, brief: String?, identity: String?) async throws -> Staff {
+        try check("PUT /v1/projects/\(projectId)/staff")
+        guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+        let brief = brief?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identity = identity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let brief, brief.utf8.count > Staff.maxBriefBytes {
+            throw CosError.http(status: 400, message: "the brief is at most 4 KiB")
+        }
+        if let identity, identity.utf8.count > Staff.maxIdentityBytes {
+            throw CosError.http(status: 400, message: "the identity is at most 8 KiB")
+        }
+        if let brief { staffs[projectId]?.brief = brief }
+        if let identity { staffs[projectId]?.identity = identity }
+        emit("staff.changed", ["project_id": .number(Double(projectId))])
+        return staffs[projectId]!
+    }
+
+    func newStaffSession(projectId: Int) async throws -> Staff {
+        try check("POST /v1/projects/\(projectId)/staff/new-session")
+        let staff = try ensureStaff(projectId)
+        guard let agentId = staff.agentId else { return staff }
+        transcripts[agentId] = []
+        setStaffState(projectId, .idle)
+        emit("agent.transcript", ["agent_id": .number(Double(agentId)), "next": .number(0)])
+        emit("staff.started", ["project_id": .number(Double(projectId)), "agent_id": .number(Double(agentId))])
+        return staffs[projectId]!
+    }
+
+    func staffMemory(projectId: Int) async throws -> [StaffNote] {
+        try check("GET /v1/projects/\(projectId)/staff/memory")
+        guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+        return (notes[projectId] ?? []).sorted { $0.name < $1.name }
+    }
+
+    func saveStaffNote(projectId: Int, name: String, description: String, body: String) async throws -> StaffNote {
+        try check("PUT /v1/projects/\(projectId)/staff/memory/\(name)")
+        guard staffs[projectId] != nil else { throw CosError.notFound("unknown project \(projectId)") }
+        if let problem = StaffNote.nameProblem(name) ?? StaffNote.descriptionProblem(description) ?? StaffNote.bodyProblem(body) {
+            throw CosError.http(status: 400, message: problem)
+        }
+        var list = notes[projectId] ?? []
+        let existing = list.first { $0.name == name }
+        if existing == nil, list.count >= StaffNote.maxNotes {
+            throw CosError.http(status: 400, message: "a chief keeps at most 50 notes; delete one first")
+        }
+        let note = StaffNote(
+            name: name, description: StaffNote.oneLine(description), body: body.trimmingCharacters(in: .whitespacesAndNewlines),
+            createdMs: existing?.createdMs ?? clock, updatedMs: clock
+        )
+        list.removeAll { $0.name == name }
+        list.append(note)
+        notes[projectId] = list
+        emit("staff.changed", ["project_id": .number(Double(projectId))])
+        return note
+    }
+
+    func deleteStaffNote(projectId: Int, name: String) async throws {
+        try check("DELETE /v1/projects/\(projectId)/staff/memory/\(name)")
+        guard notes[projectId]?.contains(where: { $0.name == name }) == true else {
+            throw CosError.notFound("there is no note \(name)")
+        }
+        notes[projectId]?.removeAll { $0.name == name }
+        emit("staff.changed", ["project_id": .number(Double(projectId))])
     }
 
     func messageStaff(projectId: Int, text: String) async throws {
@@ -449,6 +580,33 @@ actor FakeCos: CosService {
         return ProjectEnv(variables: own, global: ["CLAUDE_CONFIG_DIR": "~/.claude"])
     }
 
+    // MARK: Shells
+
+    func shells() async throws -> [Shell] {
+        try check("GET /v1/shells")
+        return shellList
+    }
+
+    func startShell(cwd: String, projectId: Int?, rows: Int?, cols: Int?) async throws -> Shell {
+        try check("POST /v1/shells")
+        guard cwd.hasPrefix("/") else { throw CosError.http(status: 400, message: "cwd must be an absolute path to a folder") }
+        if let projectId, !projectList.contains(where: { $0.id == projectId }) { throw CosError.notFound("unknown project \(projectId)") }
+        let shell = Shell(id: newId(), projectId: projectId, cwd: cwd, pid: 52_000 + nextId, startedMs: clock)
+        shellList.append(shell)
+        return shell
+    }
+
+    func closeShell(id: Int) async throws {
+        try check("DELETE /v1/shells/\(id)")
+        guard shellList.contains(where: { $0.id == id }) else { throw CosError.notFound("there is no such terminal") }
+        shellList.removeAll { $0.id == id }
+        for continuation in shellTerminals[id, default: [:]].values {
+            continuation.yield(.exit(code: nil))
+            continuation.finish()
+        }
+        shellTerminals[id] = nil
+    }
+
     // MARK: The tailnet
 
     func tailnetPeers(port: Int?) async throws -> TailnetPeers {
@@ -505,11 +663,64 @@ extension FakeCos: TerminalSource, TerminalControl {
         }
     }
 
+    private func followShell(_ shellId: Int, id: UUID, _ continuation: AsyncThrowingStream<TerminalEvent, Error>.Continuation) {
+        shellTerminals[shellId, default: [:]][id] = continuation
+    }
+
+    private func unfollowShell(_ shellId: Int, id: UUID) {
+        shellTerminals[shellId]?[id] = nil
+    }
+
+    private func shellPrompt(_ shellId: Int) throws -> TerminalEvent {
+        guard let shell = shellList.first(where: { $0.id == shellId }) else { throw CosError.notFound("there is no such terminal") }
+        let prompt = "Last login: today on ttys004\r\nme@\(hostName ?? "studio") \(shell.folderName) % "
+        return .snapshot(rows: 24, cols: 80, data: Array(prompt.utf8))
+    }
+
     private func follow(agentId: Int, id: UUID, _ continuation: AsyncThrowingStream<TerminalEvent, Error>.Continuation) {
         terminals[agentId, default: [:]][id] = continuation
     }
 
     private func unfollow(agentId: Int, id: UUID) {
         terminals[agentId]?[id] = nil
+    }
+}
+
+extension FakeCos: ShellTerminalSource {
+    /// A shell's prompt as a snapshot, then whatever is typed, echoed back.
+    nonisolated func shellTerminal(id shellId: Int) -> AsyncThrowingStream<TerminalEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let id = UUID()
+            let task = Task {
+                do {
+                    let prompt = try await self.shellPrompt(shellId)
+                    // Following first, so nothing typed after the prompt is lost.
+                    await self.followShell(shellId, id: id, continuation)
+                    continuation.yield(prompt)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task { await self.unfollowShell(shellId, id: id) }
+            }
+        }
+    }
+
+    func sendShellKeys(id: Int, _ bytes: [UInt8]) async throws {
+        try check("POST /v1/shells/\(id)/keys")
+        guard shellList.contains(where: { $0.id == id }) else { throw CosError.notFound("there is no such terminal") }
+        let echo = bytes.flatMap { $0 == 0x0D ? [0x0D, 0x0A] : [$0] }
+        for continuation in shellTerminals[id, default: [:]].values {
+            continuation.yield(.output(echo))
+        }
+    }
+
+    func resizeShell(id: Int, rows: Int, cols: Int) async throws {
+        try check("POST /v1/shells/\(id)/resize")
+        for continuation in shellTerminals[id, default: [:]].values {
+            continuation.yield(.resize(rows: rows, cols: cols))
+        }
     }
 }

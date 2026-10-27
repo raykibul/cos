@@ -93,7 +93,10 @@ func nowMs() -> Int64 {
 enum ChatRow: Identifiable, Equatable {
     /// What you typed, with its ticks.
     case user(TranscriptMessage, Receipt)
-    /// What the chief said, as markdown.
+    /// A session's first prompt, from the Chief of Staff that started it,
+    /// without the line cos appends.
+    case fromChief(TranscriptMessage, prompt: String)
+    /// What the chief (or a session's Claude) said, as markdown.
     case reply(TranscriptMessage)
     /// One tool call, as a compact row.
     case tool(TranscriptMessage)
@@ -104,25 +107,38 @@ enum ChatRow: Identifiable, Equatable {
     case task(TranscriptMessage, TaskNotification)
     /// A `[cos · N updates]` wakeup: news from its agents.
     case updates(TranscriptMessage, count: Int)
+    /// What a `!` command you ran in Claude's shell mode printed, under it.
+    case shellOutput(TranscriptMessage, ToolCall)
     case pending(PendingMessage)
 
     var id: String {
         switch self {
-        case .user(let message, _), .reply(let message), .tool(let message), .spawned(let message, _), .task(let message, _),
-            .updates(let message, _):
+        case .user(let message, _), .fromChief(let message, _), .reply(let message), .tool(let message), .spawned(let message, _),
+            .task(let message, _), .updates(let message, _), .shellOutput(let message, _):
             "m\(message.n)"
         case .pending(let pending): "p\(pending.id)"
         }
     }
 }
 
-/// A project's Chief of Staff as a chat: its transcript, read with
-/// `after=next` as `agent.transcript` events arrive, what you sent until the
-/// transcript shows it, and the composer.
+/// Whose conversation a chat is.
+enum ChatTarget: Hashable, Sendable {
+    /// A project's Chief of Staff, which may not have started yet.
+    case chief(projectId: Int)
+    /// One session: any agent but a chief.
+    case session(agentId: Int)
+}
+
+/// A conversation, like a messaging app's, read from an agent's transcript
+/// with `after=next` as `agent.transcript` events arrive: a project's Chief
+/// of Staff, or one session. It keeps what you sent until the transcript
+/// shows it, and the composer: to the chief through `…/staff/message`
+/// (which starts it if needed), to a session through its input (resuming it
+/// first when it has exited).
 @MainActor
 @Observable
-final class ChiefChat {
-    let projectId: Int
+final class Chat {
+    let target: ChatTarget
     @ObservationIgnored private let session: HostSession
 
     private(set) var messages: [TranscriptMessage] = []
@@ -130,48 +146,84 @@ final class ChiefChat {
     private(set) var pending: [PendingMessage] = []
     /// When cos took each message you sent from here, by transcript `n`.
     private(set) var sentAt: [Int: Int64] = [:]
-    /// What its agents reported, newest first.
+    /// What the chief's agents reported, newest first.
     private(set) var inbox: [StaffItem] = []
     private(set) var isLoading = false
     private(set) var error: String?
     var draft = ""
+    /// The message the composer answers, quoted on top of it.
+    var replyingTo: ChatReply?
     /// The files on the composer, in the order you picked them.
     private(set) var files: [DraftFile] = []
     /// Pictures you sent, by attachment name (names are unique in the
-    /// chief's folder): picked here, or fetched from the daemon.
+    /// agent's folder): picked here, or fetched from the daemon.
     private(set) var images: [String: Data] = [:]
 
     /// The agent whose transcript `messages` holds.
-    @ObservationIgnored private var agentId: Int?
+    @ObservationIgnored private var readingAgentId: Int?
     @ObservationIgnored private var reading = false
     @ObservationIgnored private var readAgain = false
     @ObservationIgnored private var pendingIds = 0
     @ObservationIgnored private var fileIds = 0
 
     init(projectId: Int, session: HostSession) {
-        self.projectId = projectId
+        target = .chief(projectId: projectId)
         self.session = session
     }
 
-    var staff: Staff? { session.staffs[projectId] }
-    var project: Project? { session.project(id: projectId) }
+    init(agentId: Int, session: HostSession) {
+        target = .session(agentId: agentId)
+        self.session = session
+    }
 
-    /// Its agent's id, once it has started.
-    var chiefAgentId: Int? { staff?.agentId }
+    var isChief: Bool {
+        if case .chief = target { true } else { false }
+    }
 
-    /// Loads the chief, its transcript from the start, and its inbox.
+    /// The chief's project, or the one the session works in.
+    var projectId: Int? {
+        switch target {
+        case .chief(let projectId): projectId
+        case .session(let agentId): session.projectId(ofAgent: agentId)
+        }
+    }
+
+    /// The chief, for a chief's chat.
+    var staff: Staff? {
+        if case .chief(let projectId) = target { session.staffs[projectId] } else { nil }
+    }
+
+    var project: Project? { projectId.flatMap(session.project(id:)) }
+
+    /// The agent whose conversation this is: the chief's, once it has
+    /// started, or the session.
+    var agentId: Int? {
+        switch target {
+        case .chief: staff?.agentId
+        case .session(let agentId): agentId
+        }
+    }
+
+    var agent: Agent? { session.agent(id: agentId) }
+
+    /// Loads the chief (for a chief's chat), the transcript from the start,
+    /// and the chief's inbox.
     func load() async {
         isLoading = messages.isEmpty
         defer { isLoading = false }
-        do {
-            let staff = try await session.service.staff(projectId: projectId)
-            session.setStaff(staff)
-            error = nil
-        } catch {
-            if session.staffs[projectId] == nil { self.error = error.localizedDescription }
+        if case .chief(let projectId) = target {
+            do {
+                let staff = try await session.service.staff(projectId: projectId)
+                session.setStaff(staff)
+                error = nil
+            } catch {
+                if session.staffs[projectId] == nil { self.error = error.localizedDescription }
+            }
         }
         await read()
-        inbox = (try? await session.service.staffInbox(projectId: projectId)) ?? inbox
+        if case .chief(let projectId) = target {
+            inbox = (try? await session.service.staffInbox(projectId: projectId)) ?? inbox
+        }
     }
 
     /// Reads what's new in the transcript. Calls made while a read is under
@@ -190,19 +242,19 @@ final class ChiefChat {
     }
 
     private func readOnce() async {
-        guard let chief = chiefAgentId else { return }
-        if chief != agentId {
+        guard let agentId else { return }
+        if agentId != readingAgentId {
             // A new chief agent (it started for the first time): start over.
-            agentId = chief
+            readingAgentId = agentId
             messages = []
             next = 0
         }
         do {
-            let page = try await session.service.transcript(agentId: chief, after: next)
+            let page = try await session.service.transcript(agentId: agentId, after: next)
             if page.next < next {
                 // A shorter transcript started over (a new session, as after
                 // /clear): read it from the top.
-                let fresh = try await session.service.transcript(agentId: chief, after: 0)
+                let fresh = try await session.service.transcript(agentId: agentId, after: 0)
                 messages = fresh.messages
                 next = fresh.next
             } else {
@@ -216,21 +268,92 @@ final class ChiefChat {
         }
     }
 
+    // MARK: Keeping in sync
+
+    /// How often a chat on screen reads its transcript again, in case an
+    /// event was missed (a stream that died quietly).
+    static let resyncInterval: Duration = .seconds(15)
+    /// How long after its agent goes idle a chat reads again: Claude can
+    /// write a turn's last reply after its Stop hook, which an older daemon
+    /// never logs.
+    static let idleRecheck: Duration = .milliseconds(2500)
+
+    /// Reads what's new every `interval` until cancelled (the chat leaves
+    /// the screen). Each read asks only for what follows `next`.
+    func keepInSync(every interval: Duration = Chat.resyncInterval) async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: interval)
+            if Task.isCancelled { return }
+            await read()
+        }
+    }
+
+    /// Reads again a moment after the agent went idle.
+    func agentWentIdle(after delay: Duration = Chat.idleRecheck) async {
+        try? await Task.sleep(for: delay)
+        if !Task.isCancelled { await read() }
+    }
+
+    /// Why the composer can't send to a session right now, as the desktop
+    /// words it: typing goes through its terminal, where a prompt would
+    /// catch the text. `nil` when it can, including when it has stopped (a
+    /// message resumes it).
+    var blocked: String? {
+        guard !isChief, let agent else { return nil }
+        if let approval = session.pendingApproval(forAgent: agent.id), approval.isForYou { return "Answer the request above first" }
+        switch agent.state {
+        case .waitingApproval: return "Answer the request above first"
+        case .needsTrust: return "Trust the folder first"
+        case .needsLogin: return "Log in to Claude first"
+        case .starting: return "Claude is starting…"
+        default: return nil
+        }
+    }
+
+    /// What the empty message box says.
+    var placeholder: String {
+        agent?.state.canResume == true && !isChief ? "Resume it with a message" : "Message"
+    }
+
     /// There is text or a file to send, and no file is still uploading.
     var canSend: Bool {
-        guard !files.contains(where: \.isUploading) else { return false }
+        guard blocked == nil, !files.contains(where: \.isUploading) else { return false }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || files.contains { $0.attachment != nil }
     }
 
-    /// Sends the draft and its files to the chief, starting it if needed.
-    /// Files that failed to upload stay on the composer.
+    /// Sends the draft and its files, with the quote it replies to,
+    /// starting the chief if needed. Files that failed to upload stay on
+    /// the composer.
     func send() async {
         guard canSend else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = ChatReply.compose(draft.trimmingCharacters(in: .whitespacesAndNewlines), replyingTo: replyingTo)
         let attachments = files.compactMap(\.attachment).map(\.attached)
         draft = ""
+        replyingTo = nil
         files.removeAll { $0.attachment != nil }
         await send(text, attachments: attachments)
+    }
+
+    // MARK: Replies
+
+    /// Who "them" is in this chat: "the Chief of Staff", or "Claude".
+    var theirName: String { isChief ? "the Chief of Staff" : "Claude" }
+
+    /// Quotes a message on top of the composer: theirs, or one of yours
+    /// (what you wrote, without the quote it replied to).
+    func reply(to message: TranscriptMessage) {
+        if message.role == .user {
+            let text = ChatReply.parse(message.text)?.body ?? message.text
+            replyingTo = ChatReply(from: .me, text: text)
+        } else {
+            replyingTo = ChatReply(from: .them, text: message.text)
+        }
+    }
+
+    /// "Replying to the Chief of Staff", "Replying to yourself".
+    var replyLabel: String? {
+        guard let replyingTo else { return nil }
+        return "Replying to \(replyingTo.from == .me ? "yourself" : theirName)"
     }
 
     func send(_ text: String, attachments: [AttachedFile] = []) async {
@@ -238,13 +361,23 @@ final class ChiefChat {
         let id = pendingIds
         pending.append(PendingMessage(id: id, text: text, attachments: attachments, afterN: next, state: .sending))
         do {
-            try await session.service.messageStaff(projectId: projectId, text: text, attachments: attachments.map(\.name))
+            switch target {
+            case .chief(let projectId):
+                try await session.service.messageStaff(projectId: projectId, text: text, attachments: attachments.map(\.name))
+            case .session(let agentId):
+                if agent?.state.canResume == true {
+                    try await session.resume(agentId: agentId)
+                }
+                try await session.service.sendInput(agentId: agentId, text: text, attachments: attachments.map(\.name))
+            }
             update(id) {
                 $0.state = .sent
                 $0.sentMs = nowMs()
             }
-            session.refreshStaff()
-            if let staff = try? await session.service.staff(projectId: projectId) { session.setStaff(staff) }
+            if case .chief(let projectId) = target {
+                session.refreshStaff()
+                if let staff = try? await session.service.staff(projectId: projectId) { session.setStaff(staff) }
+            }
             await read()
         } catch {
             update(id) { $0.state = .failed(error.localizedDescription) }
@@ -267,7 +400,16 @@ final class ChiefChat {
 
     // MARK: Files
 
-    /// Puts a file on the composer and uploads it into the chief's worktree.
+    /// Where files on the composer go: the chief's worktree, or the
+    /// session's folder.
+    private var attachTarget: AttachTarget {
+        switch target {
+        case .chief(let projectId): .staff(projectId: projectId)
+        case .session(let agentId): .agent(id: agentId)
+        }
+    }
+
+    /// Puts a file on the composer and uploads it.
     func attach(name: String, contentType: String, data: Data) async {
         guard files.count < Attachment.maxPerMessage else {
             refuse(name: name, contentType: contentType, size: data.count, reason: "A message takes \(Attachment.maxPerMessage) files at most")
@@ -282,9 +424,7 @@ final class ChiefChat {
         let preview = Attachment.isImage(contentType) ? data : nil
         files.append(DraftFile(id: id, name: name, contentType: contentType, size: data.count, preview: preview, state: .uploading))
         do {
-            let attachment = try await session.service.uploadAttachment(
-                to: .staff(projectId: projectId), name: name, contentType: contentType, data: data
-            )
+            let attachment = try await session.service.uploadAttachment(to: attachTarget, name: name, contentType: contentType, data: data)
             if let preview { images[attachment.name] = preview }
             updateFile(id) {
                 $0.name = attachment.name
@@ -310,10 +450,10 @@ final class ChiefChat {
     }
 
     /// A picture you sent, to show in its bubble: the one you picked, or
-    /// fetched from the chief's folder once.
+    /// fetched from the agent's folder once.
     func image(_ file: AttachedFile) async -> Data? {
         if let data = images[file.name] { return data }
-        guard file.isImage, let agentId = chiefAgentId,
+        guard file.isImage, let agentId,
             let data = try? await session.service.attachmentData(agentId: agentId, name: file.name)
         else { return nil }
         images[file.name] = data
@@ -364,11 +504,15 @@ final class ChiefChat {
                 rows.append(.updates(message, count: message.updateCount))
             case (.user, .task), (.user, .text) where message.taskNotification != nil:
                 if let note = message.taskNotification { rows.append(.task(message, note)) }
+            case (.user, .text) where !isChief && message.spawnedPrompt != nil:
+                rows.append(.fromChief(message, prompt: message.spawnedPrompt ?? ""))
             case (.user, .text):
                 if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !message.attachments.isEmpty {
                     let seen = answered[message.n] != nil || (typing && message.n == lastTyped)
                     rows.append(.user(message, seen ? .seen : .delivered))
                 }
+            case (.user, .tool) where message.tool?.isShellOutput == true:
+                if let tool = message.tool { rows.append(.shellOutput(message, tool)) }
             case (.user, _):
                 // A tool result logged as a user turn, or something newer.
                 continue
@@ -411,9 +555,9 @@ final class ChiefChat {
 
     // MARK: Typing
 
-    /// The chief is mid-turn: the chat shows it typing.
+    /// The chief (or the session) is mid-turn: the chat shows it typing.
     var isTyping: Bool {
-        guard let state = session.agent(id: chiefAgentId)?.state ?? staff?.state else { return false }
+        guard let state = agent?.state ?? staff?.state else { return false }
         return state == .working || state == .starting
     }
 
@@ -441,6 +585,7 @@ final class ChiefChat {
     /// from an older daemon, the chief's agent with the same title.
     func spawnedAgent(_ tool: ToolCall) -> Agent? {
         if let id = tool.agentId { return session.agent(id: id) }
+        guard case .chief(let projectId) = target else { return nil }
         return session.agentsStarted(byProject: projectId).first { $0.title == tool.summary }
     }
 
@@ -455,9 +600,16 @@ final class ChiefChat {
             .sorted { $0.createdMs < $1.createdMs }
     }
 
-    /// Agents it started that wait on you: approvals, trust dialogs, logins.
+    /// What waits on you, as messages at the end: for the chief, the agents
+    /// it started that wait on an approval, a trust dialog or a login; for
+    /// a session, the session itself.
     var agentsWaiting: [(agent: Agent, approval: Approval?)] {
-        session.agentsStarted(byProject: projectId).compactMap { agent in
+        let agents: [Agent]
+        switch target {
+        case .chief(let projectId): agents = session.agentsStarted(byProject: projectId)
+        case .session: agents = agent.map { [$0] } ?? []
+        }
+        return agents.compactMap { agent in
             if let approval = session.pendingApproval(forAgent: agent.id), approval.isForYou { return (agent, approval) }
             if agent.state == .needsTrust || agent.state == .needsLogin { return (agent, nil) }
             return nil
