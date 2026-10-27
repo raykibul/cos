@@ -40,6 +40,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
   "last_message": "Done. I created hello.txt …",
   "pending_approval_id": null,
   "spawned_by": null,
+  "report": true,
   "transcript_path": "/Users/me/.claude/projects/-Users-me-.cos-worktrees-app-1-lisbon/5504b543-….jsonl",
   "env_names": ["CLAUDE_CONFIG_DIR"]
 }
@@ -62,6 +63,7 @@ Everything is on the existing HTTP API: the Unix socket `~/.cos/cos.sock`, and t
 
 - **`role`:** `user` (you, or a Chief of Staff for you, started it) or `staff` (a project's Chief of Staff).
 - **`spawned_by`:** the Chief of Staff agent that started it, else null.
+- **`report`:** whether its news (turns, exits, waits) goes to that chief's inbox. False when a chief started it without `report: true` (`agent_spawn`'s default); true for agents from before the field and agents you start, where it means nothing without `spawned_by`.
 - **`transcript_path`:** Claude's transcript file, from the hooks; null until the first hook.
 - **`env_names`:** the sorted names of the extra environment variables (global and project, see "Environment" in [daemon.md](daemon.md#environment)) it was last launched with, so an app can show "uses CLAUDE_CONFIG_DIR". Never the values. Empty for an agent launched before this existed, or with none.
 - **`cwd`:** only present when the agent runs somewhere other than the workspace folder: the Chief of Staff runs in its own worktree.
