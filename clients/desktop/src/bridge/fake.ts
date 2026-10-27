@@ -1518,7 +1518,8 @@ export class FakeBridge implements Bridge {
         message: `:${remotePort} isn't forwarded`,
       } satisfies BridgeError;
     }
-    const url = `http://localhost:${forward.localPort}/`;
+    const url =
+      forward.localPort === 443 ? "https://localhost/" : `http://localhost:${forward.localPort}/`;
     this.forwards.opened.push(url);
     console.info(`[fake bridge] forward_open(${remotePort}) → ${url}`);
   }

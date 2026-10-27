@@ -101,12 +101,13 @@ With another machine in use, the app forwards ports on that machine's loopback t
 | `forward_add` | `{remotePort: number, localPort: number \| null}` | `Forward`. Listens on the Mac's port (`remotePort` unless `localPort` is given), then probes the machine. `bad_request` for a port outside 1–65535, a port already forwarded, or This Mac in use ("This Mac's ports are already here"). A refusal comes back as `io` with the daemon's `code`, and a daemon older than forwarding as `io` with code `too_old` ("<machine>'s cos is too old to forward ports. Run `cos upgrade` there."); neither is kept. A machine that can't be reached is kept, as `unreachable`. |
 | `forward_remove` | `{remotePort: number}` | `ForwardList`. Closes the listener and every tunnel of that forward. |
 | `follow_forwards` | `{onMessage: Channel<ForwardMessage>}` | `number`: a stream id, closed by `close_stream`. The whole list first, then on every change, at most four a second. |
-| `forward_open` | `{remotePort: number}` | –. Opens `http://localhost:{localPort}/` in the default browser. The URL is built from a forward that exists, so the UI can't open anything else through it. |
+| `forward_open` | `{remotePort: number}` | –. Opens `http://localhost:{localPort}/` in the default browser (`https://localhost/` for 443). The URL is built from a forward that exists, so the UI can't open anything else through it. |
 
 ```ts
 type Forward = {
   remotePort: number;
   localPort: number;              // differs when the Mac's port was busy
+  via: number | null;             // the port listened on when localPort < 1024 is redirected by pf
   state: "listening" | "error";   // the Mac's listener
   remote: "unknown" | "listening" | "nothing_listening" | "refused" | "unreachable";
                                   // from the probe, then from each tunnel
@@ -118,6 +119,7 @@ type ForwardMessage = { type: "forwards"; host: string; forwards: Forward[] };
 ```
 
 - **Local port busy.** The bridge listens on `127.0.0.1:P` and `[::1]:P` (the browser may resolve `localhost` to either; v6 is skipped when it's off). If either is taken it tries `P+1` to `P+10`, as Vite does, then lets the OS pick. `message` then says so, and that OAuth redirects and links naming the original port won't reach it.
+- **Ports below 1024.** macOS lets only root listen on a loopback port below 1024 (error 13), but an OAuth client may only accept `https://localhost/`. So a local port below 1024 listens on a free port the OS picks (say 52814; never a fixed one like 8443, which a dev stack may want), and pf redirects the Mac's `127.0.0.1:443` and `[::1]:443` there; `localPort` stays 443 and `via` names the real port. The first such forward asks for the Mac's password (macOS's own prompt, via `osascript ... with administrator privileges`) to start the app's binary again as a root helper, `cos-desktop --pf-redirect <socket>`. The helper connects back to a socket in the user's `$TMPDIR`, turns pf on (`pfctl -E`, loading `/etc/pf.conf` first if Apple's anchors aren't loaded), and puts the rules in the anchor `com.apple/cos`, which leaves Apple's rules alone. The app sends it the whole table on each change, one line (`443:52814 80:52816`); it accepts only a port below 1024 to one at or above it, and answers `ok` or `error <why>`. When the app quits or crashes its socket closes, and the helper removes every rule, gives pf back (`pfctl -X`) and exits. So the prompt comes once per launch, nothing is installed, and the redirect lasts only while the forward does: a local server on 443 (Docker's nginx, say) gets its port back when the forward stops. Cancelling the prompt fails the add, and nothing is kept. Nothing listens beyond loopback.
 - **A tunnel that fails** (nothing listening, refused, unreachable) can't be passed on as such, because the browser's connection is already accepted. If the first bytes are an HTTP request, the bridge answers `502 Bad Gateway` with a one-line page ("Nothing is listening on localhost:3343 on ec2-box."); anything else, TLS included, is closed. The failure updates `remote` and `message`.
 - **Saved per host.** `hosts.json` keeps each host's ports (`forwards: [3343, 5173]`, left out when none; older files load). Selecting a host, or starting the app on one, stops the old host's forwards and starts its saved ones again; a saved port the machine refuses is kept and shown red, so it works again once the machine lets this Mac in.
 - **Quit** closes them all. Closing the window only hides it, so forwards keep running while the app sits in the menu bar.
