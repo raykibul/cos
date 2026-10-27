@@ -113,8 +113,8 @@ export class FakeForwards {
     let local = wanted;
     const taken = new Set([...BUSY_HERE, ...forwards.map((f) => f.localPort)]);
     while (taken.has(local)) local += 1;
-    // Below 1024, the shell listens 8000 higher and pf redirects the port there.
-    const via = wanted < 1024 ? wanted + 8000 : null;
+    // Below 1024, the shell listens on a port the OS picks and pf redirects there.
+    const via = wanted < 1024 ? 52000 + wanted : null;
     if (via !== null) local = wanted;
     let remote: Forward["remote"] = "listening";
     let message: string | null = null;

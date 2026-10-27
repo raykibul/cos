@@ -1308,7 +1308,8 @@ async fn a_port_below_1024_listens_higher_and_is_redirected_while_forwarded() {
     let forward = set.add(443, None).await.unwrap();
     assert_eq!(forward.local_port, 443);
     let via = forward.via.unwrap();
-    assert!((8443..=8453).contains(&via), "{forward:?}");
+    // A port the OS picks, so never one a dev stack wants, like 8443.
+    assert!(via >= 1024 && via != 8443, "{forward:?}");
     assert_eq!(redirects.table(), Table::from([(443, via)]));
 
     // The browser's localhost:443 lands on `via`, which pf stands in for here.
@@ -1337,12 +1338,13 @@ async fn a_port_below_1024_listens_higher_and_is_redirected_while_forwarded() {
     // A refused redirect is an error, and nothing is kept or left listening.
     redirector.refuse.store(true, Ordering::SeqCst);
     let error = set.add(80, None).await.unwrap_err();
-    assert_eq!(
-        error.message,
-        "Couldn't redirect localhost:80 to 8080: You cancelled the password prompt."
+    assert!(
+        error.message.starts_with("Couldn't redirect localhost:80 to ")
+            && error.message.ends_with(": You cancelled the password prompt."),
+        "{}",
+        error.message
     );
     assert_eq!(set.ports(), vec![port]);
-    assert!(std::net::TcpStream::connect(("127.0.0.1", 8080)).is_err());
 
     // Dropping the set (another host selected) removes its redirects too.
     redirector.refuse.store(false, Ordering::SeqCst);

@@ -1,6 +1,6 @@
 //! Forwards of ports below 1024. macOS lets only root listen on a loopback
-//! port below 1024, so a forward of `:443` listens on `:8443` and pf
-//! redirects this Mac's `localhost:443` there. Links and OAuth redirects
+//! port below 1024, so a forward of `:443` listens on a free port the OS
+//! picks (say `:52814`) and pf redirects this Mac's `localhost:443` there. Links and OAuth redirects
 //! that name `https://localhost/` then reach it.
 //!
 //! [`Redirects`] is the table of those redirects, shared by every
@@ -18,8 +18,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 /// The pf anchor the rules go in. `/etc/pf.conf` evaluates `com.apple/*`,
 /// so a sub-anchor there runs without touching Apple's rules.
 pub const ANCHOR: &str = "com.apple/cos";
-/// How far up a redirected forward listens: 443 on 8443, 80 on 8080.
-pub const OFFSET: u16 = 8000;
 /// The first port that needs no redirect.
 pub const UNPRIVILEGED: u16 = 1024;
 
