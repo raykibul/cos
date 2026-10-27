@@ -94,6 +94,10 @@ pub struct Forward {
     pub remote_port: u16,
     /// The port on this Mac's loopback; another one when that was busy.
     pub local_port: u16,
+    /// The port really listened on, when `local_port` is below 1024 and
+    /// redirected there by pf (macOS lets only root listen below 1024).
+    #[serde(default)]
+    pub via: Option<u16>,
     /// This Mac's listener.
     pub state: ListenState,
     /// What the host said last: from the probe, then from each tunnel.
@@ -225,6 +229,7 @@ mod tests {
         let forward = Forward {
             remote_port: 3343,
             local_port: 3344,
+            via: None,
             state: ListenState::Listening,
             remote: RemoteState::NothingListening,
             code: None,
@@ -237,7 +242,7 @@ mod tests {
                 forwards: vec![forward]
             }),
             json!({"type": "forwards", "host": "ec2-box", "forwards": [{
-                "remotePort": 3343, "localPort": 3344, "state": "listening",
+                "remotePort": 3343, "localPort": 3344, "via": null, "state": "listening",
                 "remote": "nothing_listening", "code": null,
                 "message": "Nothing is listening on 3343 on ec2-box.", "connections": 0
             }]})

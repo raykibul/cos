@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cos_bridge::{
     Bridge, BridgeError, DaemonInfo, EventMessage, FileResponse, Forward, ForwardList, ForwardMessage,
-    ForwardSet, Response, StreamHandle, TerminalMessage,
+    ForwardSet, Redirects, Response, StreamHandle, TerminalMessage,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -43,6 +43,9 @@ pub(crate) struct AppState {
     /// The ports forwarded from the host in use. Replaced, and so stopped,
     /// when another host is selected.
     forwards: Mutex<Forwards>,
+    /// pf redirects for forwards of ports below 1024, shared by every
+    /// host's forwards.
+    redirects: Redirects,
 }
 
 /// A host's forwards, and which host they belong to.
@@ -54,8 +57,12 @@ struct Forwards {
 impl Forwards {
     /// Forwards for `host`, with its saved ports started again in the
     /// background.
-    fn start(bridge: &Bridge, host: &Host) -> Self {
-        let set = Arc::new(ForwardSet::new(bridge.clone(), host.name.clone()));
+    fn start(bridge: &Bridge, host: &Host, redirects: &Redirects) -> Self {
+        let set = Arc::new(ForwardSet::with_redirects(
+            bridge.clone(),
+            host.name.clone(),
+            Some(redirects.clone()),
+        ));
         if host.address.is_some() && !host.forwards.is_empty() {
             let ports = host.forwards.clone();
             let restoring = set.clone();
@@ -73,10 +80,10 @@ impl Forwards {
 }
 
 impl AppState {
-    pub(crate) fn new(local: Bridge, hosts: Hosts) -> Self {
+    pub(crate) fn new(local: Bridge, hosts: Hosts, redirects: Redirects) -> Self {
         let host = hosts.current();
         let bridge = bridge_for(&local, &host);
-        let forwards = Forwards::start(&bridge, &host);
+        let forwards = Forwards::start(&bridge, &host, &redirects);
         Self {
             local,
             current: Mutex::new(Current {
@@ -87,6 +94,7 @@ impl AppState {
             next_id: AtomicU32::new(1),
             streams: Mutex::default(),
             forwards: Mutex::new(forwards),
+            redirects,
         }
     }
 
@@ -126,7 +134,7 @@ impl AppState {
         current.generation += 1;
         current.bridge = bridge_for(&self.local, host);
         self.close_all_streams();
-        *lock(&self.forwards) = Forwards::start(&current.bridge, host);
+        *lock(&self.forwards) = Forwards::start(&current.bridge, host, &self.redirects);
     }
 
     /// The forwards of the host in use, and that host's id.
@@ -169,7 +177,7 @@ impl AppState {
         let forward = set
             .get(remote_port)
             .ok_or_else(|| BridgeError::bad_request(format!(":{remote_port} isn't forwarded")))?;
-        Ok(format!("http://localhost:{}/", forward.local_port))
+        Ok(forward_url(forward.local_port))
     }
 
     fn list(&self) -> HostList {
@@ -236,6 +244,15 @@ impl AppState {
 }
 
 /// The bridge for `host`: this Mac's socket, or its address over TCP.
+/// Where Open goes: `https://localhost/` for 443, which is TLS, else plain
+/// HTTP on the port.
+fn forward_url(local_port: u16) -> String {
+    match local_port {
+        443 => "https://localhost/".to_owned(),
+        port => format!("http://localhost:{port}/"),
+    }
+}
+
 fn bridge_for(local: &Bridge, host: &Host) -> Bridge {
     match host.target() {
         Some(target) => local.retarget(target),
@@ -556,7 +573,24 @@ mod tests {
     }
 
     fn state() -> AppState {
-        AppState::new(Bridge::new("/nowhere/cos.sock"), Hosts::load(None))
+        AppState::new(Bridge::new("/nowhere/cos.sock"), Hosts::load(None), refused())
+    }
+
+    /// Redirects that never ask for a password: tests forward no low port.
+    fn refused() -> Redirects {
+        struct Refuse;
+        impl cos_bridge::Redirector for Refuse {
+            fn apply(&self, _: &cos_bridge::redirect::Table) -> Result<(), String> {
+                Err("no redirects in tests".into())
+            }
+        }
+        Redirects::new(Refuse)
+    }
+
+    #[test]
+    fn open_uses_https_for_443() {
+        assert_eq!(forward_url(443), "https://localhost/");
+        assert_eq!(forward_url(5173), "http://localhost:5173/");
     }
 
     /// Opens an event stream on the current host, as `follow_events` does.
@@ -648,7 +682,7 @@ mod tests {
         let peers = r#"{"peers":[{"id":"n1","name":"build-box","cos":"running"}],"self_name":"my-mac","reason":null}"#;
         let daemon = one_shot_daemon(&socket, "200 OK", peers);
 
-        let state = AppState::new(Bridge::new(&socket), Hosts::load(None));
+        let state = AppState::new(Bridge::new(&socket), Hosts::load(None), refused());
         let studio = state.add_host("Studio", "studio").unwrap();
         state.select_host(&studio.id).unwrap();
         assert!(state.bridge().1.socket().is_none(), "requests now go to Studio");

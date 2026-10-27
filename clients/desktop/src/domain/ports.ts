@@ -75,8 +75,12 @@ export function moved(forward: Forward): boolean {
   return forward.localPort !== forward.remotePort;
 }
 
-/** The row's tooltip: where it goes, the latest problem or the moved-port note. */
+/**
+ * The row's tooltip: where it goes (through which port, when redirected),
+ * the latest problem or the moved-port note.
+ */
 export function portTitle(forward: Forward, machine: string): string {
-  const where = `localhost:${forward.localPort} on this Mac → localhost:${forward.remotePort} on ${machine}`;
+  const through = forward.via !== null ? ` (redirected to ${forward.via})` : "";
+  const where = `localhost:${forward.localPort} on this Mac${through} → localhost:${forward.remotePort} on ${machine}`;
   return forward.message ? `${where}\n${forward.message}` : where;
 }

@@ -6,6 +6,7 @@ function forward(change: Partial<Forward> = {}): Forward {
   return {
     remotePort: 5173,
     localPort: 5173,
+    via: null,
     state: "listening",
     remote: "listening",
     code: null,
@@ -45,6 +46,9 @@ describe("ports", () => {
   it("says where a forward goes, with its latest message", () => {
     expect(portTitle(forward({ localPort: 5174, message: "Moved." }), "Studio")).toBe(
       "localhost:5174 on this Mac → localhost:5173 on Studio\nMoved.",
+    );
+    expect(portTitle(forward({ remotePort: 443, localPort: 443, via: 8443 }), "Studio")).toBe(
+      "localhost:443 on this Mac (redirected to 8443) → localhost:443 on Studio",
     );
   });
 });
