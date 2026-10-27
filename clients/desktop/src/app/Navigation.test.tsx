@@ -66,11 +66,11 @@ describe("tabs", () => {
   it("close with ×, a middle click or ⌘W", async () => {
     const { user, ui } = await renderApp({ kind: "chief", id: 1 });
     act(() => {
-      ui.navigate({ kind: "chief", id: 2 });
+      ui.navigate({ kind: "project", id: 1 });
       ui.navigate({ kind: "settings" });
       ui.navigate({ kind: "events" });
     });
-    await user.click(tabs().getByRole("button", { name: "Close opal-app" }));
+    await user.click(tabs().getByRole("button", { name: "Close cos workspaces" }));
     expect(tabTitles()).toEqual(["cos", "Settings", "Event log"]);
 
     await user.pointer({
@@ -86,9 +86,38 @@ describe("tabs", () => {
 
   it("move with ⌃Tab", async () => {
     const { user, ui } = await renderApp({ kind: "chief", id: 1 });
-    act(() => ui.navigate({ kind: "chief", id: 2 }));
+    act(() => ui.navigate({ kind: "project", id: 1 }));
     await user.keyboard("{Control>}{Tab}{/Control}");
     expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
+  });
+
+  it("show only the project you're in, and come back as you left them", async () => {
+    const { user, ui } = await renderApp({ kind: "chief", id: 1 });
+    act(() => {
+      ui.navigate({ kind: "agent", id: 5 });
+      ui.navigate({ kind: "events" });
+    });
+    expect(tabTitles()).toEqual(["cos", "Bump dependencies", "Event log"]);
+
+    // Another project's page: its own tabs.
+    const rail = within(screen.getByRole("navigation", { name: "Projects" }));
+    await user.click(rail.getByRole("button", { name: /^Chief of Staff, opal-app/ }));
+    expect(tabTitles()).toEqual(["opal-app"]);
+    expect(sidebar().getByRole("heading", { name: "opal-app" })).toBeInTheDocument();
+    act(() => ui.navigate({ kind: "settings" }));
+    expect(tabTitles()).toEqual(["opal-app", "Settings"]);
+
+    // Back to cos, on the tab it was on.
+    await user.click(rail.getByRole("button", { name: /^Chief of Staff, cos/ }));
+    expect(tabTitles()).toEqual(["cos", "Bump dependencies", "Event log"]);
+    expect(tabs().getByRole("tab", { selected: true })).toHaveTextContent("Event log");
+    // Once there, the tile opens the chief.
+    await user.click(rail.getByRole("button", { name: /^Chief of Staff, cos/ }));
+    expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
+
+    // A session of another project takes you to its tabs too.
+    act(() => ui.navigate({ kind: "agent", id: 4 }));
+    expect(tabTitles()).toEqual(["opal-app", "Settings", "Export invoices as CSV"]);
   });
 
   it("drop the tabs of a removed agent", async () => {

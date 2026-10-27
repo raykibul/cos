@@ -22,7 +22,7 @@ import { envHint } from "../../api/env";
 import { type Agent, type Project, workspaceName } from "../../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../../app/context";
 import { openShell, projectShells } from "../../app/shell";
-import { samePage } from "../../app/ui";
+import { allTabs, samePage } from "../../app/ui";
 import { agentLabel, attentionWord } from "../../domain/labels";
 import { staffLabel } from "../../pages/chief/staffState";
 import {
@@ -171,8 +171,12 @@ export function ProjectPanel({ project }: { project: Project }) {
 function Terminals({ project }: { project: Project }) {
   const { cos, ui } = useApp();
   const tabs = useUi((s) => s.tabs);
+  const saved = useUi((s) => s.saved);
   const page = useUi((s) => s.page);
-  const shells = useMemo(() => projectShells(tabs, project.id), [tabs, project.id]);
+  const shells = useMemo(
+    () => projectShells(allTabs({ tabs, saved }), project.id),
+    [tabs, saved, project.id],
+  );
   return (
     <div className="shrink-0 border-t border-line px-2.5 pt-2 pb-3">
       <div className="flex items-center px-1.5 pb-1">

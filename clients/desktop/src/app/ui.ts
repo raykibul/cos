@@ -1,6 +1,11 @@
 // What the window shows and asks: the open tabs and the selected one, the
 // open dialog, the ⌘K switcher and toasts. Shared by the sidebar's menus and
 // the pages, so both open the same dialogs.
+//
+// Each project has its own tabs. The tab bar shows the project you're in;
+// opening a page of another project moves you there, to the tabs you left
+// it with. Pages of no project (Waiting on you, the event log, Settings)
+// open among the tabs of the project you're in.
 
 import { createStore } from "zustand/vanilla";
 import { messageOf } from "../api/errors";
@@ -56,16 +61,25 @@ export interface Toast {
 /** The most tabs kept open; opening another drops the oldest one you aren't on. */
 export const MAX_TABS = 12;
 
+/** A project's tabs, left to right, and the one selected. */
+export interface TabSet {
+  tabs: Page[];
+  page: Page;
+}
+
 export interface UiState {
   /** The selected tab's page. */
   page: Page;
-  /** The open tabs, left to right. Always holds `page`. */
+  /** The project's open tabs, left to right. Always holds `page`. */
   tabs: Page[];
   /**
-   * The project the sidebar shows: the one the page is in, else the last one
-   * you were in. Null until you open one; the sidebar then shows the first.
+   * The project you're in, whose tabs show and which the sidebar shows: the
+   * one the page is in, else the last one you were in. Null until you open
+   * one; the sidebar then shows the first, and its tabs are these.
    */
   project: number | null;
+  /** The other projects' tabs, as you left them, by project. */
+  saved: Record<number, TabSet>;
   /** Whether the ⌘K switcher is open. */
   switcher: boolean;
   /**
@@ -166,6 +180,56 @@ export function closeTab(tabs: Page[], current: Page, page: Page): { tabs: Page[
 
 const home: Page = { kind: "waiting" };
 
+/** Every open tab, the other projects' too. */
+export function allTabs(s: Pick<UiState, "tabs" | "saved">): Page[] {
+  return [...s.tabs, ...Object.values(s.saved).flatMap((set) => set.tabs)];
+}
+
+/**
+ * The project a page is in, as far as the page itself says: a project's
+ * pages and terminals say, agents and workspaces need the daemon's state
+ * (`setProjectOf`). Null for a page of no project, or one not known yet.
+ */
+export function pageProject(page: Page): number | null {
+  switch (page.kind) {
+    case "chief":
+    case "project":
+    case "projectEnv":
+    case "chiefMemory":
+      return page.id;
+    case "shell":
+      return page.projectId;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Moves to project `to`'s tabs with `page` selected, opened there if it's
+ * new. The tabs you leave are kept for when you come back; with `move`,
+ * `page` leaves them (it belongs to `to`), else it stays in both. Tabs of
+ * no project (before you were in one) are dropped, unless `to` has none yet:
+ * then they become its tabs.
+ */
+export function enterProject(
+  s: Pick<UiState, "project" | "tabs" | "page" | "saved">,
+  to: number,
+  page: Page,
+  move: boolean,
+): Pick<UiState, "project" | "tabs" | "page" | "saved"> {
+  const mine = s.saved[to];
+  const saved = { ...s.saved };
+  delete saved[to];
+  if (s.project === null && !mine) {
+    return { project: to, tabs: openTab(s.tabs, s.page, page), page, saved };
+  }
+  if (s.project !== null && s.project !== to) {
+    saved[s.project] = move ? closeTab(s.tabs, s.page, page) : { tabs: s.tabs, page: s.page };
+  }
+  const tabs = mine ? openTab(mine.tabs, mine.page, page) : [page];
+  return { project: to, tabs, page, saved };
+}
+
 export function createUiStore(initial: Partial<UiState> = {}) {
   const page = initial.page ?? home;
   const store = createStore<UiState>()(() => ({
@@ -177,26 +241,77 @@ export function createUiStore(initial: Partial<UiState> = {}) {
     focusSession: null,
     agentTerminal: false,
     sidebar: "auto" as SidebarMode,
-    project: null,
+    saved: {},
     switcher: false,
     opened: 0,
     ...initial,
+    project: initial.project ?? pageProject(page),
     page,
     tabs: initial.tabs && initial.tabs.some((t) => samePage(t, page)) ? initial.tabs : [page],
   }));
 
+  let projectOf: (page: Page) => number | null = pageProject;
+
   const actions = {
-    /** Shows a page: selects the tab that has it, or opens a new tab. */
-    navigate(page: Page) {
-      store.setState((s) => ({
-        page,
-        tabs: openTab(s.tabs, s.page, page),
-        opened: s.opened + 1,
-      }));
+    /**
+     * Tells the tabs which project a page is in, with the daemon's state
+     * (see `pageProject`).
+     */
+    setProjectOf(resolve: (page: Page) => number | null) {
+      projectOf = resolve;
     },
-    /** Closes a tab; the selected one when none is given. */
+    /**
+     * Shows a page: selects the tab that has it, or opens a new tab. A page
+     * of another project moves you to that project's tabs.
+     */
+    navigate(page: Page) {
+      store.setState((s) => {
+        const to = projectOf(page);
+        if (to === null || to === s.project) {
+          return { page, tabs: openTab(s.tabs, s.page, page), opened: s.opened + 1 };
+        }
+        return { ...enterProject(s, to, page, true), opened: s.opened + 1 };
+      });
+    },
+    /**
+     * Goes to a project: back to the tab you left it on, or to its Chief of
+     * Staff the first time, or when you're already there.
+     */
+    openProject(projectId: number) {
+      const s = store.getState();
+      const back = s.project !== projectId ? s.saved[projectId] : undefined;
+      if (!back) {
+        actions.navigate({ kind: "chief", id: projectId });
+        return;
+      }
+      store.setState({ ...enterProject(s, projectId, back.page, false), opened: s.opened + 1 });
+    },
+    /** Closes a tab, in whichever project has it; the selected one when none is given. */
     closeTab(page?: Page) {
-      store.setState((s) => closeTab(s.tabs, s.page, page ?? s.page));
+      store.setState((s) => {
+        const target = page ?? s.page;
+        if (s.tabs.some((t) => samePage(t, target))) return closeTab(s.tabs, s.page, target);
+        for (const [id, set] of Object.entries(s.saved)) {
+          if (!set.tabs.some((t) => samePage(t, target))) continue;
+          return { saved: { ...s.saved, [id]: closeTab(set.tabs, set.page, target) } };
+        }
+        return {};
+      });
+    },
+    /**
+     * Closes a removed project's tabs. If you were in it, the tabs left
+     * become those of the next project you're in.
+     */
+    forgetProject(projectId: number) {
+      store.setState((s) => {
+        const saved = { ...s.saved };
+        delete saved[projectId];
+        let set: TabSet = { tabs: s.tabs, page: s.page };
+        for (const tab of s.tabs) {
+          if (projectOf(tab) === projectId) set = closeTab(set.tabs, set.page, tab);
+        }
+        return { ...set, saved, project: s.project === projectId ? null : s.project };
+      });
     },
     /** Selects the tab `step` places right (or left, when negative), wrapping around. */
     cycleTab(step: number) {
@@ -206,9 +321,16 @@ export function createUiStore(initial: Partial<UiState> = {}) {
         return next ? { page: next, opened: s.opened + 1 } : {};
       });
     },
-    /** Remembers the project the sidebar shows. */
+    /**
+     * Moves to the project the sidebar shows, when the page alone didn't say
+     * (an agent's, before its project was known; the first project, at
+     * start). The page goes along: into that project's tabs if it's one of
+     * its pages, else (a page of no project) it shows there too.
+     */
     showProject(projectId: number) {
-      if (store.getState().project !== projectId) store.setState({ project: projectId });
+      const s = store.getState();
+      if (s.project === projectId) return;
+      store.setState(enterProject(s, projectId, s.page, projectOf(s.page) === projectId));
     },
     openSwitcher(open = true) {
       store.setState({ switcher: open });

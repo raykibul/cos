@@ -1,7 +1,8 @@
 // The project rail on the window's left edge: Waiting on you, then one tile
-// per project. A tile opens that project's Chief of Staff (⌘1 to ⌘9 do the
-// same), shows what waits on you there, and picks the project the sidebar
-// shows. Add project and Settings sit at the ends.
+// per project. A tile goes to that project, back to the tab you left it on
+// (its Chief of Staff the first time, or when you're already there; ⌘1 to
+// ⌘9 do the same), shows what waits on you there, and picks the project the
+// sidebar and the tabs show. Add project and Settings sit at the ends.
 
 import { Inbox, Plus, Settings } from "lucide-react";
 import type { ReactNode } from "react";
@@ -116,7 +117,7 @@ function ProjectTile({
         aria-label={label}
         aria-current={onChief ? "page" : undefined}
         title={`Chief of Staff for ${project.name}${shortcut ? ` (${shortcut})` : ""}\n${project.root}${env ? `\n${env}` : ""}`}
-        onClick={() => ui.navigate({ kind: "chief", id: project.id })}
+        onClick={() => ui.openProject(project.id)}
         className="flex w-full flex-col items-center gap-1 py-1 outline-none [&:focus-visible>span:first-child]:ring-2"
       >
         <span

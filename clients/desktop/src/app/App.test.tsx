@@ -320,6 +320,18 @@ describe("terminal tabs", () => {
     ).toEqual(["Terminal 2", "Terminal 3"]);
   });
 
+  it("keeps a project's terminals running while you're in another project", async () => {
+    const { user, daemon, ui } = await renderApp({ kind: "chief", id: 1 });
+    await user.keyboard("{Control>}j{/Control}");
+    await act(() => settle());
+    act(() => ui.navigate({ kind: "chief", id: 2 }));
+    await act(() => settle());
+    expect(screen.queryByRole("tab", { name: "Terminal 1 · cos" })).toBeNull();
+    expect(daemon.requests.some((r) => r.method === "DELETE")).toBe(false);
+    act(() => ui.openProject(1));
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent("Terminal 1 · cos");
+  });
+
   it("opens it in the session's folder from a session's page", async () => {
     const { user, daemon, cos } = await renderApp({ kind: "agent", id: 7 });
     const agent = cos.get().agents.find((a) => a.id === 7)!;

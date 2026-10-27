@@ -4,7 +4,7 @@
 
 import { shellPlace } from "../store/selectors";
 import type { CosStore } from "../store/store";
-import type { Page, UiStore } from "./ui";
+import { type Page, type UiStore, allTabs } from "./ui";
 
 /**
  * Starts a shell where the page is, or in `place`, and opens it in a tab
@@ -24,7 +24,7 @@ export function openShell(
   }
   void ui.perform("Couldn't open a terminal", async () => {
     const shell = await cos.client.startShell(where.cwd, where.projectId);
-    const n = nextShellNumber(ui.store.getState().tabs, shell.projectId);
+    const n = nextShellNumber(allTabs(ui.store.getState()), shell.projectId);
     ui.navigate({ kind: "shell", id: shell.id, cwd: shell.cwd, projectId: shell.projectId, n });
   });
 }

@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
-import { shownProject } from "../store/selectors";
+import { projectOfPage, shownProject } from "../store/selectors";
 import { type CosStore, isThisMac } from "../store/store";
 import { ChiefMemoryPage } from "../pages/chief/ChiefMemoryPage";
 import { ChiefPage } from "../pages/chief/ChiefPage";
@@ -24,10 +24,15 @@ import { cx } from "../ui/cx";
 import { AppContext, useApp, useCos, useUi } from "./context";
 import { useSidebar } from "./layout";
 import { openShell } from "./shell";
-import { type Page, type UiStore, createUiStore } from "./ui";
+import { type Page, type UiStore, allTabs, createUiStore } from "./ui";
 
 export function App({ cos, ui }: { cos: CosStore; ui?: UiStore }) {
-  const value = useMemo(() => ({ cos, ui: ui ?? createUiStore() }), [cos, ui]);
+  const value = useMemo(() => {
+    const store = ui ?? createUiStore();
+    // Each project has its own tabs; an agent's or workspace's project is in the daemon's state.
+    store.setProjectOf((page) => projectOfPage(cos.get(), page));
+    return { cos, ui: store };
+  }, [cos, ui]);
   return (
     <AppContext.Provider value={value}>
       <Shell />
@@ -80,7 +85,7 @@ function Shell() {
 }
 
 /**
- * The window's shortcuts: ⌘K the switcher, ⌘1 to ⌘9 each project's chief,
+ * The window's shortcuts: ⌘K the switcher, ⌘1 to ⌘9 each project (see `openProject`),
  * ⌘W closes the tab, ⌃Tab or ⌘⇧] and ⌘⇧[ move between tabs, ⌘B shows or
  * hides the sidebar, and ⌃J opens a terminal tab where the page is (see
  * `shellPlace`). They're caught before the page (a terminal, say) sees them,
@@ -100,7 +105,7 @@ function useShortcuts(narrow: boolean) {
         handled = false;
       } else if (command && !event.shiftKey && /^digit[1-9]$/.test(event.code.toLowerCase())) {
         const project = cos.get().projects[Number(event.code.slice(5)) - 1];
-        if (project) ui.navigate({ kind: "chief", id: project.id });
+        if (project) ui.openProject(project.id);
       } else if (command && !event.shiftKey && key === "w") {
         ui.closeTab();
       } else if (command && !event.shiftKey && event.code === "KeyB") {
@@ -162,10 +167,15 @@ function Content() {
   }
 }
 
-/** A closed terminal tab ends its shell, so none is left running unseen. */
+/**
+ * A closed terminal tab ends its shell, so none is left running unseen. The
+ * other projects' tabs count: their terminals keep running while you're away.
+ */
 function useShellsEndWithTheirTabs() {
   const { cos } = useApp();
-  const tabs = useUi((s) => s.tabs);
+  const current = useUi((s) => s.tabs);
+  const saved = useUi((s) => s.saved);
+  const tabs = useMemo(() => allTabs({ tabs: current, saved }), [current, saved]);
   const open = useRef<Page[]>(tabs);
   useEffect(() => {
     const before = open.current;

@@ -67,10 +67,13 @@ describe("project rail", () => {
     );
   });
 
-  it("opens each chief with ⌘1 to ⌘9, even from a terminal", async () => {
+  it("opens each project with ⌘1 to ⌘9, even from a terminal", async () => {
     const { user, ui } = await renderApp({ kind: "agent", id: 5 });
     await user.keyboard("{Meta>}2{/Meta}");
     expect(ui.store.getState().page).toEqual({ kind: "chief", id: 2 });
+    // Back where you left the project, then its chief.
+    await user.keyboard("{Meta>}1{/Meta}");
+    expect(ui.store.getState().page).toEqual({ kind: "agent", id: 5 });
     await user.keyboard("{Meta>}1{/Meta}");
     expect(ui.store.getState().page).toEqual({ kind: "chief", id: 1 });
     // A project that doesn't exist does nothing.
