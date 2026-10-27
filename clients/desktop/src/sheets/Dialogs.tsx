@@ -5,7 +5,7 @@ import { useState } from "react";
 import { isConflict, messageOf } from "../api/errors";
 import { projectSlug, workspaceName } from "../api/models";
 import { useApp, useCanChange, useCos, useUi } from "../app/context";
-import type { DialogState, Page } from "../app/ui";
+import { type DialogState, type Page, allTabs } from "../app/ui";
 import { Composer } from "../screens/Composer";
 import { toNewAgent } from "../screens/composerValue";
 import { isAlive, pluralize } from "../domain/labels";
@@ -175,8 +175,7 @@ function RemoveProject({ projectId }: { projectId: number }) {
         run(async () => {
           await cos.removeProject(projectId);
           ui.navigate({ kind: "waiting" });
-          for (const kind of ["chief", "project", "projectEnv", "chiefMemory"] as const)
-            ui.closeTab({ kind, id: projectId });
+          ui.forgetProject(projectId);
         })
       }
       footer={<Footer busy={busy} label="Remove" danger disabled={blocked} onCancel={close} />}
@@ -358,7 +357,7 @@ function RemoveWorkspace({ workspaceId }: { workspaceId: number }) {
       (page.kind === "shell" && isUnder(page.cwd, workspace.path));
     const page = ui.store.getState().page;
     if (gone(page)) ui.navigate({ kind: "project", id: workspace.projectId });
-    for (const tab of ui.store.getState().tabs.filter(gone)) ui.closeTab(tab);
+    for (const tab of allTabs(ui.store.getState()).filter(gone)) ui.closeTab(tab);
   };
 
   return (
@@ -547,7 +546,7 @@ function RemoveAgent({ agentId }: { agentId: number }) {
       (deletesFolder &&
         ((page.kind === "workspace" && page.id === workspace.id) ||
           (page.kind === "shell" && isUnder(page.cwd, workspace.path))));
-    for (const tab of ui.store.getState().tabs.filter(gone)) ui.closeTab(tab);
+    for (const tab of allTabs(ui.store.getState()).filter(gone)) ui.closeTab(tab);
   };
 
   return (
