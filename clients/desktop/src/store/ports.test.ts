@@ -61,8 +61,8 @@ describe("forwarded ports", () => {
       via: null,
       remote: "listening",
     });
-    // Below 1024 it keeps its port, redirected from 8000 higher.
-    expect(await cos.addForward(443)).toMatchObject({ localPort: 443, via: 8443 });
+    // Below 1024 it keeps its port, redirected to one the OS picked.
+    expect(await cos.addForward(443)).toMatchObject({ localPort: 443, via: 52443 });
     await cos.removeForward(443);
     expect(cos.get().forwards.map((f) => f.remotePort)).toEqual([3343, 5173, 8080]);
 

@@ -23,7 +23,7 @@ use tokio::task::{AbortHandle, JoinSet};
 
 use crate::http::{error_from, read_all};
 use crate::messages::{Forward, ForwardList, ForwardMessage, ListenState, RemoteState};
-use crate::redirect::{OFFSET, Redirect, Redirects, UNPRIVILEGED};
+use crate::redirect::{Redirect, Redirects, UNPRIVILEGED};
 use crate::stream::{self, Sink, StreamHandle};
 use crate::{Bridge, BridgeError};
 
@@ -233,8 +233,8 @@ impl ForwardSet {
         Self::with_redirects(bridge, host, None)
     }
 
-    /// [`Self::new`], with a local port below 1024 listening [`OFFSET`]
-    /// higher and redirected from the port asked for.
+    /// [`Self::new`], with a local port below 1024 listening on a free
+    /// port the OS picks, redirected from the port asked for.
     pub fn with_redirects(bridge: Bridge, host: impl Into<String>, redirects: Option<Redirects>) -> Self {
         Self {
             shared: Arc::new(Shared {
@@ -379,7 +379,8 @@ impl ForwardSet {
     }
 
     /// Listens on `wanted`, or the next free port. With redirects, a port
-    /// below 1024 listens [`OFFSET`] higher and is redirected from `wanted`,
+    /// below 1024 listens on a free port the OS picks (so not on one a dev
+    /// stack wants, like 8443) and is redirected from `wanted`,
     /// which may ask for the Mac's password.
     async fn listen(&self, wanted: u16) -> Result<Listening, BridgeError> {
         let redirects = match &self.shared.redirects {
@@ -396,10 +397,8 @@ impl ForwardSet {
                 });
             }
         };
-        let high = wanted + OFFSET;
-        let (listeners, via) = bind_local(high)
-            .await
-            .map_err(|error| listen_error(high, &error))?;
+        let (listeners, via) = bind_any()
+            .map_err(|error| BridgeError::io(format!("could not listen on a free local port: {error}")))?;
         let redirect = tokio::task::spawn_blocking(move || redirects.add(wanted, via))
             .await
             .map_err(|error| BridgeError::io(error.to_string()))?
@@ -498,7 +497,11 @@ async fn bind_local(port: u16) -> std::io::Result<(Vec<TcpListener>, u16)> {
             Err(error) => return Err(error),
         }
     }
-    // Let the OS pick a v4 port, and hope its v6 twin is free too.
+    bind_any()
+}
+
+/// Listens on a port the OS picks, v4 and, when its twin is free, v6.
+fn bind_any() -> std::io::Result<(Vec<TcpListener>, u16)> {
     let mut last_error = None;
     for _ in 0..8 {
         let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
